@@ -167,18 +167,21 @@ class HandwritingCanvasView @JvmOverloads constructor(
 
         val toolType = event.getToolType(0)
 
+        // Reject all finger/palm touches, but cancel idle timer
+        // (palm on screen means user is still active)
+        if (toolType == MotionEvent.TOOL_TYPE_FINGER) {
+            handler.removeCallbacks(idleRunnable)
+            return false
+        }
+
         // If already in a gutter drag, keep handling as gutter even if pen leaves the area
         if (isGutterDragging) {
             return handleGutterTouch(event)
         }
 
-        // Finger or stylus/mouse in gutter area → scroll drag
-        // Finger outside gutter → reject (palm rejection)
+        // Stylus/mouse in gutter area → scroll drag
         if (event.x >= width - GUTTER_WIDTH) {
             return handleGutterTouch(event)
-        }
-        if (toolType == MotionEvent.TOOL_TYPE_FINGER) {
-            return false
         }
 
         // Stylus/mouse on canvas → writing
@@ -321,6 +324,23 @@ class HandwritingCanvasView @JvmOverloads constructor(
         val last = stroke.points.last()
         path.lineTo(last.x, last.y)
         canvas.drawPath(path, strokePaint)
+    }
+
+    /** Remove strokes by ID from the canvas and redraw. */
+    fun removeStrokes(strokeIds: Set<String>) {
+        completedStrokes.removeAll { it.strokeId in strokeIds }
+        invalidate()
+    }
+
+    /** Replace strokes by ID with new versions (e.g. shifted Y coordinates). */
+    fun replaceStrokes(replacements: Map<String, InkStroke>) {
+        for (i in completedStrokes.indices) {
+            val replacement = replacements[completedStrokes[i].strokeId]
+            if (replacement != null) {
+                completedStrokes[i] = replacement
+            }
+        }
+        invalidate()
     }
 
     /** Snap a scroll offset to the nearest line boundary so lines aren't cut off. */

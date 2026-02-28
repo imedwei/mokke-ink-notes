@@ -6,6 +6,8 @@ import com.writer.view.HandwritingCanvasView
 
 /**
  * Assigns strokes to ruled line positions on the canvas.
+ * Uses the stroke's starting point Y to determine line assignment,
+ * so descenders (g, y, p, etc.) stay on the correct line.
  */
 class LineSegmenter {
 
@@ -16,17 +18,21 @@ class LineSegmenter {
             .coerceAtLeast(0)
     }
 
+    /** Returns the line index for a stroke, based on its starting point. */
+    fun getStrokeLineIndex(stroke: InkStroke): Int {
+        return getLineIndex(stroke.points.first().y)
+    }
+
     /** Returns the document-space Y for the top of a line index. */
     fun getLineY(lineIndex: Int): Float {
         return HandwritingCanvasView.TOP_MARGIN + lineIndex * HandwritingCanvasView.LINE_SPACING
     }
 
-    /** Group strokes by their line index (using centroid Y). */
+    /** Group strokes by their line index (using start point Y). */
     fun groupByLine(strokes: List<InkStroke>): Map<Int, List<InkStroke>> {
         val result = mutableMapOf<Int, MutableList<InkStroke>>()
         for (stroke in strokes) {
-            val centroidY = stroke.points.map { it.y }.average().toFloat()
-            val lineIdx = getLineIndex(centroidY)
+            val lineIdx = getStrokeLineIndex(stroke)
             result.getOrPut(lineIdx) { mutableListOf() }.add(stroke)
         }
         return result
@@ -34,19 +40,13 @@ class LineSegmenter {
 
     /** Get strokes assigned to a specific line index. */
     fun getStrokesForLine(strokes: List<InkStroke>, lineIndex: Int): List<InkStroke> {
-        return strokes.filter { stroke ->
-            val centroidY = stroke.points.map { it.y }.average().toFloat()
-            getLineIndex(centroidY) == lineIndex
-        }
+        return strokes.filter { getStrokeLineIndex(it) == lineIndex }
     }
 
     /** Get the bottommost occupied line index, or -1 if no strokes. */
     fun getBottomOccupiedLine(strokes: List<InkStroke>): Int {
         if (strokes.isEmpty()) return -1
-        return strokes.maxOf { stroke ->
-            val centroidY = stroke.points.map { it.y }.average().toFloat()
-            getLineIndex(centroidY)
-        }
+        return strokes.maxOf { getStrokeLineIndex(it) }
     }
 
     /** Build an InkLine from strokes for a given line index. */
