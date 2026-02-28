@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Simple pen icon -->
+    <path
+        android:fillColor="#000000"
+        android:pathData="M54,24 L42,84 L54,78 L66,84 Z" />
+    <path
+        android:fillColor="#000000"
+        android:pathData="M50,22 L58,22 L56,30 L52,30 Z" />
+</vector>
