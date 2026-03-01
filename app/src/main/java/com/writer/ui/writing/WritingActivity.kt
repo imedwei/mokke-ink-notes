@@ -2,6 +2,7 @@ package com.writer.ui.writing
 
 import android.os.Bundle
 import android.view.View
+import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -23,6 +24,11 @@ class WritingActivity : AppCompatActivity() {
     private lateinit var recognizer: HandwritingRecognizer
     private var coordinator: WritingCoordinator? = null
 
+    // Split resize state
+    private var defaultTextHeight = 0
+    private var defaultCanvasHeight = 0
+    private var splitOffset = 0f
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_writing)
@@ -33,6 +39,13 @@ class WritingActivity : AppCompatActivity() {
 
         documentModel = DocumentModel()
         recognizer = HandwritingRecognizer()
+
+        // Capture default heights after initial layout, then wire up the gutter
+        recognizedTextView.post {
+            defaultTextHeight = recognizedTextView.height
+            defaultCanvasHeight = inkCanvas.height
+            setupTextGutter()
+        }
 
         // Initialize recognizer then start the coordinator
         showStatus("Loading model...")
@@ -50,6 +63,25 @@ class WritingActivity : AppCompatActivity() {
                 ).show()
                 startCoordinatorWithoutRecognition()
             }
+        }
+    }
+
+    private fun setupTextGutter() {
+        recognizedTextView.onGutterDrag = { delta ->
+            splitOffset = (splitOffset + delta).coerceIn(0f, defaultCanvasHeight.toFloat())
+
+            val newTextHeight = defaultTextHeight + splitOffset.toInt()
+            val newCanvasHeight = defaultCanvasHeight - splitOffset.toInt()
+
+            val textParams = recognizedTextView.layoutParams as LinearLayout.LayoutParams
+            textParams.height = newTextHeight
+            textParams.weight = 0f
+            recognizedTextView.layoutParams = textParams
+
+            val canvasParams = inkCanvas.layoutParams as LinearLayout.LayoutParams
+            canvasParams.height = newCanvasHeight.coerceAtLeast(0)
+            canvasParams.weight = 0f
+            inkCanvas.layoutParams = canvasParams
         }
     }
 

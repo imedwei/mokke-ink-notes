@@ -3,12 +3,14 @@ package com.writer.view
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Paint
 import android.text.Layout
 import android.text.SpannableStringBuilder
 import android.text.StaticLayout
 import android.text.TextPaint
 import android.text.style.ForegroundColorSpan
 import android.util.AttributeSet
+import android.view.MotionEvent
 import android.view.View
 import com.writer.ui.writing.WritingCoordinator.TextSegment
 
@@ -17,12 +19,18 @@ import com.writer.ui.writing.WritingCoordinator.TextSegment
  * Text is bottom-aligned to match the feel of writing scrolling up into text.
  * Individual line segments within a paragraph can be dimmed independently
  * using colored spans.
+ *
+ * Includes a right-side gutter for resizing the text/canvas split.
  */
 class RecognizedTextView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null,
     defStyleAttr: Int = 0
 ) : View(context, attrs, defStyleAttr) {
+
+    companion object {
+        private const val GUTTER_WIDTH = 144f
+    }
 
     private val textPaint = TextPaint().apply {
         color = Color.BLACK
@@ -31,6 +39,17 @@ class RecognizedTextView @JvmOverloads constructor(
     }
 
     private val dimmedColor = Color.parseColor("#AAAAAA")
+
+    private val gutterPaint = Paint().apply {
+        color = Color.parseColor("#DDDDDD")
+        style = Paint.Style.FILL
+    }
+
+    private val gutterLinePaint = Paint().apply {
+        color = Color.parseColor("#AAAAAA")
+        strokeWidth = 1f
+        style = Paint.Style.STROKE
+    }
 
     private var staticLayouts: List<StaticLayout> = emptyList()
     var totalTextHeight = 0
@@ -45,9 +64,16 @@ class RecognizedTextView @JvmOverloads constructor(
     /** Pixel offset to shift text content downward (for scroll sync with canvas). */
     var textScrollOffset: Float = 0f
 
+    /** Called when the user drags the gutter. Delta is positive = drag down. */
+    var onGutterDrag: ((Float) -> Unit)? = null
+
     private val horizontalPadding = 40f
     private val paragraphSpacing = 24f
     private val bottomPadding = 10f
+
+    // Gutter drag state
+    private var isGutterDragging = false
+    private var gutterDragLastY = 0f
 
     fun setParagraphs(paragraphs: List<List<TextSegment>>) {
         rebuildLayouts(paragraphs)
@@ -55,7 +81,7 @@ class RecognizedTextView @JvmOverloads constructor(
     }
 
     private fun rebuildLayouts(paragraphs: List<List<TextSegment>>) {
-        val availableWidth = (width - 2 * horizontalPadding).toInt()
+        val availableWidth = (width - horizontalPadding - GUTTER_WIDTH).toInt()
         if (availableWidth <= 0) return
 
         var height = 0f
@@ -121,22 +147,78 @@ class RecognizedTextView @JvmOverloads constructor(
         // Can't rebuild without paragraph data; next setParagraphs call will handle it
     }
 
-    override fun onDraw(canvas: Canvas) {
-        super.onDraw(canvas)
-        if (staticLayouts.isEmpty()) return
+    // --- Touch handling ---
 
-        // Bottom-align, then shift down by scroll offset
-        val baseY = (height - totalTextHeight - bottomPadding).coerceAtLeast(0f)
-        val startY = baseY + textScrollOffset
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        val toolType = event.getToolType(0)
 
-        canvas.save()
-        canvas.translate(horizontalPadding, startY)
-
-        for (layout in staticLayouts) {
-            layout.draw(canvas)
-            canvas.translate(0f, layout.height + paragraphSpacing)
+        // Reject finger/palm touches
+        if (toolType == MotionEvent.TOOL_TYPE_FINGER) {
+            return false
         }
 
-        canvas.restore()
+        // If already in a gutter drag, keep handling even if pen leaves gutter area
+        if (isGutterDragging) {
+            return handleGutterTouch(event)
+        }
+
+        // Stylus/mouse in gutter area → resize drag
+        if (event.x >= width - GUTTER_WIDTH) {
+            return handleGutterTouch(event)
+        }
+
+        return super.onTouchEvent(event)
+    }
+
+    private fun handleGutterTouch(event: MotionEvent): Boolean {
+        when (event.action) {
+            MotionEvent.ACTION_DOWN -> {
+                isGutterDragging = true
+                gutterDragLastY = event.y
+                return true
+            }
+            MotionEvent.ACTION_MOVE -> {
+                if (!isGutterDragging) return false
+                val dy = event.y - gutterDragLastY  // drag down = positive
+                gutterDragLastY = event.y
+                onGutterDrag?.invoke(dy)
+                return true
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                if (!isGutterDragging) return false
+                isGutterDragging = false
+                return true
+            }
+        }
+        return false
+    }
+
+    // --- Drawing ---
+
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
+
+        val gutterLeft = width - GUTTER_WIDTH
+
+        // Draw text content
+        if (staticLayouts.isNotEmpty()) {
+            // Bottom-align, then shift down by scroll offset
+            val baseY = (height - totalTextHeight - bottomPadding).coerceAtLeast(0f)
+            val startY = baseY + textScrollOffset
+
+            canvas.save()
+            canvas.translate(horizontalPadding, startY)
+
+            for (layout in staticLayouts) {
+                layout.draw(canvas)
+                canvas.translate(0f, layout.height + paragraphSpacing)
+            }
+
+            canvas.restore()
+        }
+
+        // Draw gutter (in screen space, on top of everything)
+        canvas.drawRect(gutterLeft, 0f, width.toFloat(), height.toFloat(), gutterPaint)
+        canvas.drawLine(gutterLeft, 0f, gutterLeft, height.toFloat(), gutterLinePaint)
     }
 }
