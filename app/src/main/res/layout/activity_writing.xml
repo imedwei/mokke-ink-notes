@@ -6,42 +6,7 @@
     android:orientation="vertical"
     android:background="@color/white">
 
-    <!-- Toolbar -->
-    <LinearLayout
-        android:id="@+id/toolbar"
-        android:layout_width="match_parent"
-        android:layout_height="48dp"
-        android:orientation="horizontal"
-        android:gravity="center_vertical"
-        android:paddingHorizontal="16dp"
-        android:background="@color/white">
-
-        <TextView
-            android:id="@+id/titleText"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="Writer"
-            android:textSize="28sp"
-            android:textColor="@color/black"
-            android:textStyle="bold" />
-
-        <TextView
-            android:id="@+id/statusText"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:textSize="18sp"
-            android:textColor="#666666"
-            android:visibility="gone" />
-    </LinearLayout>
-
-    <!-- Thin divider -->
-    <View
-        android:layout_width="match_parent"
-        android:layout_height="1dp"
-        android:background="#CCCCCC" />
-
-    <!-- Recognized text area — fixed 25% of remaining space, bottom-aligned -->
+    <!-- Recognized text area — 25% of space, bottom-aligned -->
     <com.writer.view.RecognizedTextView
         android:id="@+id/recognizedTextView"
         android:layout_width="match_parent"
@@ -55,7 +20,7 @@
         android:layout_height="1dp"
         android:background="#AAAAAA" />
 
-    <!-- Ink canvas — fixed 75% of remaining space -->
+    <!-- Ink canvas — 75% of space -->
     <com.writer.view.HandwritingCanvasView
         android:id="@+id/inkCanvas"
         android:layout_width="match_parent"

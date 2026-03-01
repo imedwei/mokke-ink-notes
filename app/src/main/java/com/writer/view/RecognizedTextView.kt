@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Typeface
 import android.text.Layout
 import android.text.SpannableStringBuilder
 import android.text.StaticLayout
@@ -20,7 +21,7 @@ import com.writer.ui.writing.WritingCoordinator.TextSegment
  * Individual line segments within a paragraph can be dimmed independently
  * using colored spans.
  *
- * Includes a right-side gutter for resizing the text/canvas split.
+ * Includes a right-side gutter with a "W" logo and resize drag handling.
  */
 class RecognizedTextView @JvmOverloads constructor(
     context: Context,
@@ -51,6 +52,21 @@ class RecognizedTextView @JvmOverloads constructor(
         style = Paint.Style.STROKE
     }
 
+    private val logoPaint = TextPaint().apply {
+        color = Color.BLACK
+        textSize = 96f
+        typeface = Typeface.create("cursive", Typeface.BOLD)
+        isAntiAlias = true
+        textAlign = Paint.Align.CENTER
+    }
+
+    private val statusPaint = TextPaint().apply {
+        color = Color.parseColor("#666666")
+        textSize = 28f
+        isAntiAlias = true
+        textAlign = Paint.Align.CENTER
+    }
+
     private var staticLayouts: List<StaticLayout> = emptyList()
     var totalTextHeight = 0
         private set
@@ -66,6 +82,13 @@ class RecognizedTextView @JvmOverloads constructor(
 
     /** Called when the user drags the gutter. Delta is positive = drag down. */
     var onGutterDrag: ((Float) -> Unit)? = null
+
+    /** Status message shown in the gutter below the logo (e.g. "Loading model..."). */
+    var statusMessage: String = ""
+        set(value) {
+            field = value
+            invalidate()
+        }
 
     private val horizontalPadding = 40f
     private val paragraphSpacing = 24f
@@ -110,8 +133,6 @@ class RecognizedTextView @JvmOverloads constructor(
                 .build()
 
             // Attribute each rendered line to the segment whose text starts it.
-            // This ensures a rendered line won't scroll until its first letter's
-            // written line is dimmed.
             val segHeights = FloatArray(segments.size)
             for (rl in 0 until layout.lineCount) {
                 val rlStartOffset = layout.getLineStart(rl)
@@ -199,10 +220,10 @@ class RecognizedTextView @JvmOverloads constructor(
         super.onDraw(canvas)
 
         val gutterLeft = width - GUTTER_WIDTH
+        val gutterCenterX = gutterLeft + GUTTER_WIDTH / 2f
 
         // Draw text content
         if (staticLayouts.isNotEmpty()) {
-            // Bottom-align, then shift down by scroll offset
             val baseY = (height - totalTextHeight - bottomPadding).coerceAtLeast(0f)
             val startY = baseY + textScrollOffset
 
@@ -217,8 +238,17 @@ class RecognizedTextView @JvmOverloads constructor(
             canvas.restore()
         }
 
-        // Draw gutter (in screen space, on top of everything)
+        // Draw gutter background
         canvas.drawRect(gutterLeft, 0f, width.toFloat(), height.toFloat(), gutterPaint)
         canvas.drawLine(gutterLeft, 0f, gutterLeft, height.toFloat(), gutterLinePaint)
+
+        // Draw "W" logo centered in the top of the gutter
+        val logoY = GUTTER_WIDTH * 0.7f
+        canvas.drawText("W", gutterCenterX, logoY, logoPaint)
+
+        // Draw status message below logo if present
+        if (statusMessage.isNotEmpty()) {
+            canvas.drawText(statusMessage, gutterCenterX, GUTTER_WIDTH + 32f, statusPaint)
+        }
     }
 }

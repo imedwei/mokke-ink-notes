@@ -1,11 +1,12 @@
 package com.writer.ui.writing
 
 import android.os.Bundle
-import android.view.View
+import android.view.WindowInsets
+import android.view.WindowInsetsController
 import android.widget.LinearLayout
-import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.WindowCompat
 import androidx.lifecycle.lifecycleScope
 import com.writer.R
 import com.writer.model.DocumentModel
@@ -18,7 +19,6 @@ class WritingActivity : AppCompatActivity() {
 
     private lateinit var inkCanvas: HandwritingCanvasView
     private lateinit var recognizedTextView: RecognizedTextView
-    private lateinit var statusText: TextView
 
     private lateinit var documentModel: DocumentModel
     private lateinit var recognizer: HandwritingRecognizer
@@ -31,11 +31,19 @@ class WritingActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
         setContentView(R.layout.activity_writing)
+
+        // Go truly fullscreen — hide status bar and navigation bar
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        window.insetsController?.let { controller ->
+            controller.hide(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
+            controller.systemBarsBehavior =
+                WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        }
 
         inkCanvas = findViewById(R.id.inkCanvas)
         recognizedTextView = findViewById(R.id.recognizedTextView)
-        statusText = findViewById(R.id.statusText)
 
         documentModel = DocumentModel()
         recognizer = HandwritingRecognizer()
@@ -48,14 +56,14 @@ class WritingActivity : AppCompatActivity() {
         }
 
         // Initialize recognizer then start the coordinator
-        showStatus("Loading model...")
+        recognizedTextView.statusMessage = "Loading..."
         lifecycleScope.launch {
             try {
                 recognizer.initialize(documentModel.language)
-                hideStatus()
+                recognizedTextView.statusMessage = ""
                 startCoordinator()
             } catch (e: Exception) {
-                showStatus("Model error")
+                recognizedTextView.statusMessage = "Error"
                 Toast.makeText(
                     this@WritingActivity,
                     "Failed to load recognition model: ${e.message}",
@@ -85,16 +93,6 @@ class WritingActivity : AppCompatActivity() {
         }
     }
 
-    private fun showStatus(text: String) {
-        statusText.text = text
-        statusText.visibility = View.VISIBLE
-    }
-
-    private fun hideStatus() {
-        statusText.text = ""
-        statusText.visibility = View.GONE
-    }
-
     private fun startCoordinator() {
         coordinator = WritingCoordinator(
             documentModel = documentModel,
@@ -104,7 +102,7 @@ class WritingActivity : AppCompatActivity() {
             scope = lifecycleScope,
             onStatusUpdate = { status ->
                 runOnUiThread {
-                    if (status.isEmpty()) hideStatus() else showStatus(status)
+                    recognizedTextView.statusMessage = status
                 }
             }
         )
@@ -114,7 +112,7 @@ class WritingActivity : AppCompatActivity() {
     private fun startCoordinatorWithoutRecognition() {
         inkCanvas.onStrokeCompleted = { _ ->
             val count = inkCanvas.getStrokeCount()
-            showStatus("Strokes: $count (no recognition)")
+            recognizedTextView.statusMessage = "$count strokes"
         }
     }
 
