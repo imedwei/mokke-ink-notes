@@ -4,14 +4,19 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
 import android.text.Layout
+import android.text.SpannableStringBuilder
 import android.text.StaticLayout
 import android.text.TextPaint
+import android.text.style.ForegroundColorSpan
 import android.util.AttributeSet
 import android.view.View
+import com.writer.ui.writing.WritingCoordinator.TextSegment
 
 /**
  * Displays recognized text as flowing word-wrapped paragraphs.
  * Text is bottom-aligned to match the feel of writing scrolling up into text.
+ * Individual line segments within a paragraph can be dimmed independently
+ * using colored spans.
  */
 class RecognizedTextView @JvmOverloads constructor(
     context: Context,
@@ -25,48 +30,104 @@ class RecognizedTextView @JvmOverloads constructor(
         isAntiAlias = false // e-ink
     }
 
-    private var paragraphs: List<String> = emptyList()
+    private val dimmedColor = Color.parseColor("#AAAAAA")
+
     private var staticLayouts: List<StaticLayout> = emptyList()
-    private var totalTextHeight = 0
+    var totalTextHeight = 0
+        private set
+    /** Height of each paragraph (layout height + spacing), for scroll sync. */
+    var paragraphHeights: List<Float> = emptyList()
+        private set
+    /** Per written line: (lineIndex, renderedTextHeight) for scroll sync. */
+    var writtenLineHeights: List<Pair<Int, Float>> = emptyList()
+        private set
+
+    /** Pixel offset to shift text content downward (for scroll sync with canvas). */
+    var textScrollOffset: Float = 0f
 
     private val horizontalPadding = 40f
     private val paragraphSpacing = 24f
     private val bottomPadding = 10f
 
-    fun setParagraphs(texts: List<String>, lineIndices: List<List<Int>> = emptyList()) {
-        paragraphs = texts
-        rebuildLayouts()
+    fun setParagraphs(paragraphs: List<List<TextSegment>>) {
+        rebuildLayouts(paragraphs)
         invalidate()
     }
 
-    private fun rebuildLayouts() {
+    private fun rebuildLayouts(paragraphs: List<List<TextSegment>>) {
         val availableWidth = (width - 2 * horizontalPadding).toInt()
         if (availableWidth <= 0) return
 
         var height = 0f
-        staticLayouts = paragraphs.map { text ->
+        val allWrittenLineHeights = mutableListOf<Pair<Int, Float>>()
+
+        staticLayouts = paragraphs.map { segments ->
+            val spannable = SpannableStringBuilder()
+            val segmentStarts = mutableListOf<Int>()
+            for ((i, segment) in segments.withIndex()) {
+                if (i > 0) spannable.append(" ")
+                val start = spannable.length
+                segmentStarts.add(start)
+                spannable.append(segment.text)
+                if (segment.dimmed) {
+                    spannable.setSpan(
+                        ForegroundColorSpan(dimmedColor),
+                        start, spannable.length,
+                        SpannableStringBuilder.SPAN_EXCLUSIVE_EXCLUSIVE
+                    )
+                }
+            }
             val layout = StaticLayout.Builder
-                .obtain(text, 0, text.length, textPaint, availableWidth)
+                .obtain(spannable, 0, spannable.length, textPaint, availableWidth)
                 .setAlignment(Layout.Alignment.ALIGN_NORMAL)
                 .setLineSpacing(8f, 1f)
                 .build()
+
+            // Attribute each rendered line to the segment whose text starts it.
+            // This ensures a rendered line won't scroll until its first letter's
+            // written line is dimmed.
+            val segHeights = FloatArray(segments.size)
+            for (rl in 0 until layout.lineCount) {
+                val rlStartOffset = layout.getLineStart(rl)
+                var owner = 0
+                for (s in segmentStarts.indices) {
+                    if (segmentStarts[s] <= rlStartOffset) owner = s
+                    else break
+                }
+                val rlTop = layout.getLineTop(rl).toFloat()
+                val rlBottom = if (rl < layout.lineCount - 1) {
+                    layout.getLineTop(rl + 1).toFloat()
+                } else {
+                    layout.height.toFloat()
+                }
+                segHeights[owner] += rlBottom - rlTop
+            }
+            segHeights[segments.lastIndex] += paragraphSpacing
+
+            for ((i, segment) in segments.withIndex()) {
+                allWrittenLineHeights.add(Pair(segment.lineIndex, segHeights[i]))
+            }
+
             height += layout.height + paragraphSpacing
             layout
         }
+        paragraphHeights = staticLayouts.map { it.height.toFloat() + paragraphSpacing }
+        writtenLineHeights = allWrittenLineHeights
         totalTextHeight = height.toInt()
     }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
-        if (w > 0) rebuildLayouts()
+        // Can't rebuild without paragraph data; next setParagraphs call will handle it
     }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         if (staticLayouts.isEmpty()) return
 
-        // Bottom-align: start drawing from (height - totalTextHeight)
-        val startY = (height - totalTextHeight - bottomPadding).coerceAtLeast(0f)
+        // Bottom-align, then shift down by scroll offset
+        val baseY = (height - totalTextHeight - bottomPadding).coerceAtLeast(0f)
+        val startY = baseY + textScrollOffset
 
         canvas.save()
         canvas.translate(horizontalPadding, startY)

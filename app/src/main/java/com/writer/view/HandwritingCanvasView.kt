@@ -110,6 +110,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
         }
 
         override fun onEndRawDrawing(b: Boolean, tp: TouchPoint) {
+            Log.d(TAG, "onEndRawDrawing: ${currentStrokePoints.size} points")
             currentStrokePoints.add(tp.toDocStrokePoint())
             finishStroke()
             handler.postDelayed(idleRunnable, IDLE_TIMEOUT_MS)

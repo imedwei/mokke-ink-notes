@@ -38,13 +38,19 @@ class WritingCoordinator(
     private val lineTextCache = mutableMapOf<Int, String>()
     // Track which lines are currently being recognized (avoid duplicates)
     private val recognizingLines = mutableSetOf<Int>()
+    // Lines that need re-recognition after current recognition finishes
+    private val pendingRerecognize = mutableSetOf<Int>()
     // Track the highest (bottommost) line the user has written on
     private var highestLineIndex = -1
+    // Lines that have ever scrolled above the viewport (text stays rendered once shown)
+    private val everHiddenLines = mutableSetOf<Int>()
+    // Auto-scroll animation
+    private var scrollAnimating = false
 
     fun start() {
         Log.i(TAG, "Coordinator started")
         inkCanvas.onStrokeCompleted = { stroke -> onStrokeCompleted(stroke) }
-        inkCanvas.onIdleTimeout = { checkAutoScroll() }
+        inkCanvas.onIdleTimeout = { onIdle() }
         inkCanvas.onManualScroll = {
             displayHiddenLines()
         }
@@ -52,14 +58,18 @@ class WritingCoordinator(
     }
 
     fun stop() {
+        scrollAnimating = false
         inkCanvas.onStrokeCompleted = null
         inkCanvas.onIdleTimeout = null
         inkCanvas.onManualScroll = null
     }
 
     fun reset() {
+        scrollAnimating = false
         lineTextCache.clear()
         recognizingLines.clear()
+        pendingRerecognize.clear()
+        everHiddenLines.clear()
         highestLineIndex = -1
         currentLineIndex = -1
     }
@@ -101,6 +111,14 @@ class WritingCoordinator(
                 eagerRecognizeLine(currentLineIndex)
             }
             currentLineIndex = lineIdx
+        }
+
+        // If editing a line that has rendered text, re-recognize immediately
+        if (lineIdx in everHiddenLines) {
+            Log.i(TAG, "Stroke on rendered line $lineIdx, triggering re-recognition")
+            recognizeRenderedLine(lineIdx)
+        } else {
+            Log.d(TAG, "Stroke on line $lineIdx (not in everHiddenLines=$everHiddenLines)")
         }
 
         if (lineIdx > highestLineIndex) {
@@ -337,10 +355,67 @@ class WritingCoordinator(
                 lineTextCache[lineIndex] = text.trim()
                 recognizingLines.remove(lineIndex)
                 Log.d(TAG, "Eager recognized line $lineIndex: \"${text.trim()}\"")
+
+                // If this line has rendered text, refresh the text view
+                if (lineIndex in everHiddenLines) {
+                    withContext(Dispatchers.Main) { displayHiddenLines() }
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "Eager recognition failed for line $lineIndex", e)
                 lineTextCache[lineIndex] = "[?]"
                 recognizingLines.remove(lineIndex)
+            }
+        }
+    }
+
+    /** Recognize a rendered line immediately. If recognition is already in flight,
+     *  queue a re-recognition for when it finishes. */
+    private fun recognizeRenderedLine(lineIndex: Int) {
+        if (recognizingLines.contains(lineIndex)) {
+            // Already recognizing — mark for re-run when done
+            pendingRerecognize.add(lineIndex)
+            return
+        }
+        recognizingLines.add(lineIndex)
+        lineTextCache.remove(lineIndex)
+
+        scope.launch {
+            try {
+                val strokes = lineSegmenter.getStrokesForLine(
+                    documentModel.activeStrokes, lineIndex
+                )
+                if (strokes.isEmpty()) {
+                    recognizingLines.remove(lineIndex)
+                    return@launch
+                }
+
+                val line = lineSegmenter.buildInkLine(strokes, lineIndex)
+                val preContext = buildPreContext(lineIndex)
+                val text = withContext(Dispatchers.IO) {
+                    recognizer.recognizeLine(line, preContext)
+                }
+
+                lineTextCache[lineIndex] = text.trim()
+                recognizingLines.remove(lineIndex)
+                Log.d(TAG, "Rendered line recognized $lineIndex: \"${text.trim()}\"")
+
+                withContext(Dispatchers.Main) {
+                    displayHiddenLines()
+                    // Force e-ink refresh — invalidate() alone may not flush on e-ink
+                    // Brief pause/resume cycle forces SDK to repaint the screen
+                    refreshCanvas { }
+                }
+
+                // If more strokes arrived while we were recognizing, go again
+                if (lineIndex in pendingRerecognize) {
+                    pendingRerecognize.remove(lineIndex)
+                    recognizeRenderedLine(lineIndex)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Rendered line recognition failed for line $lineIndex", e)
+                lineTextCache[lineIndex] = "[?]"
+                recognizingLines.remove(lineIndex)
+                pendingRerecognize.remove(lineIndex)
             }
         }
     }
@@ -355,7 +430,19 @@ class WritingCoordinator(
         return lastText.takeLast(20)
     }
 
+    private fun onIdle() {
+        // Recognize the current line the user was writing on
+        if (currentLineIndex >= 0) {
+            eagerRecognizeLine(currentLineIndex)
+        }
+
+        checkAutoScroll()
+    }
+
     private fun checkAutoScroll() {
+        // Don't start a new scroll while one is already animating
+        if (scrollAnimating) return
+
         val strokes = documentModel.activeStrokes
         if (strokes.isEmpty()) return
 
@@ -365,6 +452,9 @@ class WritingCoordinator(
         // Find the bottommost occupied line
         val bottomLine = lineSegmenter.getBottomOccupiedLine(strokes)
         if (bottomLine < 0) return
+
+        // Only auto-scroll if the user is writing on the bottommost line
+        if (currentLineIndex != bottomLine) return
 
         // Convert to screen space (use bottom edge of line, not top)
         val bottomLineDocY = lineSegmenter.getLineY(bottomLine) + HandwritingCanvasView.LINE_SPACING
@@ -385,13 +475,39 @@ class WritingCoordinator(
         val rawOffset = bottomLineDocY - targetY
         val newOffset = inkCanvas.snapToLine(rawOffset)
         if (newOffset > inkCanvas.scrollOffsetY) {
-            Log.i(TAG, "AutoScroll: shifting from ${inkCanvas.scrollOffsetY.toInt()} to ${newOffset.toInt()}")
-            inkCanvas.pauseRawDrawing()
-            inkCanvas.scrollOffsetY = newOffset
+            animateScroll(inkCanvas.scrollOffsetY, newOffset)
+        }
+    }
+
+    private fun animateScroll(fromOffset: Float, toOffset: Float) {
+        scrollAnimating = true
+        Log.i(TAG, "AutoScroll: animating from ${fromOffset.toInt()} to ${toOffset.toInt()}")
+        inkCanvas.pauseRawDrawing()
+
+        val duration = 1000L
+        val distance = toOffset - fromOffset
+
+        scope.launch(Dispatchers.Main) {
+            val startTime = System.currentTimeMillis()
+            while (scrollAnimating) {
+                val elapsed = System.currentTimeMillis() - startTime
+                if (elapsed >= duration) break
+
+                val t = elapsed.toFloat() / duration
+                // Decelerate: 1 - (1 - t)^2
+                val interpolated = 1f - (1f - t) * (1f - t)
+                inkCanvas.scrollOffsetY = fromOffset + distance * interpolated
+                inkCanvas.drawToSurface()
+                displayHiddenLines()
+
+                kotlinx.coroutines.delay(33) // ~30fps
+            }
+
+            // Snap to final position
+            inkCanvas.scrollOffsetY = toOffset
             inkCanvas.drawToSurface()
             inkCanvas.resumeRawDrawing()
-
-            // Display text for lines that are now above the viewport
+            scrollAnimating = false
             displayHiddenLines()
         }
     }
@@ -399,17 +515,32 @@ class WritingCoordinator(
     private fun displayHiddenLines() {
         val strokesByLine = lineSegmenter.groupByLine(documentModel.activeStrokes)
 
-        // Find all line indices that are fully above the viewport
-        val hiddenLines = strokesByLine.keys.filter { lineIdx ->
+        // Find all line indices that are currently fully above the viewport
+        val currentlyHidden = strokesByLine.keys.filter { lineIdx ->
             val lineBottom = lineSegmenter.getLineY(lineIdx) + HandwritingCanvasView.LINE_SPACING
             lineBottom <= inkCanvas.scrollOffsetY
-        }.sorted()
+        }.toSet()
+
+        // For dimming: a line is "not yet visible" until its midpoint is on screen
+        val notYetVisible = strokesByLine.keys.filter { lineIdx ->
+            val lineMid = lineSegmenter.getLineY(lineIdx) + HandwritingCanvasView.LINE_SPACING / 2f
+            lineMid <= inkCanvas.scrollOffsetY
+        }.toSet()
+
+        // Add newly hidden lines to the persistent set
+        everHiddenLines.addAll(currentlyHidden)
+
+        // Remove lines that no longer have strokes (deleted lines)
+        everHiddenLines.retainAll(strokesByLine.keys)
 
         // Immediately update text view with whatever we have cached
-        updateTextView(hiddenLines)
+        updateTextView(notYetVisible)
+
+        // Calculate text scroll offset for sync with canvas scrollback
+        updateTextScrollOffset()
 
         // Kick off recognition for any uncached lines in the background
-        val uncached = hiddenLines.filter { !lineTextCache.containsKey(it) }
+        val uncached = everHiddenLines.filter { !lineTextCache.containsKey(it) }
         if (uncached.isNotEmpty()) {
             scope.launch {
                 for (lineIdx in uncached) {
@@ -430,50 +561,101 @@ class WritingCoordinator(
                 }
                 // Re-update text view now that recognition is done
                 withContext(Dispatchers.Main) {
-                    updateTextView(hiddenLines)
+                    val stillNotVisible = strokesByLine.keys.filter { lineIdx ->
+                        val lineMid = lineSegmenter.getLineY(lineIdx) + HandwritingCanvasView.LINE_SPACING / 2f
+                        lineMid <= inkCanvas.scrollOffsetY
+                    }.toSet()
+                    updateTextView(stillNotVisible)
                 }
             }
         }
     }
 
-    private fun updateTextView(hiddenLines: List<Int>) {
+    /** A segment of text within a paragraph, with its own dimming state. */
+    data class TextSegment(val text: String, val dimmed: Boolean, val lineIndex: Int)
+
+    private fun updateTextView(currentlyHidden: Set<Int>) {
         val strokesByLine = lineSegmenter.groupByLine(documentModel.activeStrokes)
         val writingWidth = inkCanvas.width - GUTTER_WIDTH
 
-        // Build paragraphs by detecting indented lines
-        val paragraphs = mutableListOf<String>()
-        val paragraphLineIndices = mutableListOf<List<Int>>()
-        val currentParagraph = mutableListOf<String>()
-        val currentLineIndices = mutableListOf<Int>()
+        val linesToShow = everHiddenLines.sorted()
 
-        for (lineIdx in hiddenLines) {
+        // Build paragraphs, each containing segments with individual dimming
+        val paragraphs = mutableListOf<List<TextSegment>>()
+        var currentSegments = mutableListOf<TextSegment>()
+
+        for (lineIdx in linesToShow) {
             val text = lineTextCache[lineIdx]
             if (text.isNullOrEmpty() || text == "[?]") continue
 
             // Check if this line is indented (starts a new paragraph)
             val lineStrokes = strokesByLine[lineIdx]
-            if (lineStrokes != null && lineStrokes.isNotEmpty() && currentParagraph.isNotEmpty()) {
+            if (lineStrokes != null && lineStrokes.isNotEmpty() && currentSegments.isNotEmpty()) {
                 val leftmostX = lineStrokes.minOf { stroke -> stroke.points.minOf { it.x } }
                 if (leftmostX > writingWidth * INDENT_THRESHOLD) {
-                    // Indented line — flush current paragraph, start new one
-                    paragraphs.add(currentParagraph.joinToString(" "))
-                    paragraphLineIndices.add(currentLineIndices.toList())
-                    currentParagraph.clear()
-                    currentLineIndices.clear()
+                    paragraphs.add(currentSegments)
+                    currentSegments = mutableListOf()
                 }
             }
 
-            currentParagraph.add(text)
-            currentLineIndices.add(lineIdx)
+            currentSegments.add(TextSegment(text, dimmed = lineIdx !in currentlyHidden, lineIndex = lineIdx))
         }
 
-        // Flush remaining
-        if (currentParagraph.isNotEmpty()) {
-            paragraphs.add(currentParagraph.joinToString(" "))
-            paragraphLineIndices.add(currentLineIndices.toList())
+        if (currentSegments.isNotEmpty()) {
+            paragraphs.add(currentSegments)
         }
 
-        textView.setParagraphs(paragraphs, paragraphLineIndices)
+        textView.setParagraphs(paragraphs)
+    }
+
+    private fun updateTextScrollOffset() {
+        val lineHeights = textView.writtenLineHeights
+        if (lineHeights.isEmpty()) {
+            textView.textScrollOffset = 0f
+            return
+        }
+
+        var offset = 0f
+
+        // Process per-written-line from bottom (last) to top (first)
+        for (i in lineHeights.indices.reversed()) {
+            val (lineIdx, textHeight) = lineHeights[i]
+
+            // Skip segments that don't own any rendered lines (their text shares
+            // a rendered line started by an earlier segment)
+            if (textHeight <= 0f) continue
+
+            // Don't scroll until the written line is fully visible (top edge on screen).
+            // This is stricter than the dimming check (midpoint) — the text turns grey first,
+            // then after half a line more of scrollback, the line is fully visible and
+            // the text starts scrolling off.
+            val lineTop = lineSegmenter.getLineY(lineIdx)
+            if (lineTop < inkCanvas.scrollOffsetY) {
+                break // Written line not fully visible — don't scroll
+            }
+
+            // Line is fully visible. Drive scroll by the line above entering viewport.
+            val drivingLine = lineIdx - 1
+            if (drivingLine < 0) {
+                offset += textHeight
+                continue
+            }
+
+            // How much of the driving line is visible?
+            val drivingLineBottom = lineSegmenter.getLineY(drivingLine) + HandwritingCanvasView.LINE_SPACING
+            val fraction = ((drivingLineBottom - inkCanvas.scrollOffsetY) / HandwritingCanvasView.LINE_SPACING)
+                .coerceIn(0f, 1f)
+
+            if (fraction >= 1f) {
+                offset += textHeight
+                continue
+            }
+
+            offset += fraction * textHeight
+            break
+        }
+
+        textView.textScrollOffset = offset
     }
 
 }
