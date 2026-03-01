@@ -49,9 +49,10 @@ class LineSegmenter {
         return strokes.maxOf { getStrokeLineIndex(it) }
     }
 
-    /** Build an InkLine from strokes for a given line index. */
+    /** Build an InkLine from strokes for a given line index, sorted left-to-right. */
     fun buildInkLine(strokes: List<InkStroke>, lineIndex: Int): InkLine {
         val lineStrokes = getStrokesForLine(strokes, lineIndex)
+            .sortedBy { stroke -> stroke.points.minOf { it.x } }
         val line = InkLine(strokes = lineStrokes.toMutableList())
         line.computeBoundingBox()
         return line

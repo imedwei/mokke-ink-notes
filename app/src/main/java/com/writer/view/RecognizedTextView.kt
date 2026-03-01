@@ -3,7 +3,6 @@ package com.writer.view
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.Paint
 import android.text.Layout
 import android.text.StaticLayout
 import android.text.TextPaint
@@ -12,6 +11,7 @@ import android.view.View
 
 /**
  * Displays recognized text as flowing word-wrapped paragraphs.
+ * Text is bottom-aligned to match the feel of writing scrolling up into text.
  */
 class RecognizedTextView @JvmOverloads constructor(
     context: Context,
@@ -21,7 +21,7 @@ class RecognizedTextView @JvmOverloads constructor(
 
     private val textPaint = TextPaint().apply {
         color = Color.BLACK
-        textSize = 48f
+        textSize = 80f
         isAntiAlias = false // e-ink
     }
 
@@ -31,11 +31,11 @@ class RecognizedTextView @JvmOverloads constructor(
 
     private val horizontalPadding = 40f
     private val paragraphSpacing = 24f
+    private val bottomPadding = 10f
 
-    fun setParagraphs(texts: List<String>) {
+    fun setParagraphs(texts: List<String>, lineIndices: List<List<Int>> = emptyList()) {
         paragraphs = texts
         rebuildLayouts()
-        requestLayout()
         invalidate()
     }
 
@@ -61,18 +61,15 @@ class RecognizedTextView @JvmOverloads constructor(
         if (w > 0) rebuildLayouts()
     }
 
-    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-        val width = MeasureSpec.getSize(widthMeasureSpec)
-        val desiredHeight = totalTextHeight + 20
-        val height = resolveSize(desiredHeight, heightMeasureSpec)
-        setMeasuredDimension(width, height)
-    }
-
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
+        if (staticLayouts.isEmpty()) return
+
+        // Bottom-align: start drawing from (height - totalTextHeight)
+        val startY = (height - totalTextHeight - bottomPadding).coerceAtLeast(0f)
 
         canvas.save()
-        canvas.translate(horizontalPadding, 10f)
+        canvas.translate(horizontalPadding, startY)
 
         for (layout in staticLayouts) {
             layout.draw(canvas)
@@ -81,6 +78,4 @@ class RecognizedTextView @JvmOverloads constructor(
 
         canvas.restore()
     }
-
-    fun getTextHeight(): Int = totalTextHeight
 }

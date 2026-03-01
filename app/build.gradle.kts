@@ -55,8 +55,11 @@ configurations.all {
 
 dependencies {
     // Onyx Pen SDK (Boox stylus input)
-    implementation("com.onyx.android.sdk:onyxsdk-pen:1.4.11")
-    implementation("com.onyx.android.sdk:onyxsdk-device:1.2.8")
+    implementation("com.onyx.android.sdk:onyxsdk-pen:1.5.2")
+    implementation("com.onyx.android.sdk:onyxsdk-device:1.3.3")
+
+    // Bypass hidden API restrictions (needed for Onyx SDK on Android 14+)
+    implementation("org.lsposed.hiddenapibypass:hiddenapibypass:4.3")
 
     // Google ML Kit Digital Ink Recognition
     implementation("com.google.mlkit:digital-ink-recognition:19.0.0")

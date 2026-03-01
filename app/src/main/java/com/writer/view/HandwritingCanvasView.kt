@@ -9,7 +9,8 @@ import android.graphics.Rect
 import android.util.AttributeSet
 import android.util.Log
 import android.view.MotionEvent
-import android.view.View
+import android.view.SurfaceHolder
+import android.view.SurfaceView
 import com.onyx.android.sdk.data.note.TouchPoint
 import com.onyx.android.sdk.pen.RawInputCallback
 import com.onyx.android.sdk.pen.TouchHelper
@@ -19,18 +20,18 @@ import com.writer.model.StrokePoint
 
 /**
  * Primary ink input surface. Uses Onyx Pen SDK for low-latency
- * e-ink rendering on Boox devices. Falls back to standard Android MotionEvent
- * handling on non-Boox devices (for emulator testing).
+ * e-ink rendering on Boox devices via SurfaceView. Falls back to standard
+ * Android MotionEvent handling on non-Boox devices (for emulator testing).
  */
 class HandwritingCanvasView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null,
     defStyleAttr: Int = 0
-) : View(context, attrs, defStyleAttr) {
+) : SurfaceView(context, attrs, defStyleAttr), SurfaceHolder.Callback {
 
     companion object {
         private const val TAG = "HandwritingCanvas"
-        private const val DEFAULT_STROKE_WIDTH = 4f
+        private const val DEFAULT_STROKE_WIDTH = 5f
         // Line spacing in pixels. ~128px at 300ppi ≈ 0.43 inches.
         const val LINE_SPACING = 128f
         // Idle timeout before checking scroll condition (ms)
@@ -87,25 +88,31 @@ class HandwritingCanvasView @JvmOverloads constructor(
 
     private var useOnyxSdk = false
     private var touchHelper: TouchHelper? = null
-    private var onyxInitAttempted = false
+    private var surfaceReady = false
+
+    init {
+        holder.addCallback(this)
+    }
 
     private val onyxCallback = object : RawInputCallback() {
         override fun onBeginRawDrawing(b: Boolean, tp: TouchPoint) {
+            handler.removeCallbacks(idleRunnable)
             currentStrokePoints.clear()
-            currentStrokePoints.add(tp.toStrokePoint())
+            currentStrokePoints.add(tp.toDocStrokePoint())
         }
 
         override fun onRawDrawingTouchPointMoveReceived(tp: TouchPoint) {
-            currentStrokePoints.add(tp.toStrokePoint())
+            currentStrokePoints.add(tp.toDocStrokePoint())
         }
 
         override fun onRawDrawingTouchPointListReceived(tpl: TouchPointList) {
-            // Batch delivery after stroke ends — we already handle points in move/begin/end
+            // Batch delivery — used by SDK after stroke ends
         }
 
         override fun onEndRawDrawing(b: Boolean, tp: TouchPoint) {
-            currentStrokePoints.add(tp.toStrokePoint())
+            currentStrokePoints.add(tp.toDocStrokePoint())
             finishStroke()
+            handler.postDelayed(idleRunnable, IDLE_TIMEOUT_MS)
         }
 
         override fun onBeginRawErasing(b: Boolean, tp: TouchPoint) {}
@@ -114,35 +121,40 @@ class HandwritingCanvasView @JvmOverloads constructor(
         override fun onRawErasingTouchPointListReceived(tpl: TouchPointList) {}
     }
 
-    private fun tryInitOnyx() {
-        if (onyxInitAttempted) return
-        onyxInitAttempted = true
-
-        // TODO: Onyx SDK integration disabled for now — callbacks aren't
-        // delivering strokes reliably. Using standard Android touch input
-        // which works on all devices including Boox (with higher latency).
-        // Re-enable once we can debug on-device.
-        Log.i(TAG, "Onyx SDK disabled, using standard touch input")
-        useOnyxSdk = false
+    /** Convert SDK TouchPoint to document-space StrokePoint. */
+    private fun TouchPoint.toDocStrokePoint(): StrokePoint {
+        return StrokePoint(
+            x = this.x,
+            y = this.y + scrollOffsetY,
+            pressure = this.pressure,
+            timestamp = this.timestamp
+        )
     }
 
-    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
-        super.onSizeChanged(w, h, oldw, oldh)
-        if (w > 0 && h > 0) {
-            if (!onyxInitAttempted) {
-                tryInitOnyx()
-            } else if (useOnyxSdk) {
-                try {
-                    touchHelper?.setLimitRect(Rect(0, 0, w, h), emptyList())
-                } catch (e: Exception) {
-                    Log.w(TAG, "Error updating limit rect: ${e.message}")
-                }
+    // --- SurfaceHolder.Callback ---
+
+    override fun surfaceCreated(holder: SurfaceHolder) {
+        surfaceReady = true
+        drawToSurface()
+        tryInitOnyx()
+    }
+
+    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
+        drawToSurface()
+        if (useOnyxSdk) {
+            try {
+                val limit = Rect()
+                getLocalVisibleRect(limit)
+                limit.right = (limit.right - GUTTER_WIDTH).toInt()
+                touchHelper?.setLimitRect(limit, emptyList())
+            } catch (e: Exception) {
+                Log.w(TAG, "Error updating limit rect: ${e.message}")
             }
         }
     }
 
-    override fun onDetachedFromWindow() {
-        super.onDetachedFromWindow()
+    override fun surfaceDestroyed(holder: SurfaceHolder) {
+        surfaceReady = false
         handler.removeCallbacks(idleRunnable)
         try {
             touchHelper?.closeRawDrawing()
@@ -151,24 +163,36 @@ class HandwritingCanvasView @JvmOverloads constructor(
         }
     }
 
-    private fun TouchPoint.toStrokePoint(): StrokePoint {
-        return StrokePoint(
-            x = this.x,
-            y = this.y,
-            pressure = this.pressure,
-            timestamp = this.timestamp
-        )
+    private fun tryInitOnyx() {
+        if (useOnyxSdk) return // already initialized
+
+        try {
+            val limit = Rect()
+            getLocalVisibleRect(limit)
+            limit.right = (limit.right - GUTTER_WIDTH).toInt()
+
+            touchHelper = TouchHelper.create(this, onyxCallback)
+            touchHelper?.setStrokeWidth(DEFAULT_STROKE_WIDTH)
+            touchHelper?.setStrokeStyle(TouchHelper.STROKE_STYLE_PENCIL)
+            touchHelper?.setLimitRect(limit, emptyList())
+            touchHelper?.openRawDrawing()
+            touchHelper?.setRawDrawingEnabled(true)
+
+            useOnyxSdk = true
+            Log.i(TAG, "Onyx SDK initialized: limitRect=$limit")
+        } catch (e: Exception) {
+            Log.w(TAG, "Onyx SDK init failed, falling back to standard touch: ${e.message}")
+            useOnyxSdk = false
+            touchHelper = null
+        }
     }
 
-    // --- Standard Android touch fallback ---
+    // --- Touch handling ---
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
-        if (useOnyxSdk) return super.onTouchEvent(event)
-
         val toolType = event.getToolType(0)
 
         // Reject all finger/palm touches, but cancel idle timer
-        // (palm on screen means user is still active)
         if (toolType == MotionEvent.TOOL_TYPE_FINGER) {
             handler.removeCallbacks(idleRunnable)
             return false
@@ -184,7 +208,10 @@ class HandwritingCanvasView @JvmOverloads constructor(
             return handleGutterTouch(event)
         }
 
-        // Stylus/mouse on canvas → writing
+        // If using Onyx SDK, pen input in the canvas area is handled by SDK callbacks
+        if (useOnyxSdk) return true
+
+        // Stylus/mouse on canvas → writing (fallback for non-Boox devices)
         val x = event.x
         val y = event.y + scrollOffsetY
         val pressure = event.pressure
@@ -197,7 +224,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
                 currentPath.reset()
                 currentPath.moveTo(x, y)
                 currentStrokePoints.add(StrokePoint(x, y, pressure, timestamp))
-                invalidate()
+                drawToSurface()
                 return true
             }
             MotionEvent.ACTION_MOVE -> {
@@ -211,7 +238,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
                 }
                 currentPath.lineTo(x, y)
                 currentStrokePoints.add(StrokePoint(x, y, pressure, timestamp))
-                invalidate()
+                drawToSurface()
                 return true
             }
             MotionEvent.ACTION_UP -> {
@@ -219,7 +246,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
                 currentStrokePoints.add(StrokePoint(x, y, pressure, timestamp))
                 finishStroke()
                 handler.postDelayed(idleRunnable, IDLE_TIMEOUT_MS)
-                invalidate()
+                drawToSurface()
                 return true
             }
         }
@@ -232,6 +259,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
                 isGutterDragging = true
                 gutterDragLastY = event.y
                 handler.removeCallbacks(idleRunnable)
+                pauseRawDrawing()
                 return true
             }
             MotionEvent.ACTION_MOVE -> {
@@ -239,17 +267,16 @@ class HandwritingCanvasView @JvmOverloads constructor(
                 val dy = gutterDragLastY - event.y  // drag up = positive = scroll down
                 gutterDragLastY = event.y
                 scrollOffsetY = (scrollOffsetY + dy).coerceAtLeast(0f)
-                invalidate()
+                drawToSurface()
                 onManualScroll?.invoke()
                 return true
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 if (!isGutterDragging) return false
                 isGutterDragging = false
-                // Snap to line boundary on release
                 scrollOffsetY = snapToLine(scrollOffsetY)
-                invalidate()
-                // Notify coordinator to update text for newly hidden/visible lines
+                drawToSurface()
+                resumeRawDrawing()
                 onManualScroll?.invoke()
                 return true
             }
@@ -270,16 +297,28 @@ class HandwritingCanvasView @JvmOverloads constructor(
         currentPath.reset()
     }
 
-    override fun onDraw(canvas: Canvas) {
-        super.onDraw(canvas)
+    /** Draw all content to the SurfaceView's surface. */
+    fun drawToSurface() {
+        if (!surfaceReady) return
+        val canvas = holder.lockCanvas() ?: return
+        try {
+            renderContent(canvas)
+        } finally {
+            holder.unlockCanvasAndPost(canvas)
+        }
+    }
+
+    private fun renderContent(canvas: Canvas) {
+        // Clear background
+        canvas.drawColor(Color.WHITE)
 
         val gutterLeft = width - GUTTER_WIDTH
 
-        // Apply scroll offset — shifts all drawing up
+        // Apply scroll offset
         canvas.save()
         canvas.translate(0f, -scrollOffsetY)
 
-        // Draw ruled lines (in document space, extending well beyond screen)
+        // Draw ruled lines
         val maxDocY = scrollOffsetY + height + LINE_SPACING
         var lineY = TOP_MARGIN + LINE_SPACING
         while (lineY < maxDocY) {
@@ -287,7 +326,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
             lineY += LINE_SPACING
         }
 
-        // Only draw strokes within the visible viewport for performance
+        // Only draw strokes within the visible viewport
         val viewTop = scrollOffsetY
         val viewBottom = scrollOffsetY + height
         for (stroke in completedStrokes) {
@@ -298,14 +337,14 @@ class HandwritingCanvasView @JvmOverloads constructor(
             }
         }
 
-        // Draw current in-progress stroke
+        // Draw current in-progress stroke (fallback only)
         if (!useOnyxSdk && currentStrokePoints.size > 1) {
             canvas.drawPath(currentPath, strokePaint)
         }
 
         canvas.restore()
 
-        // Draw gutter (in screen space, not document space)
+        // Draw gutter (in screen space)
         canvas.drawRect(gutterLeft, 0f, width.toFloat(), height.toFloat(), gutterPaint)
         canvas.drawLine(gutterLeft, 0f, gutterLeft, height.toFloat(), gutterLinePaint)
     }
@@ -326,10 +365,32 @@ class HandwritingCanvasView @JvmOverloads constructor(
         canvas.drawPath(path, strokePaint)
     }
 
+    /** Pause Onyx SDK raw drawing (needed before scrolling/screen refresh). */
+    fun pauseRawDrawing() {
+        if (useOnyxSdk) {
+            try {
+                touchHelper?.setRawDrawingEnabled(false)
+            } catch (e: Exception) {
+                Log.w(TAG, "Error pausing raw drawing: ${e.message}")
+            }
+        }
+    }
+
+    /** Resume Onyx SDK raw drawing after scrolling/screen refresh. */
+    fun resumeRawDrawing() {
+        if (useOnyxSdk) {
+            try {
+                touchHelper?.setRawDrawingEnabled(true)
+            } catch (e: Exception) {
+                Log.w(TAG, "Error resuming raw drawing: ${e.message}")
+            }
+        }
+    }
+
     /** Remove strokes by ID from the canvas and redraw. */
     fun removeStrokes(strokeIds: Set<String>) {
         completedStrokes.removeAll { it.strokeId in strokeIds }
-        invalidate()
+        drawToSurface()
     }
 
     /** Replace strokes by ID with new versions (e.g. shifted Y coordinates). */
@@ -340,7 +401,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
                 completedStrokes[i] = replacement
             }
         }
-        invalidate()
+        drawToSurface()
     }
 
     /** Snap a scroll offset to the nearest line boundary so lines aren't cut off. */
@@ -365,7 +426,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
         currentPath.reset()
         scrollOffsetY = 0f
         handler.removeCallbacks(idleRunnable)
-        invalidate()
+        drawToSurface()
     }
 
     fun getStrokes(): List<InkStroke> = completedStrokes.toList()

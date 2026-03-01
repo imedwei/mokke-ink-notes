@@ -31,16 +31,8 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:textSize="18sp"
-            android:textColor="#666666" />
-
-        <Button
-            android:id="@+id/clearButton"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="8dp"
-            android:text="Clear"
-            android:textSize="20sp"
-            style="@style/Widget.MaterialComponents.Button.TextButton" />
+            android:textColor="#666666"
+            android:visibility="gone" />
     </LinearLayout>
 
     <!-- Thin divider -->
@@ -49,25 +41,18 @@
         android:layout_height="1dp"
         android:background="#CCCCCC" />
 
-    <!-- Recognized text area — fixed 25% of remaining space -->
-    <ScrollView
-        android:id="@+id/textScrollView"
+    <!-- Recognized text area — fixed 25% of remaining space, bottom-aligned -->
+    <com.writer.view.RecognizedTextView
+        android:id="@+id/recognizedTextView"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
-        android:background="@color/white">
-
-        <com.writer.view.RecognizedTextView
-            android:id="@+id/recognizedTextView"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content" />
-
-    </ScrollView>
+        android:background="@color/white" />
 
     <!-- Divider between text and canvas -->
     <View
         android:layout_width="match_parent"
-        android:layout_height="2dp"
+        android:layout_height="1dp"
         android:background="#AAAAAA" />
 
     <!-- Ink canvas — fixed 75% of remaining space -->

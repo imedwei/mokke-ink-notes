@@ -1,8 +1,7 @@
 package com.writer.ui.writing
 
 import android.os.Bundle
-import android.widget.Button
-import android.widget.ScrollView
+import android.view.View
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -18,9 +17,7 @@ class WritingActivity : AppCompatActivity() {
 
     private lateinit var inkCanvas: HandwritingCanvasView
     private lateinit var recognizedTextView: RecognizedTextView
-    private lateinit var textScrollView: ScrollView
     private lateinit var statusText: TextView
-    private lateinit var clearButton: Button
 
     private lateinit var documentModel: DocumentModel
     private lateinit var recognizer: HandwritingRecognizer
@@ -32,31 +29,20 @@ class WritingActivity : AppCompatActivity() {
 
         inkCanvas = findViewById(R.id.inkCanvas)
         recognizedTextView = findViewById(R.id.recognizedTextView)
-        textScrollView = findViewById(R.id.textScrollView)
         statusText = findViewById(R.id.statusText)
-        clearButton = findViewById(R.id.clearButton)
 
         documentModel = DocumentModel()
         recognizer = HandwritingRecognizer()
 
-        clearButton.setOnClickListener {
-            inkCanvas.clear()
-            documentModel.activeStrokes.clear()
-            documentModel.paragraphs.clear()
-            recognizedTextView.setParagraphs(emptyList())
-            coordinator?.reset()
-            statusText.text = "Cleared"
-        }
-
         // Initialize recognizer then start the coordinator
-        statusText.text = "Loading model..."
+        showStatus("Loading model...")
         lifecycleScope.launch {
             try {
                 recognizer.initialize(documentModel.language)
-                statusText.text = "Ready"
+                hideStatus()
                 startCoordinator()
             } catch (e: Exception) {
-                statusText.text = "Model error"
+                showStatus("Model error")
                 Toast.makeText(
                     this@WritingActivity,
                     "Failed to load recognition model: ${e.message}",
@@ -67,35 +53,36 @@ class WritingActivity : AppCompatActivity() {
         }
     }
 
+    private fun showStatus(text: String) {
+        statusText.text = text
+        statusText.visibility = View.VISIBLE
+    }
+
+    private fun hideStatus() {
+        statusText.text = ""
+        statusText.visibility = View.GONE
+    }
+
     private fun startCoordinator() {
         coordinator = WritingCoordinator(
             documentModel = documentModel,
             recognizer = recognizer,
             inkCanvas = inkCanvas,
             textView = recognizedTextView,
-            textScrollView = textScrollView,
             scope = lifecycleScope,
             onStatusUpdate = { status ->
                 runOnUiThread {
-                    statusText.text = status
+                    if (status.isEmpty()) hideStatus() else showStatus(status)
                 }
             }
         )
         coordinator?.start()
-
-        inkCanvas.post {
-            statusText.text = "Ready"
-        }
     }
 
     private fun startCoordinatorWithoutRecognition() {
         inkCanvas.onStrokeCompleted = { _ ->
             val count = inkCanvas.getStrokeCount()
-            statusText.text = "Strokes: $count (no recognition)"
-        }
-
-        inkCanvas.post {
-            statusText.text = "Ready - no recognition"
+            showStatus("Strokes: $count (no recognition)")
         }
     }
 

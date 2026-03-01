@@ -1,7 +1,6 @@
 package com.writer.ui.writing
 
 import android.util.Log
-import android.widget.ScrollView
 import com.writer.model.DocumentModel
 import com.writer.model.InkStroke
 import com.writer.model.StrokePoint
@@ -19,7 +18,6 @@ class WritingCoordinator(
     private val recognizer: HandwritingRecognizer,
     private val inkCanvas: HandwritingCanvasView,
     private val textView: RecognizedTextView,
-    private val textScrollView: ScrollView,
     private val scope: CoroutineScope,
     private val onStatusUpdate: (String) -> Unit
 ) {
@@ -31,7 +29,7 @@ class WritingCoordinator(
         // A line indented more than 15% from the left starts a new paragraph
         private const val INDENT_THRESHOLD = 0.15f
         // Approximate gutter width for indent calculation
-        private const val GUTTER_WIDTH_FOR_INDENT = 144f
+        private const val GUTTER_WIDTH = 144f
     }
 
     private val lineSegmenter = LineSegmenter()
@@ -48,9 +46,9 @@ class WritingCoordinator(
         inkCanvas.onStrokeCompleted = { stroke -> onStrokeCompleted(stroke) }
         inkCanvas.onIdleTimeout = { checkAutoScroll() }
         inkCanvas.onManualScroll = {
-            Log.i(TAG, "Manual scroll ended, scrollOffsetY=${inkCanvas.scrollOffsetY.toInt()}")
             displayHiddenLines()
         }
+        // Tap-on-text navigation disabled for now
     }
 
     fun stop() {
@@ -72,7 +70,13 @@ class WritingCoordinator(
     private fun onStrokeCompleted(stroke: InkStroke) {
         // Check for gestures before adding to model
         if (isStrikethroughGesture(stroke)) {
-            handleStrikethrough(stroke)
+            val gestureMaxX = stroke.points.maxOf { it.x }
+            val canvasWritingWidth = inkCanvas.width - GUTTER_WIDTH
+            if (gestureMaxX >= canvasWritingWidth) {
+                handleDeleteLine(stroke)
+            } else {
+                handleStrikethrough(stroke)
+            }
             return
         }
         if (isVerticalLineGesture(stroke)) {
@@ -103,8 +107,6 @@ class WritingCoordinator(
             highestLineIndex = lineIdx
         }
 
-        val count = documentModel.activeStrokes.size
-        onStatusUpdate("Strokes: $count")
     }
 
     private fun isStrikethroughGesture(stroke: InkStroke): Boolean {
@@ -149,7 +151,7 @@ class WritingCoordinator(
 
         if (overlapping.isEmpty()) {
             // No strokes to delete — just remove the gesture stroke from canvas
-            inkCanvas.removeStrokes(setOf(gestureStroke.strokeId))
+            refreshCanvas { inkCanvas.removeStrokes(setOf(gestureStroke.strokeId)) }
             return
         }
 
@@ -160,14 +162,64 @@ class WritingCoordinator(
         // Remove from document model
         documentModel.activeStrokes.removeAll { it.strokeId in idsToRemove }
 
-        // Remove from canvas
-        inkCanvas.removeStrokes(idsToRemove)
+        // Remove from canvas with e-ink refresh
+        refreshCanvas { inkCanvas.removeStrokes(idsToRemove) }
 
         // Invalidate recognition cache for this line
         lineTextCache.remove(lineIdx)
 
+        // Update text view
+        displayHiddenLines()
+
         Log.i(TAG, "Strikethrough on line $lineIdx: removed ${overlapping.size} strokes")
-        onStatusUpdate("Deleted ${overlapping.size} strokes")
+    }
+
+    /** Delete entire line and shift strokes below up. */
+    private fun handleDeleteLine(gestureStroke: InkStroke) {
+        val centroidY = gestureStroke.points.map { it.y }.average().toFloat()
+        val lineIdx = lineSegmenter.getLineIndex(centroidY)
+
+        // Remove all strokes on this line
+        val lineStrokes = lineSegmenter.getStrokesForLine(documentModel.activeStrokes, lineIdx)
+        val idsToRemove = lineStrokes.map { it.strokeId }.toMutableSet()
+        idsToRemove.add(gestureStroke.strokeId)
+        documentModel.activeStrokes.removeAll { it.strokeId in idsToRemove }
+
+        // Shift all strokes below this line UP by LINE_SPACING
+        val shiftAmount = -HandwritingCanvasView.LINE_SPACING
+        val replacements = mutableMapOf<String, InkStroke>()
+        val newActiveStrokes = mutableListOf<InkStroke>()
+
+        for (stroke in documentModel.activeStrokes) {
+            val strokeLine = lineSegmenter.getStrokeLineIndex(stroke)
+            if (strokeLine > lineIdx) {
+                val shifted = shiftStroke(stroke, shiftAmount)
+                replacements[stroke.strokeId] = shifted
+                newActiveStrokes.add(shifted)
+            } else {
+                newActiveStrokes.add(stroke)
+            }
+        }
+
+        documentModel.activeStrokes.clear()
+        documentModel.activeStrokes.addAll(newActiveStrokes)
+
+        // Update canvas with e-ink refresh
+        refreshCanvas {
+            inkCanvas.replaceStrokes(replacements)
+            inkCanvas.removeStrokes(idsToRemove)
+        }
+
+        // Invalidate recognition cache for this line and all shifted lines
+        val keysToRemove = lineTextCache.keys.filter { it >= lineIdx }.toList()
+        for (key in keysToRemove) {
+            lineTextCache.remove(key)
+        }
+
+        // Update text view
+        displayHiddenLines()
+
+        Log.i(TAG, "Delete line $lineIdx: removed ${lineStrokes.size} strokes, shifted ${replacements.size} up")
     }
 
     private fun isVerticalLineGesture(stroke: InkStroke): Boolean {
@@ -223,9 +275,11 @@ class WritingCoordinator(
         documentModel.activeStrokes.clear()
         documentModel.activeStrokes.addAll(newActiveStrokes)
 
-        // Update canvas: replace shifted strokes and remove gesture stroke
-        inkCanvas.replaceStrokes(replacements)
-        inkCanvas.removeStrokes(setOf(gestureStroke.strokeId))
+        // Update canvas with e-ink refresh
+        refreshCanvas {
+            inkCanvas.replaceStrokes(replacements)
+            inkCanvas.removeStrokes(setOf(gestureStroke.strokeId))
+        }
 
         // Invalidate recognition cache for all shifted lines
         val keysToRemove = lineTextCache.keys.filter { it >= shiftFromLine }.toList()
@@ -235,7 +289,6 @@ class WritingCoordinator(
 
         val direction = if (drawingDownward) "below" else "above"
         Log.i(TAG, "Insert line $direction line $startLineIdx (shifted ${replacements.size} strokes)")
-        onStatusUpdate("Inserted line $direction line $startLineIdx")
     }
 
     private fun shiftStroke(stroke: InkStroke, dy: Float): InkStroke {
@@ -247,6 +300,14 @@ class WritingCoordinator(
             points = shiftedPoints,
             strokeWidth = stroke.strokeWidth
         )
+    }
+
+    /** Pause SDK, perform canvas operations, redraw, and resume SDK. */
+    private fun refreshCanvas(operations: () -> Unit) {
+        inkCanvas.pauseRawDrawing()
+        operations()
+        inkCanvas.drawToSurface()
+        inkCanvas.resumeRawDrawing()
     }
 
     private fun eagerRecognizeLine(lineIndex: Int) {
@@ -310,18 +371,13 @@ class WritingCoordinator(
         val bottomLineScreenY = bottomLineDocY - inkCanvas.scrollOffsetY
         val targetY = canvasHeight * SCROLL_THRESHOLD
 
-        Log.d(TAG, "AutoScroll check: bottomLine=$bottomLine screenY=${bottomLineScreenY.toInt()}, " +
-                "threshold=${targetY.toInt()}")
-
         // Only auto-scroll if we're at the bottom of the document
         // (the bottommost writing is visible in the canvas viewport)
         if (bottomLineScreenY < 0 || bottomLineScreenY > canvasHeight) {
-            Log.d(TAG, "AutoScroll: not at bottom of document, skipping")
             return
         }
 
         if (bottomLineScreenY < targetY) {
-            Log.d(TAG, "AutoScroll: writing not past threshold yet")
             return
         }
 
@@ -330,8 +386,10 @@ class WritingCoordinator(
         val newOffset = inkCanvas.snapToLine(rawOffset)
         if (newOffset > inkCanvas.scrollOffsetY) {
             Log.i(TAG, "AutoScroll: shifting from ${inkCanvas.scrollOffsetY.toInt()} to ${newOffset.toInt()}")
+            inkCanvas.pauseRawDrawing()
             inkCanvas.scrollOffsetY = newOffset
-            inkCanvas.invalidate()
+            inkCanvas.drawToSurface()
+            inkCanvas.resumeRawDrawing()
 
             // Display text for lines that are now above the viewport
             displayHiddenLines()
@@ -380,11 +438,13 @@ class WritingCoordinator(
 
     private fun updateTextView(hiddenLines: List<Int>) {
         val strokesByLine = lineSegmenter.groupByLine(documentModel.activeStrokes)
-        val writingWidth = inkCanvas.width - GUTTER_WIDTH_FOR_INDENT
+        val writingWidth = inkCanvas.width - GUTTER_WIDTH
 
         // Build paragraphs by detecting indented lines
         val paragraphs = mutableListOf<String>()
+        val paragraphLineIndices = mutableListOf<List<Int>>()
         val currentParagraph = mutableListOf<String>()
+        val currentLineIndices = mutableListOf<Int>()
 
         for (lineIdx in hiddenLines) {
             val text = lineTextCache[lineIdx]
@@ -397,22 +457,23 @@ class WritingCoordinator(
                 if (leftmostX > writingWidth * INDENT_THRESHOLD) {
                     // Indented line — flush current paragraph, start new one
                     paragraphs.add(currentParagraph.joinToString(" "))
+                    paragraphLineIndices.add(currentLineIndices.toList())
                     currentParagraph.clear()
+                    currentLineIndices.clear()
                 }
             }
 
             currentParagraph.add(text)
+            currentLineIndices.add(lineIdx)
         }
 
         // Flush remaining
         if (currentParagraph.isNotEmpty()) {
             paragraphs.add(currentParagraph.joinToString(" "))
+            paragraphLineIndices.add(currentLineIndices.toList())
         }
 
-        textView.setParagraphs(paragraphs)
-
-        textScrollView.post {
-            textScrollView.fullScroll(ScrollView.FOCUS_DOWN)
-        }
+        textView.setParagraphs(paragraphs, paragraphLineIndices)
     }
+
 }
