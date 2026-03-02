@@ -96,6 +96,12 @@ class RecognizedTextView @JvmOverloads constructor(
         isAntiAlias = true
     }
 
+    private val debugPaint = TextPaint().apply {
+        color = Color.RED
+        textSize = 32f
+        isAntiAlias = true
+    }
+
     /** When true, show tutorial annotations and close button. */
     var tutorialMode = false
 
@@ -123,6 +129,9 @@ class RecognizedTextView @JvmOverloads constructor(
     /** Called when the user taps the "W" logo. */
     var onLogoTap: (() -> Unit)? = null
 
+    /** Called when the user taps on a text segment. Passes the written lineIndex. */
+    var onTextTap: ((Int) -> Unit)? = null
+
     /** Status message shown in the gutter below the logo (e.g. "Loading model..."). */
     var statusMessage: String = ""
         set(value) {
@@ -140,7 +149,20 @@ class RecognizedTextView @JvmOverloads constructor(
     private var gutterDragStartY = 0f
     private var gutterDragMoved = false
 
+    // Text tap tracking
+    private var textTapDownX = 0f
+    private var textTapDownY = 0f
+    private var textTapTracking = false
+
+    // Hit-test data (stored on each setParagraphs call)
+    private var currentParagraphs: List<List<TextSegment>> = emptyList()
+    private var paragraphSegmentStarts: List<List<Int>> = emptyList()
+
+    // Debug: last tapped line info
+    private var debugTapInfo: String = ""
+
     fun setParagraphs(paragraphs: List<List<TextSegment>>) {
+        currentParagraphs = paragraphs
         rebuildLayouts(paragraphs)
         invalidate()
     }
@@ -151,6 +173,7 @@ class RecognizedTextView @JvmOverloads constructor(
 
         var height = 0f
         val allWrittenLineHeights = mutableListOf<Pair<Int, Float>>()
+        val allSegmentStarts = mutableListOf<List<Int>>()
 
         staticLayouts = paragraphs.map { segments ->
             val spannable = SpannableStringBuilder()
@@ -197,9 +220,11 @@ class RecognizedTextView @JvmOverloads constructor(
                 allWrittenLineHeights.add(Pair(segment.lineIndex, segHeights[i]))
             }
 
+            allSegmentStarts.add(segmentStarts.toList())
             height += layout.height + paragraphSpacing
             layout
         }
+        paragraphSegmentStarts = allSegmentStarts
         paragraphHeights = staticLayouts.map { it.height.toFloat() + paragraphSpacing }
         writtenLineHeights = allWrittenLineHeights
         totalTextHeight = height.toInt()
@@ -241,6 +266,38 @@ class RecognizedTextView @JvmOverloads constructor(
             return handleGutterTouch(event)
         }
 
+        // Stylus/mouse in text area → detect taps to scroll canvas to that line
+        if (!tutorialMode) {
+            when (event.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    textTapDownX = event.x
+                    textTapDownY = event.y
+                    textTapTracking = true
+                    return true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    if (textTapTracking) {
+                        val dx = event.x - textTapDownX
+                        val dy = event.y - textTapDownY
+                        if (dx * dx + dy * dy > 400f) {
+                            textTapTracking = false
+                        }
+                    }
+                    return textTapTracking
+                }
+                MotionEvent.ACTION_UP -> {
+                    if (textTapTracking) {
+                        textTapTracking = false
+                        resolveTextTap(event.x, event.y)
+                        return true
+                    }
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    textTapTracking = false
+                }
+            }
+        }
+
         return super.onTouchEvent(event)
     }
 
@@ -272,6 +329,47 @@ class RecognizedTextView @JvmOverloads constructor(
             }
         }
         return false
+    }
+
+    /** Resolve a tap at screen coordinates (x, y) to a written lineIndex. */
+    private fun resolveTextTap(x: Float, y: Float) {
+        if (staticLayouts.isEmpty() || currentParagraphs.isEmpty()) return
+        val callback = onTextTap ?: return
+
+        val baseY = height - totalTextHeight - bottomPadding
+        val startY = baseY + textScrollOffset
+        val localX = x - horizontalPadding
+
+        var cumulativeY = startY
+        for (pIdx in staticLayouts.indices) {
+            val layout = staticLayouts[pIdx]
+            val pEnd = cumulativeY + layout.height + paragraphSpacing
+
+            if (y >= cumulativeY && y < pEnd) {
+                val localY = (y - cumulativeY).toInt()
+                val renderedLine = layout.getLineForVertical(localY)
+                val charOffset = layout.getOffsetForHorizontal(renderedLine, localX)
+
+                val segStarts = paragraphSegmentStarts.getOrNull(pIdx) ?: return
+                val segments = currentParagraphs.getOrNull(pIdx) ?: return
+
+                var ownerIdx = 0
+                for (s in segStarts.indices) {
+                    if (segStarts[s] <= charOffset) ownerIdx = s
+                    else break
+                }
+
+                val segment = segments.getOrNull(ownerIdx) ?: return
+                debugTapInfo = "Tapped line ${segment.lineIndex} (seg=$ownerIdx \"${segment.text.take(20)}\")"
+                invalidate()
+                callback(segment.lineIndex)
+                return
+            }
+
+            cumulativeY = pEnd
+        }
+        debugTapInfo = "Tap miss (y=${"%.0f".format(y)}, startY=${"%.0f".format(startY)})"
+        invalidate()
     }
 
     // --- Drawing ---
@@ -309,6 +407,11 @@ class RecognizedTextView @JvmOverloads constructor(
         // Draw status message below logo if present
         if (statusMessage.isNotEmpty()) {
             canvas.drawText(statusMessage, gutterCenterX, GUTTER_WIDTH + 32f, statusPaint)
+        }
+
+        // Debug: show last tapped line info
+        if (debugTapInfo.isNotEmpty()) {
+            canvas.drawText(debugTapInfo, 10f, 36f, debugPaint)
         }
 
         if (tutorialMode) {

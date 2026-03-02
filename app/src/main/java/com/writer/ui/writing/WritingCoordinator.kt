@@ -65,6 +65,7 @@ class WritingCoordinator(
         inkCanvas.onStrokeCompleted = { stroke -> onStrokeCompleted(stroke) }
         inkCanvas.onIdleTimeout = { onIdle() }
         inkCanvas.onManualScroll = { displayHiddenLines() }
+        textView.onTextTap = { lineIndex -> scrollToLine(lineIndex) }
     }
 
     fun stop() {
@@ -72,6 +73,7 @@ class WritingCoordinator(
         inkCanvas.onStrokeCompleted = null
         inkCanvas.onIdleTimeout = null
         inkCanvas.onManualScroll = null
+        textView.onTextTap = null
     }
 
     fun reset() {
@@ -249,12 +251,26 @@ class WritingCoordinator(
         }
     }
 
-    private fun animateScroll(fromOffset: Float, toOffset: Float) {
+    private fun scrollToLine(lineIndex: Int) {
+        if (scrollAnimating) return
+
+        val canvasHeight = inkCanvas.height.toFloat()
+        if (canvasHeight <= 0) return
+
+        val lineY = lineSegmenter.getLineY(lineIndex)
+        val targetOffset = inkCanvas.snapToLine(lineY).coerceAtLeast(0f)
+
+        if (targetOffset != inkCanvas.scrollOffsetY) {
+            Log.i(TAG, "Tap-to-scroll: line $lineIndex → offset ${targetOffset.toInt()}")
+            animateScroll(inkCanvas.scrollOffsetY, targetOffset, 500L)
+        }
+    }
+
+    private fun animateScroll(fromOffset: Float, toOffset: Float, duration: Long = 1000L) {
         scrollAnimating = true
         Log.i(TAG, "AutoScroll: animating from ${fromOffset.toInt()} to ${toOffset.toInt()}")
         inkCanvas.pauseRawDrawing()
 
-        val duration = 1000L
         val distance = toOffset - fromOffset
 
         scope.launch(Dispatchers.Main) {

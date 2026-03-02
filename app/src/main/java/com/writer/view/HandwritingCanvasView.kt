@@ -195,6 +195,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
             touchHelper = TouchHelper.create(this, onyxCallback)
             touchHelper?.setStrokeWidth(DEFAULT_STROKE_WIDTH)
             touchHelper?.setStrokeStyle(TouchHelper.STROKE_STYLE_PENCIL)
+            touchHelper?.setStrokeColor(Color.BLACK)
             touchHelper?.setLimitRect(limit, emptyList())
             touchHelper?.openRawDrawing()
             touchHelper?.setRawDrawingEnabled(true)
