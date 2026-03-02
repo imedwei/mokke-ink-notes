@@ -425,7 +425,11 @@ class RecognizedTextView @JvmOverloads constructor(
 
         // Draw text content
         if (staticLayouts.isNotEmpty()) {
-            val baseY = height - totalTextHeight - bottomPadding
+            val baseY = if (tutorialMode) {
+                closeButtonHeight + 5f  // top-align below close button
+            } else {
+                height - totalTextHeight - bottomPadding
+            }
             val startY = baseY + textScrollOffset
 
             canvas.save()

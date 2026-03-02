@@ -1,6 +1,7 @@
 package com.writer.ui.writing
 
 import android.content.Context
+import android.widget.LinearLayout
 import com.writer.model.InkStroke
 import com.writer.storage.DocumentData
 import com.writer.view.HandwritingCanvasView
@@ -32,6 +33,10 @@ class TutorialManager(
     private var savedStrokes: List<InkStroke>? = null
     private var savedScrollY: Float = 0f
     private var savedState: DocumentData? = null
+    private var savedTextHeight = 0
+    private var savedTextWeight = 0f
+    private var savedCanvasHeight = 0
+    private var savedCanvasWeight = 0f
 
     fun shouldAutoShow(): Boolean {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -54,8 +59,39 @@ class TutorialManager(
         // Stop coordinator (removes callbacks)
         coordinator?.stop()
 
-        // Generate tutorial content
-        val tutorial = TutorialContent.generate(inkCanvas.width, inkCanvas.height)
+        // Save layout params
+        val textParams = textView.layoutParams as LinearLayout.LayoutParams
+        val canvasParams = inkCanvas.layoutParams as LinearLayout.LayoutParams
+        savedTextHeight = textParams.height
+        savedTextWeight = textParams.weight
+        savedCanvasHeight = canvasParams.height
+        savedCanvasWeight = canvasParams.weight
+
+        // Measure text content to compute split
+        textView.tutorialMode = true
+        textView.textScrollOffset = 0f
+
+        // First pass: generate with current canvas height to get text paragraphs
+        val totalHeight = textView.height + inkCanvas.height
+        val textNeeded = run {
+            val temp = TutorialContent.generate(inkCanvas.width, inkCanvas.height)
+            textView.setParagraphs(temp.textParagraphs)
+            textView.totalTextHeight + 130  // 110 close button + 5 gap + 15 bottom padding
+        }
+
+        // Compute split: text gets what it needs, canvas gets the rest
+        val newCanvasHeight = (totalHeight - textNeeded).coerceAtLeast(400)
+        val newTextHeight = totalHeight - newCanvasHeight
+        textParams.height = newTextHeight
+        textParams.weight = 0f
+        textView.layoutParams = textParams
+        canvasParams.height = newCanvasHeight
+        canvasParams.weight = 0f
+        inkCanvas.layoutParams = canvasParams
+
+        // Second pass: regenerate with correct canvas height (for auto-scroll hint positioning)
+        val tutorial = TutorialContent.generate(inkCanvas.width, newCanvasHeight)
+        textView.setParagraphs(tutorial.textParagraphs)
 
         // Load tutorial strokes into canvas
         inkCanvas.loadStrokes(tutorial.strokes)
@@ -64,11 +100,6 @@ class TutorialManager(
         inkCanvas.textAnnotations = tutorial.textAnnotations
         inkCanvas.tutorialMode = true
         inkCanvas.drawToSurface()
-
-        // Set text view to tutorial mode with demo text
-        textView.tutorialMode = true
-        textView.textScrollOffset = 0f
-        textView.setParagraphs(tutorial.textParagraphs)
 
         // Wire close tutorial taps (both the button and the W logo)
         textView.onCloseTutorialTap = { close() }
@@ -81,6 +112,16 @@ class TutorialManager(
         // Mark tutorial as seen
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit().putBoolean(KEY_TUTORIAL_SEEN, true).apply()
+
+        // Restore split size
+        val textParams = textView.layoutParams as LinearLayout.LayoutParams
+        val canvasParams = inkCanvas.layoutParams as LinearLayout.LayoutParams
+        textParams.height = savedTextHeight
+        textParams.weight = savedTextWeight
+        textView.layoutParams = textParams
+        canvasParams.height = savedCanvasHeight
+        canvasParams.weight = savedCanvasWeight
+        inkCanvas.layoutParams = canvasParams
 
         // Clear tutorial annotations
         inkCanvas.clearAnnotations()

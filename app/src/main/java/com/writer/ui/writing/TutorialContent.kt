@@ -29,7 +29,8 @@ data class TutorialData(
     val annotations: List<AnnotationStroke>,
     val textAnnotations: List<TextAnnotation>,
     val scrollOffsetY: Float,
-    val textParagraphs: List<List<WritingCoordinator.TextSegment>>
+    val textParagraphs: List<List<WritingCoordinator.TextSegment>>,
+    val canvasContentHeight: Float = 0f
 )
 
 object TutorialContent {
@@ -57,12 +58,52 @@ object TutorialContent {
         fun lineTop(idx: Int): Float = TOP_MARGIN + idx * LINE_SPACING
         fun baseline(idx: Int): Float = TOP_MARGIN + (idx + 1) * LINE_SPACING - 20f
 
-        // --- Lines 0-1: Demo text + scroll annotation ---
-        strokes.addAll(textToStrokes("The quick brown fox", 60f, baseline(0), 64f))
-        strokes.addAll(textToStrokes("jumps over the lazy dog", 60f, baseline(1), 64f))
+        // All lines (0-9) are visible on the canvas starting from the top.
+        // Lines 0-4 also appear rendered in the text view above.
 
-        // Blue arrow pointing to gutter
-        val arrowY = lineTop(0) + 40f
+        // --- Line 0: Heading "Shopping List" with underline ---
+        strokes.addAll(textToStrokes("Shopping List", 60f, baseline(0), 64f))
+        val underlineY = baseline(0) + 15f
+        strokes.add(InkStroke(
+            points = listOf(
+                StrokePoint(55f, underlineY, 0.5f, 0L),
+                StrokePoint(520f, underlineY, 0.5f, 0L)
+            ),
+            strokeWidth = 3f
+        ))
+
+        // --- Lines 1-2: List items with dash markers ---
+        val listItems = listOf("Eggs" to 1, "Bread" to 2)
+        for ((text, lineIdx) in listItems) {
+            val dashY = baseline(lineIdx) - 20f
+            strokes.add(InkStroke(
+                points = listOf(
+                    StrokePoint(60f, dashY, 0.5f, 0L),
+                    StrokePoint(110f, dashY, 0.5f, 0L)
+                ),
+                strokeWidth = 2f
+            ))
+            strokes.addAll(textToStrokes(text, 140f, baseline(lineIdx), 64f))
+        }
+
+        // --- Lines 3-4: Fox text (multi-line concatenation demo) ---
+        strokes.addAll(textToStrokes("The quick brown fox", 60f, baseline(3), 64f))
+        strokes.addAll(textToStrokes("jumps over the lazy dog", 60f, baseline(4), 64f))
+
+        // Scroll offset: start at the top so heading is visible
+        val scrollOffset = 0f
+
+        // --- Line 5: Strikethrough demo + scroll annotation ---
+        strokes.addAll(textToStrokes("Hello beautiful world", 60f, baseline(5), 64f))
+
+        val strikeY = baseline(5) - 22f
+        annotations.add(makeLine(180f, strikeY, 400f, strikeY, red, 5f))
+        textAnnotations.add(
+            TextAnnotation("Strike through to delete words", 560f, strikeY + 10f, red, 32f)
+        )
+
+        // Blue arrow pointing to gutter (on first visible line)
+        val arrowY = lineTop(2) + 40f
         annotations.addAll(
             makeArrow(writingWidth - 300f, arrowY, writingWidth - 30f, arrowY, blue)
         )
@@ -70,24 +111,12 @@ object TutorialContent {
             TextAnnotation("Drag in gutter to scroll", writingWidth - 680f, arrowY + 10f, blue, 34f)
         )
 
-        // --- Line 2: Strikethrough demo ---
-        strokes.addAll(textToStrokes("Hello beautiful world", 60f, baseline(2), 64f))
+        // --- Line 6: Delete line demo (X gesture) ---
+        strokes.addAll(textToStrokes("Once upon a time", 60f, baseline(6), 64f))
 
-        // Red strikethrough across "beautiful" only
-        val strikeY = baseline(2) - 22f
-        annotations.add(makeLine(180f, strikeY, 400f, strikeY, red, 5f))
-        textAnnotations.add(
-            TextAnnotation("Strike through to delete words", 560f, strikeY + 10f, red, 32f)
-        )
-
-        // --- Line 3: Delete line demo (X gesture) ---
-        strokes.addAll(textToStrokes("Once upon a time", 60f, baseline(3), 64f))
-
-        // Red X-with-left-side gesture: single stroke TR → BL → TL → BR
         val xCenterX = 580f
-        val xCenterY = baseline(3) - 22f
+        val xCenterY = baseline(6) - 22f
         val xSize = 28f
-        // Stroke path: top-right → bottom-left → top-left → bottom-right
         annotations.add(makeLine(xCenterX + xSize, xCenterY - xSize, xCenterX - xSize, xCenterY + xSize, red, 5f))
         annotations.add(makeLine(xCenterX - xSize, xCenterY + xSize, xCenterX - xSize, xCenterY - xSize, red, 5f))
         annotations.add(makeLine(xCenterX - xSize, xCenterY - xSize, xCenterX + xSize, xCenterY + xSize, red, 5f))
@@ -95,55 +124,65 @@ object TutorialContent {
             TextAnnotation("Draw X in one stroke to delete line", xCenterX + xSize + 20f, xCenterY + 10f, red, 32f)
         )
 
-        // --- Lines 4-6: Insert line demo (two vertical lines) ---
-        strokes.addAll(textToStrokes("Line above", 60f, baseline(4), 64f))
-        strokes.addAll(textToStrokes("Line below", 60f, baseline(6), 64f))
+        // --- Lines 7-9: Insert line demo ---
+        strokes.addAll(textToStrokes("Line above", 60f, baseline(7), 64f))
+        strokes.addAll(textToStrokes("Line below", 60f, baseline(9), 64f))
 
-        // Downward vertical line (draw ↓ to insert below) — right of "Line above" text
+        // Downward vertical line (draw ↓ to insert below)
         val vertDownX = 450f
-        val vertDownStart = lineTop(4) + LINE_SPACING / 2f
+        val vertDownStart = lineTop(7) + LINE_SPACING / 2f
         val vertDownEnd = vertDownStart + LINE_SPACING * 1.5f - 10f
         annotations.add(makeLine(vertDownX, vertDownStart, vertDownX, vertDownEnd, green, 5f))
-        // Arrowhead pointing down
         annotations.add(makeLine(vertDownX - 12f, vertDownEnd - 20f, vertDownX, vertDownEnd, green, 4f))
         annotations.add(makeLine(vertDownX + 12f, vertDownEnd - 20f, vertDownX, vertDownEnd, green, 4f))
         textAnnotations.add(
             TextAnnotation("Draw ↓ to insert below", vertDownX + 30f, (vertDownStart + vertDownEnd) / 2f + 8f, green, 32f)
         )
 
-        // Upward vertical line (draw ↑ to insert above) — farther right, clear of "Draw down"
+        // Upward vertical line (draw ↑ to insert above)
         val vertUpX = 850f
-        val vertUpMid = baseline(6) - 10f
+        val vertUpMid = baseline(9) - 10f
         val vertUpEnd = vertUpMid - LINE_SPACING * 1.5f
         annotations.add(makeLine(vertUpX, vertUpMid, vertUpX, vertUpEnd, green, 5f))
-        // Arrowhead pointing up
         annotations.add(makeLine(vertUpX - 12f, vertUpEnd + 20f, vertUpX, vertUpEnd, green, 4f))
         annotations.add(makeLine(vertUpX + 12f, vertUpEnd + 20f, vertUpX, vertUpEnd, green, 4f))
         textAnnotations.add(
             TextAnnotation("Draw ↑ to insert above", vertUpX + 30f, (vertUpMid + vertUpEnd) / 2f + 8f, green, 32f)
         )
 
-        // --- Auto-scroll hint near the bottom ---
+        // --- Auto-scroll hint between delete and insert demos ---
         textAnnotations.add(
             TextAnnotation(
                 "Writing will auto-scroll up as you reach the bottom",
-                writingWidth / 2f, canvasHeight - 55f - LINE_SPACING, blue, 34f,
+                writingWidth / 2f, lineTop(7) - LINE_SPACING * 0.35f + 5f * LINE_SPACING, blue, 34f,
                 centered = true
             )
         )
 
+        // Canvas content extends to bottom of line 9
+        val canvasContentHeight = lineTop(9) + LINE_SPACING + 20f - scrollOffset
+
         // --- Text paragraphs for the text view ---
         val textParagraphs = listOf(
             listOf(
-                WritingCoordinator.TextSegment("The quick brown fox", dimmed = false, lineIndex = 0),
-                WritingCoordinator.TextSegment("jumps over the lazy dog", dimmed = false, lineIndex = 1)
+                WritingCoordinator.TextSegment("Shopping List", dimmed = false, lineIndex = 0, heading = true)
             ),
             listOf(
-                WritingCoordinator.TextSegment("Hello world", dimmed = false, lineIndex = 2)
+                WritingCoordinator.TextSegment("Eggs", dimmed = false, lineIndex = 1, listItem = true)
             ),
             listOf(
-                WritingCoordinator.TextSegment("Line above", dimmed = false, lineIndex = 4),
-                WritingCoordinator.TextSegment("Line below", dimmed = false, lineIndex = 6)
+                WritingCoordinator.TextSegment("Bread", dimmed = false, lineIndex = 2, listItem = true)
+            ),
+            listOf(
+                WritingCoordinator.TextSegment("The quick brown fox", dimmed = false, lineIndex = 3),
+                WritingCoordinator.TextSegment("jumps over the lazy dog", dimmed = false, lineIndex = 4)
+            ),
+            listOf(
+                WritingCoordinator.TextSegment("Hello world", dimmed = false, lineIndex = 5)
+            ),
+            listOf(
+                WritingCoordinator.TextSegment("Line above", dimmed = false, lineIndex = 7),
+                WritingCoordinator.TextSegment("Line below", dimmed = false, lineIndex = 9)
             )
         )
 
@@ -151,8 +190,9 @@ object TutorialContent {
             strokes = strokes,
             annotations = annotations,
             textAnnotations = textAnnotations,
-            scrollOffsetY = 0f,
-            textParagraphs = textParagraphs
+            scrollOffsetY = scrollOffset,
+            textParagraphs = textParagraphs,
+            canvasContentHeight = canvasContentHeight
         )
     }
 
