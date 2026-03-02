@@ -10,6 +10,7 @@ import android.text.SpannableStringBuilder
 import android.text.StaticLayout
 import android.text.TextPaint
 import android.text.style.ForegroundColorSpan
+import android.text.style.LeadingMarginSpan
 import android.util.AttributeSet
 import android.view.MotionEvent
 import android.view.View
@@ -35,7 +36,7 @@ class RecognizedTextView @JvmOverloads constructor(
 
     private val textPaint = TextPaint().apply {
         color = Color.BLACK
-        textSize = 80f
+        textSize = 64f
         isAntiAlias = false // e-ink
     }
 
@@ -140,7 +141,8 @@ class RecognizedTextView @JvmOverloads constructor(
         }
 
     private val horizontalPadding = 40f
-    private val paragraphSpacing = 24f
+    private val paragraphSpacing = 22f
+    private val firstLineIndent = 80
     private val bottomPadding = 10f
 
     // Gutter drag state
@@ -191,6 +193,11 @@ class RecognizedTextView @JvmOverloads constructor(
                     )
                 }
             }
+            spannable.setSpan(
+                LeadingMarginSpan.Standard(firstLineIndent, 0),
+                0, spannable.length,
+                SpannableStringBuilder.SPAN_EXCLUSIVE_EXCLUSIVE
+            )
             val layout = StaticLayout.Builder
                 .obtain(spannable, 0, spannable.length, textPaint, availableWidth)
                 .setAlignment(Layout.Alignment.ALIGN_NORMAL)
