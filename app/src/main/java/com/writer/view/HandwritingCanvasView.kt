@@ -20,6 +20,8 @@ import com.onyx.android.sdk.pen.TouchHelper
 import com.onyx.android.sdk.pen.data.TouchPointList
 import com.writer.model.InkStroke
 import com.writer.model.StrokePoint
+import com.writer.model.minY
+import com.writer.model.maxY
 
 /**
  * Primary ink input surface. Uses Onyx Pen SDK for low-latency
@@ -43,11 +45,21 @@ class HandwritingCanvasView @JvmOverloads constructor(
         const val TOP_MARGIN = 40f
         // Width of the scroll gutter on the right edge
         const val GUTTER_WIDTH = 144f
+        // Undo gesture: downward stroke must span this many line spacings
+        private const val UNDO_DOWNSTROKE_MIN_SPANS = 2f
+        // Undo gesture: max horizontal drift ratio during downstroke
+        private const val UNDO_DOWNSTROKE_MAX_DRIFT = 0.3f
+        // Undo gesture: horizontal distance (px) to activate after downstroke
+        private const val UNDO_HORIZONTAL_THRESHOLD = 50f
+        // Undo gesture: horizontal pixels per undo/redo step
+        private const val UNDO_STEP_SIZE = 20f
     }
 
     private val completedStrokes = mutableListOf<InkStroke>()
     private val currentStrokePoints = mutableListOf<StrokePoint>()
     private val currentPath = Path()
+    // Reused during rendering to avoid allocating a new Path per stroke per frame
+    private val renderPath = Path()
 
     private val strokePaint = Paint().apply {
         color = Color.BLACK
@@ -363,6 +375,23 @@ class HandwritingCanvasView @JvmOverloads constructor(
         currentPath.reset()
     }
 
+    /** Check if current stroke points form a downward line suitable for undo gesture. */
+    private fun checkUndoDownstroke(): Boolean {
+        if (currentStrokePoints.size < 3) return false
+        val first = currentStrokePoints.first()
+        val last = currentStrokePoints.last()
+        val yRange = last.y - first.y  // positive = downward
+        val xRange = currentStrokePoints.maxOf { it.x } - currentStrokePoints.minOf { it.x }
+        return yRange > UNDO_DOWNSTROKE_MIN_SPANS * LINE_SPACING && xRange < yRange * UNDO_DOWNSTROKE_MAX_DRIFT
+    }
+
+    /** Check if the pen has moved far enough horizontally to activate the undo gesture. */
+    private fun checkUndoHorizontalThreshold(): Boolean {
+        val last = currentStrokePoints.last()
+        val strokeAvgX = currentStrokePoints.map { it.x }.average().toFloat()
+        return kotlin.math.abs(last.x - strokeAvgX) > UNDO_HORIZONTAL_THRESHOLD
+    }
+
     /**
      * Check if the in-progress stroke qualifies as an undo gesture.
      * Called during Onyx SDK move events with the screen-space X coordinate.
@@ -371,34 +400,27 @@ class HandwritingCanvasView @JvmOverloads constructor(
         if (undoGestureActive) return
         if (currentStrokePoints.size < 3) return
 
-        val first = currentStrokePoints.first()
-        val last = currentStrokePoints.last()
-        val yRange = last.y - first.y  // positive = downward
-        val xRange = currentStrokePoints.maxOf { it.x } - currentStrokePoints.minOf { it.x }
-
         if (!undoGestureReady) {
-            if (yRange > 2 * LINE_SPACING && xRange < yRange * 0.3f) {
+            if (checkUndoDownstroke()) {
                 undoGestureReady = true
                 Log.d(TAG, "Undo gesture ready (downward threshold met)")
             }
             return
         }
 
-        // Ready — check for horizontal movement from the downstroke's average X
-        val strokeAvgX = currentStrokePoints.map { it.x }.average().toFloat()
-        if (kotlin.math.abs(last.x - strokeAvgX) > 50f) {
+        if (checkUndoHorizontalThreshold()) {
             activateUndoGesture(screenX)
         }
     }
 
     /**
-     * Fallback version for non-Onyx touch path. Same logic but handles
-     * the undo drag inline (no need to pause SDK).
+     * Fallback version for non-Onyx touch path. Same threshold logic,
+     * but also handles in-progress step updates inline.
      */
     private fun checkUndoGestureFallback(screenX: Float) {
         if (undoGestureActive) {
             // Already active — process horizontal movement
-            val steps = ((screenX - undoGestureTriggerX) / 20f).toInt()
+            val steps = ((screenX - undoGestureTriggerX) / UNDO_STEP_SIZE).toInt()
             if (steps != undoGestureLastStep) {
                 onUndoGestureStep?.invoke(steps)
                 undoGestureLastStep = steps
@@ -407,20 +429,14 @@ class HandwritingCanvasView @JvmOverloads constructor(
         }
         if (currentStrokePoints.size < 3) return
 
-        val first = currentStrokePoints.first()
-        val last = currentStrokePoints.last()
-        val yRange = last.y - first.y
-        val xRange = currentStrokePoints.maxOf { it.x } - currentStrokePoints.minOf { it.x }
-
         if (!undoGestureReady) {
-            if (yRange > 2 * LINE_SPACING && xRange < yRange * 0.3f) {
+            if (checkUndoDownstroke()) {
                 undoGestureReady = true
             }
             return
         }
 
-        val strokeAvgX = currentStrokePoints.map { it.x }.average().toFloat()
-        if (kotlin.math.abs(last.x - strokeAvgX) > 50f) {
+        if (checkUndoHorizontalThreshold()) {
             activateUndoGesture(screenX)
         }
     }
@@ -451,7 +467,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
     private fun handleUndoGestureTouch(event: MotionEvent): Boolean {
         when (event.action) {
             MotionEvent.ACTION_MOVE -> {
-                val steps = ((event.x - undoGestureTriggerX) / 20f).toInt()
+                val steps = ((event.x - undoGestureTriggerX) / UNDO_STEP_SIZE).toInt()
                 Log.d(TAG, "Undo gesture touch move: x=${event.x} steps=$steps lastStep=$undoGestureLastStep")
                 if (steps != undoGestureLastStep) {
                     undoGestureLastStep = steps
@@ -519,9 +535,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
         val viewTop = scrollOffsetY
         val viewBottom = scrollOffsetY + height
         for (stroke in completedStrokes) {
-            val minY = stroke.points.minOf { it.y }
-            val maxY = stroke.points.maxOf { it.y }
-            if (maxY >= viewTop && minY <= viewBottom) {
+            if (stroke.maxY >= viewTop && stroke.minY <= viewBottom) {
                 drawStroke(canvas, stroke)
             }
         }
@@ -543,14 +557,14 @@ class HandwritingCanvasView @JvmOverloads constructor(
             canvas.translate(0f, -scrollOffsetY)
             for (annotation in annotationStrokes) {
                 if (annotation.points.size < 2) continue
-                val path = Path()
-                path.moveTo(annotation.points[0].x, annotation.points[0].y)
+                renderPath.reset()
+                renderPath.moveTo(annotation.points[0].x, annotation.points[0].y)
                 for (i in 1 until annotation.points.size) {
-                    path.lineTo(annotation.points[i].x, annotation.points[i].y)
+                    renderPath.lineTo(annotation.points[i].x, annotation.points[i].y)
                 }
                 annotationPaint.color = annotation.color
                 annotationPaint.strokeWidth = annotation.strokeWidth
-                canvas.drawPath(path, annotationPaint)
+                canvas.drawPath(renderPath, annotationPaint)
             }
             for (ta in textAnnotations) {
                 annotationTextPaint.color = ta.color
@@ -564,18 +578,18 @@ class HandwritingCanvasView @JvmOverloads constructor(
 
     private fun drawStroke(canvas: Canvas, stroke: InkStroke) {
         if (stroke.points.size < 2) return
-        val path = Path()
-        path.moveTo(stroke.points[0].x, stroke.points[0].y)
+        renderPath.reset()
+        renderPath.moveTo(stroke.points[0].x, stroke.points[0].y)
         for (i in 1 until stroke.points.size) {
             val prev = stroke.points[i - 1]
             val curr = stroke.points[i]
             val midX = (prev.x + curr.x) / 2f
             val midY = (prev.y + curr.y) / 2f
-            path.quadTo(prev.x, prev.y, midX, midY)
+            renderPath.quadTo(prev.x, prev.y, midX, midY)
         }
         val last = stroke.points.last()
-        path.lineTo(last.x, last.y)
-        canvas.drawPath(path, strokePaint)
+        renderPath.lineTo(last.x, last.y)
+        canvas.drawPath(renderPath, strokePaint)
     }
 
     /** Fully close Onyx SDK raw drawing session (e.g. before launching another activity). */
@@ -666,8 +680,8 @@ class HandwritingCanvasView @JvmOverloads constructor(
     /** Returns the maximum useful scroll offset based on current strokes. */
     fun getMaxScrollOffset(): Float {
         if (completedStrokes.isEmpty()) return 0f
-        val maxY = completedStrokes.maxOf { stroke -> stroke.points.maxOf { it.y } }
-        return (maxY - height / 2f).coerceAtLeast(0f)
+        val maxStrokeY = completedStrokes.maxOf { it.maxY }
+        return (maxStrokeY - height / 2f).coerceAtLeast(0f)
     }
 
     fun clear() {

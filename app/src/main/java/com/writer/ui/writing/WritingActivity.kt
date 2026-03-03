@@ -20,7 +20,7 @@ import androidx.lifecycle.lifecycleScope
 import com.writer.R
 import com.writer.model.DocumentModel
 import com.writer.recognition.HandwritingRecognizer
-import com.writer.storage.DocumentData
+import com.writer.model.DocumentData
 import com.writer.storage.DocumentStorage
 import com.writer.view.HandwritingCanvasView
 import com.writer.view.RecognizedTextView

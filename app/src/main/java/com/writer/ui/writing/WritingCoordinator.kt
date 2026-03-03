@@ -3,9 +3,17 @@ package com.writer.ui.writing
 import android.util.Log
 import com.writer.model.DocumentModel
 import com.writer.model.InkStroke
+import com.writer.model.minX
+import com.writer.model.maxX
+import com.writer.model.minY
+import com.writer.model.maxY
+import com.writer.model.xRange
+import com.writer.model.yRange
+import com.writer.model.pathLength
+import com.writer.model.diagonal
 import com.writer.recognition.HandwritingRecognizer
 import com.writer.recognition.LineSegmenter
-import com.writer.storage.DocumentData
+import com.writer.model.DocumentData
 import com.writer.view.HandwritingCanvasView
 import com.writer.view.RecognizedTextView
 import kotlinx.coroutines.CoroutineScope
@@ -33,6 +41,21 @@ class WritingCoordinator(
         private val GUTTER_WIDTH = HandwritingCanvasView.GUTTER_WIDTH
         // Delay before refreshing e-ink display after text view updates
         private const val TEXT_REFRESH_DELAY_MS = 500L
+
+        // List marker detection
+        private const val MARKER_MIN_WIDTH = 15f
+        private const val MARKER_MAX_WIDTH = 120f
+        private const val MARKER_MAX_HEIGHT_RATIO = 0.4f
+        private const val MARKER_MIN_GAP = 20f
+
+        // Underline detection
+        private const val UNDERLINE_MAX_HEIGHT_RATIO = 0.3f
+        private const val UNDERLINE_MIN_WIDTH = 100f
+        private const val UNDERLINE_TOP_FRACTION = 0.5f
+        private const val UNDERLINE_MIN_TEXT_COVERAGE = 0.8f
+
+        // Simplicity check: max path-to-diagonal ratio
+        private const val SIMPLICITY_MAX_RATIO = 2f
     }
 
     private val lineSegmenter = LineSegmenter()
@@ -150,38 +173,10 @@ class WritingCoordinator(
         recognizingLines.add(lineIndex)
 
         scope.launch {
-            try {
-                val allStrokes = lineSegmenter.getStrokesForLine(
-                    documentModel.activeStrokes, lineIndex
-                )
-                if (allStrokes.isEmpty()) {
-                    recognizingLines.remove(lineIndex)
-                    return@launch
-                }
-                val strokes = filterMarkerStroke(allStrokes)
-                if (strokes.isEmpty()) {
-                    recognizingLines.remove(lineIndex)
-                    return@launch
-                }
-
-                val line = lineSegmenter.buildInkLine(strokes, lineIndex)
-                val preContext = buildPreContext(lineIndex)
-
-                val text = withContext(Dispatchers.IO) {
-                    recognizer.recognizeLine(line, preContext)
-                }
-
-                lineTextCache[lineIndex] = text.trim()
-                recognizingLines.remove(lineIndex)
-                Log.d(TAG, "Eager recognized line $lineIndex: \"${text.trim()}\"")
-
-                if (lineIndex in everHiddenLines) {
-                    withContext(Dispatchers.Main) { displayHiddenLines() }
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Eager recognition failed for line $lineIndex", e)
-                lineTextCache[lineIndex] = "[?]"
-                recognizingLines.remove(lineIndex)
+            val text = doRecognizeLine(lineIndex) ?: return@launch
+            Log.d(TAG, "Eager recognized line $lineIndex: \"$text\"")
+            if (lineIndex in everHiddenLines) {
+                withContext(Dispatchers.Main) { displayHiddenLines() }
             }
         }
     }
@@ -195,45 +190,54 @@ class WritingCoordinator(
         lineTextCache.remove(lineIndex)
 
         scope.launch {
-            try {
-                val allStrokes = lineSegmenter.getStrokesForLine(
-                    documentModel.activeStrokes, lineIndex
-                )
-                if (allStrokes.isEmpty()) {
-                    recognizingLines.remove(lineIndex)
-                    return@launch
-                }
-                val strokes = filterMarkerStroke(allStrokes)
-                if (strokes.isEmpty()) {
-                    recognizingLines.remove(lineIndex)
-                    return@launch
-                }
-
-                val line = lineSegmenter.buildInkLine(strokes, lineIndex)
-                val preContext = buildPreContext(lineIndex)
-                val text = withContext(Dispatchers.IO) {
-                    recognizer.recognizeLine(line, preContext)
-                }
-
-                lineTextCache[lineIndex] = text.trim()
-                recognizingLines.remove(lineIndex)
-                Log.d(TAG, "Rendered line recognized $lineIndex: \"${text.trim()}\"")
-
-                withContext(Dispatchers.Main) {
-                    displayHiddenLines()
-                    scheduleTextRefresh()
-                }
-
-                if (lineIndex in pendingRerecognize) {
-                    pendingRerecognize.remove(lineIndex)
-                    recognizeRenderedLine(lineIndex)
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Rendered line recognition failed for line $lineIndex", e)
-                lineTextCache[lineIndex] = "[?]"
-                recognizingLines.remove(lineIndex)
-                pendingRerecognize.remove(lineIndex)
+            val text = doRecognizeLine(lineIndex) ?: return@launch
+            Log.d(TAG, "Rendered line recognized $lineIndex: \"$text\"")
+            withContext(Dispatchers.Main) {
+                displayHiddenLines()
+                scheduleTextRefresh()
             }
+            if (lineIndex in pendingRerecognize) {
+                pendingRerecognize.remove(lineIndex)
+                recognizeRenderedLine(lineIndex)
+            }
+        }
+    }
+
+    /**
+     * Core recognition: get strokes for [lineIndex], filter markers, recognize,
+     * and cache the result. Returns the recognized text, or null if there were
+     * no strokes or recognition failed.
+     */
+    private suspend fun doRecognizeLine(lineIndex: Int): String? {
+        try {
+            val allStrokes = lineSegmenter.getStrokesForLine(
+                documentModel.activeStrokes, lineIndex
+            )
+            if (allStrokes.isEmpty()) {
+                recognizingLines.remove(lineIndex)
+                return null
+            }
+            val strokes = filterMarkerStroke(allStrokes)
+            if (strokes.isEmpty()) {
+                recognizingLines.remove(lineIndex)
+                return null
+            }
+
+            val line = lineSegmenter.buildInkLine(strokes, lineIndex)
+            val preContext = buildPreContext(lineIndex)
+            val text = withContext(Dispatchers.IO) {
+                recognizer.recognizeLine(line, preContext)
+            }.trim()
+
+            lineTextCache[lineIndex] = text
+            recognizingLines.remove(lineIndex)
+            return text
+        } catch (e: Exception) {
+            Log.e(TAG, "Recognition failed for line $lineIndex", e)
+            lineTextCache[lineIndex] = "[?]"
+            recognizingLines.remove(lineIndex)
+            pendingRerecognize.remove(lineIndex)
+            return null
         }
     }
 
@@ -414,7 +418,7 @@ class WritingCoordinator(
             val isHeading = lineStrokes != null && findUnderlineStrokeId(lineStrokes, lineIdx) != null
 
             if (lineStrokes != null && lineStrokes.isNotEmpty() && currentSegments.isNotEmpty()) {
-                val leftmostX = lineStrokes.minOf { stroke -> stroke.points.minOf { it.x } }
+                val leftmostX = lineStrokes.minOf { it.minX }
                 val prevWasList = currentSegments.any { it.listItem }
                 val prevWasHeading = currentSegments.any { it.heading }
                 val isIndented = leftmostX > writingWidth * INDENT_THRESHOLD
@@ -452,36 +456,23 @@ class WritingCoordinator(
         if (strokes.size < 2) return null
 
         // Sort strokes by their leftmost x position
-        val sorted = strokes.sortedBy { stroke -> stroke.points.minOf { it.x } }
+        val sorted = strokes.sortedBy { it.minX }
         val first = sorted[0]
 
-        val firstMinX = first.points.minOf { it.x }
-        val firstMaxX = first.points.maxOf { it.x }
-        val firstMinY = first.points.minOf { it.y }
-        val firstMaxY = first.points.maxOf { it.y }
-        val firstWidth = firstMaxX - firstMinX
-        val firstHeight = firstMaxY - firstMinY
-
         // Must be on the far left
-        if (firstMinX > writingWidth * INDENT_THRESHOLD) return null
+        if (first.minX > writingWidth * INDENT_THRESHOLD) return null
 
         // Must be short and very flat (a dash, not a letter)
-        if (firstWidth < 15f || firstWidth > 120f) return null
-        if (firstHeight > firstWidth * 0.4f) return null
+        if (first.xRange < MARKER_MIN_WIDTH || first.xRange > MARKER_MAX_WIDTH) return null
+        if (first.yRange > first.xRange * MARKER_MAX_HEIGHT_RATIO) return null
 
         // A real dash is a simple stroke — reject if the path length is much
         // longer than the bounding box diagonal (indicates curves/loops like letters)
-        val pathLength = first.points.zipWithNext { a, b ->
-            val dx = b.x - a.x; val dy = b.y - a.y
-            kotlin.math.sqrt(dx * dx + dy * dy)
-        }.sum()
-        val diagonal = kotlin.math.sqrt(firstWidth * firstWidth + firstHeight * firstHeight)
-        if (pathLength > diagonal * 2f) return null
+        if (first.pathLength > first.diagonal * SIMPLICITY_MAX_RATIO) return null
 
         // Must have a gap between the marker and the next stroke
-        val secondMinX = sorted[1].points.minOf { it.x }
-        val gap = secondMinX - firstMaxX
-        if (gap < 20f) return null
+        val gap = sorted[1].minX - first.maxX
+        if (gap < MARKER_MIN_GAP) return null
 
         return first.strokeId
     }
@@ -497,40 +488,25 @@ class WritingCoordinator(
         if (strokes.size < 2) return null
 
         val lineTop = lineSegmenter.getLineY(lineIndex)
-        val lineBottom = lineTop + HandwritingCanvasView.LINE_SPACING
 
-        // Find the bounding box of all non-underline-candidate strokes (the text)
-        // First pass: find strokes that could be text vs underline candidates
         for (stroke in strokes) {
-            val minY = stroke.points.minOf { it.y }
-            val maxY = stroke.points.maxOf { it.y }
-            val minX = stroke.points.minOf { it.x }
-            val maxX = stroke.points.maxOf { it.x }
-            val strokeWidth = maxX - minX
-            val strokeHeight = maxY - minY
-
             // Underline candidate: horizontal, near bottom of line, flat
-            if (strokeHeight > strokeWidth * 0.3f) continue  // not flat enough
-            if (strokeWidth < 100f) continue  // too short to be an underline
-            if (minY < lineTop + HandwritingCanvasView.LINE_SPACING * 0.5f) continue  // too high up
+            if (stroke.yRange > stroke.xRange * UNDERLINE_MAX_HEIGHT_RATIO) continue  // not flat enough
+            if (stroke.xRange < UNDERLINE_MIN_WIDTH) continue  // too short to be an underline
+            if (stroke.minY < lineTop + HandwritingCanvasView.LINE_SPACING * UNDERLINE_TOP_FRACTION) continue  // too high up
 
             // Check path simplicity (same as list marker check)
-            val pathLength = stroke.points.zipWithNext { a, b ->
-                val dx = b.x - a.x; val dy = b.y - a.y
-                kotlin.math.sqrt(dx * dx + dy * dy)
-            }.sum()
-            val diagonal = kotlin.math.sqrt(strokeWidth * strokeWidth + strokeHeight * strokeHeight)
-            if (pathLength > diagonal * 2f) continue  // too complex
+            if (stroke.pathLength > stroke.diagonal * SIMPLICITY_MAX_RATIO) continue  // too complex
 
             // Now check that it spans at least 80% of the text on this line
             val textStrokes = strokes.filter { it.strokeId != stroke.strokeId }
             if (textStrokes.isEmpty()) continue
-            val textMinX = textStrokes.minOf { s -> s.points.minOf { it.x } }
-            val textMaxX = textStrokes.maxOf { s -> s.points.maxOf { it.x } }
+            val textMinX = textStrokes.minOf { s -> s.minX }
+            val textMaxX = textStrokes.maxOf { s -> s.maxX }
             val textWidth = textMaxX - textMinX
             if (textWidth <= 0f) continue
 
-            if (strokeWidth >= textWidth * 0.8f) {
+            if (stroke.xRange >= textWidth * UNDERLINE_MIN_TEXT_COVERAGE) {
                 return stroke.strokeId
             }
         }
@@ -620,7 +596,7 @@ class WritingCoordinator(
             val isHeading = lineStrokes != null && findUnderlineStrokeId(lineStrokes, lineIdx) != null
 
             if (lineStrokes != null && lineStrokes.isNotEmpty() && currentLines.isNotEmpty()) {
-                val leftmostX = lineStrokes.minOf { stroke -> stroke.points.minOf { it.x } }
+                val leftmostX = lineStrokes.minOf { it.minX }
                 val isIndented = leftmostX > writingWidth * INDENT_THRESHOLD
                 val shouldBreak = isList || isHeading || currentIsHeading ||
                     (isIndented && !currentIsList) ||

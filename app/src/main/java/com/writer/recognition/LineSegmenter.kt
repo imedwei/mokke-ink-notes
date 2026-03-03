@@ -2,6 +2,7 @@ package com.writer.recognition
 
 import com.writer.model.InkLine
 import com.writer.model.InkStroke
+import com.writer.model.minX
 import com.writer.view.HandwritingCanvasView
 
 /**
@@ -52,7 +53,7 @@ class LineSegmenter {
     /** Build an InkLine from strokes for a given line index, sorted left-to-right. */
     fun buildInkLine(strokes: List<InkStroke>, lineIndex: Int): InkLine {
         val lineStrokes = getStrokesForLine(strokes, lineIndex)
-            .sortedBy { stroke -> stroke.points.minOf { it.x } }
+            .sortedBy { it.minX }
         val line = InkLine(strokes = lineStrokes.toMutableList())
         line.computeBoundingBox()
         return line

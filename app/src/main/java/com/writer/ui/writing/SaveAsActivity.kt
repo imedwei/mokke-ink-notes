@@ -11,6 +11,8 @@ import androidx.lifecycle.lifecycleScope
 import com.writer.R
 import com.writer.model.InkLine
 import com.writer.model.InkStroke
+import com.writer.model.minX
+import com.writer.model.maxX
 import com.writer.recognition.HandwritingRecognizer
 import com.writer.view.HandwritingNameInput
 import kotlinx.coroutines.Dispatchers
@@ -91,24 +93,15 @@ class SaveAsActivity : AppCompatActivity() {
     }
 
     private fun isStrikethroughGesture(stroke: InkStroke): Boolean {
-        if (stroke.points.size < 2) return false
-        val minX = stroke.points.minOf { it.x }
-        val maxX = stroke.points.maxOf { it.x }
-        val minY = stroke.points.minOf { it.y }
-        val maxY = stroke.points.maxOf { it.y }
-        val xRange = maxX - minX
-        val yRange = maxY - minY
-        return xRange > 100f && yRange < xRange * 0.3f
+        return GestureHandler.isStrikethroughShape(stroke)
     }
 
     private fun handleStrikethrough(gestureStroke: InkStroke) {
-        val gestureMinX = gestureStroke.points.minOf { it.x }
-        val gestureMaxX = gestureStroke.points.maxOf { it.x }
+        val gestureMinX = gestureStroke.minX
+        val gestureMaxX = gestureStroke.maxX
 
         val overlapping = allStrokes.filter { stroke ->
-            val strokeMinX = stroke.points.minOf { it.x }
-            val strokeMaxX = stroke.points.maxOf { it.x }
-            strokeMaxX >= gestureMinX && strokeMinX <= gestureMaxX
+            stroke.maxX >= gestureMinX && stroke.minX <= gestureMaxX
         }
 
         if (overlapping.isEmpty()) {
@@ -137,7 +130,7 @@ class SaveAsActivity : AppCompatActivity() {
         }
 
         // Build a single InkLine from all strokes, sorted left-to-right
-        val sorted = allStrokes.sortedBy { stroke -> stroke.points.minOf { it.x } }
+        val sorted = allStrokes.sortedBy { it.minX }
         val line = InkLine(strokes = sorted.toMutableList())
         line.computeBoundingBox()
 

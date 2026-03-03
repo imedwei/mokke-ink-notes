@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.util.Log
 import androidx.documentfile.provider.DocumentFile
+import com.writer.model.DocumentData
 import com.writer.model.InkStroke
 import com.writer.model.StrokePoint
 import org.json.JSONArray
@@ -12,15 +13,6 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-
-data class DocumentData(
-    val strokes: List<InkStroke>,
-    val scrollOffsetY: Float,
-    val lineTextCache: Map<Int, String>,
-    val everHiddenLines: Set<Int>,
-    val highestLineIndex: Int,
-    val currentLineIndex: Int
-)
 
 data class DocumentInfo(
     val name: String,

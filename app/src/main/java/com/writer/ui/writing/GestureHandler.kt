@@ -4,6 +4,14 @@ import android.util.Log
 import com.writer.model.DocumentModel
 import com.writer.model.InkStroke
 import com.writer.model.StrokePoint
+import com.writer.model.minX
+import com.writer.model.maxX
+import com.writer.model.minY
+import com.writer.model.maxY
+import com.writer.model.xRange
+import com.writer.model.yRange
+import com.writer.model.pathLength
+import com.writer.model.diagonal
 import com.writer.recognition.LineSegmenter
 import com.writer.view.HandwritingCanvasView
 
@@ -23,6 +31,37 @@ class GestureHandler(
 
     companion object {
         private const val TAG = "GestureHandler"
+
+        // Strikethrough: minimum horizontal span to count as a strikethrough
+        private const val STRIKETHROUGH_MIN_WIDTH = 100f
+        // Strikethrough: max height-to-width ratio (must be very flat)
+        private const val STRIKETHROUGH_MAX_HEIGHT_RATIO = 0.3f
+
+        // Delete line (X gesture): minimum size in either dimension
+        private const val DELETE_GESTURE_MIN_SIZE = 40f
+        // Delete line: max aspect ratio (must be roughly square)
+        private const val DELETE_GESTURE_MAX_ASPECT = 3f
+        // Delete line: corner detection minimum angle (degrees)
+        private const val DELETE_GESTURE_CORNER_ANGLE = 60f
+        // Delete line: margin for pattern matching (fraction of range)
+        private const val DELETE_GESTURE_MARGIN = 0.15f
+
+        // Insert line: minimum vertical span (as fraction of line spacing)
+        private const val INSERT_LINE_MIN_SPANS = 1.5f
+
+        // Underline: must start below this fraction of the line
+        private const val UNDERLINE_BOTTOM_FRACTION = 0.8f
+        // Underline/marker: max path-to-diagonal ratio for simplicity check
+        private const val SIMPLICITY_MAX_RATIO = 2f
+        // Underline: must span this fraction of text width
+        private const val UNDERLINE_MIN_TEXT_COVERAGE = 0.8f
+
+        /** Check if a stroke has the shape of a strikethrough: wide, flat, horizontal. */
+        fun isStrikethroughShape(stroke: InkStroke): Boolean {
+            if (stroke.points.size < 2) return false
+            return stroke.xRange >= STRIKETHROUGH_MIN_WIDTH &&
+                stroke.yRange < stroke.xRange * STRIKETHROUGH_MAX_HEIGHT_RATIO
+        }
     }
 
     /**
@@ -46,18 +85,7 @@ class GestureHandler(
     }
 
     private fun isStrikethroughGesture(stroke: InkStroke): Boolean {
-        if (stroke.points.size < 2) return false
-
-        val minX = stroke.points.minOf { it.x }
-        val maxX = stroke.points.maxOf { it.x }
-        val minY = stroke.points.minOf { it.y }
-        val maxY = stroke.points.maxOf { it.y }
-
-        val xRange = maxX - minX
-        val yRange = maxY - minY
-
-        if (xRange < 100f) return false
-        if (yRange > xRange * 0.3f) return false
+        if (!isStrikethroughShape(stroke)) return false
 
         val startLineIdx = lineSegmenter.getLineIndex(stroke.points.first().y)
         val endLineIdx = lineSegmenter.getLineIndex(stroke.points.last().y)
@@ -80,30 +108,23 @@ class GestureHandler(
 
         // Stroke must start in the bottom 20% of the line
         val startY = stroke.points.first().y
-        if (startY < lineTop + lineSpacing * 0.8f) return false
+        if (startY < lineTop + lineSpacing * UNDERLINE_BOTTOM_FRACTION) return false
 
         // Must have existing text on this line
         val lineStrokes = lineSegmenter.getStrokesForLine(documentModel.activeStrokes, lineIdx)
         if (lineStrokes.isEmpty()) return false
 
         // Measure text width from existing strokes
-        val textMinX = lineStrokes.minOf { s -> s.points.minOf { it.x } }
-        val textMaxX = lineStrokes.maxOf { s -> s.points.maxOf { it.x } }
+        val textMinX = lineStrokes.minOf { s -> s.minX }
+        val textMaxX = lineStrokes.maxOf { s -> s.maxX }
         val textWidth = textMaxX - textMinX
         if (textWidth <= 0f) return false
 
         // Underline must span at least 80% of text width
-        val strokeWidth = stroke.points.maxOf { it.x } - stroke.points.minOf { it.x }
-        if (strokeWidth < textWidth * 0.8f) return false
+        if (stroke.xRange < textWidth * UNDERLINE_MIN_TEXT_COVERAGE) return false
 
         // Path simplicity check — reject complex strokes
-        val strokeHeight = stroke.points.maxOf { it.y } - stroke.points.minOf { it.y }
-        val pathLength = stroke.points.zipWithNext { a, b ->
-            val dx = b.x - a.x; val dy = b.y - a.y
-            kotlin.math.sqrt(dx * dx + dy * dy)
-        }.sum()
-        val diagonal = kotlin.math.sqrt(strokeWidth * strokeWidth + strokeHeight * strokeHeight)
-        if (pathLength > diagonal * 2f) return false
+        if (stroke.pathLength > stroke.diagonal * SIMPLICITY_MAX_RATIO) return false
 
         return true
     }
@@ -119,24 +140,16 @@ class GestureHandler(
     private fun isDeleteLineGesture(stroke: InkStroke): Boolean {
         if (stroke.points.size < 8) return false
 
-        val minX = stroke.points.minOf { it.x }
-        val maxX = stroke.points.maxOf { it.x }
-        val minY = stroke.points.minOf { it.y }
-        val maxY = stroke.points.maxOf { it.y }
-
-        val xRange = maxX - minX
-        val yRange = maxY - minY
-
         // Must be compact and roughly square-ish
-        if (xRange < 40f || yRange < 40f) return false
-        if (xRange > yRange * 3f || yRange > xRange * 3f) return false
+        if (stroke.xRange < DELETE_GESTURE_MIN_SIZE || stroke.yRange < DELETE_GESTURE_MIN_SIZE) return false
+        if (stroke.xRange > stroke.yRange * DELETE_GESTURE_MAX_ASPECT || stroke.yRange > stroke.xRange * DELETE_GESTURE_MAX_ASPECT) return false
 
         // Must fit within one line
-        val startLineIdx = lineSegmenter.getLineIndex(minY)
-        val endLineIdx = lineSegmenter.getLineIndex(maxY)
+        val startLineIdx = lineSegmenter.getLineIndex(stroke.minY)
+        val endLineIdx = lineSegmenter.getLineIndex(stroke.maxY)
         if (startLineIdx != endLineIdx) return false
 
-        val corners = findCorners(stroke.points, minAngle = 60f)
+        val corners = findCorners(stroke.points, minAngle = DELETE_GESTURE_CORNER_ANGLE)
         if (corners.size < 2) return false
 
         // Use the first two corners to define 4 key points
@@ -145,21 +158,23 @@ class GestureHandler(
         val p2 = stroke.points[corners[1]]
         val p3 = stroke.points.last()
 
-        val margin = 0.15f
+        val margin = DELETE_GESTURE_MARGIN
+        val xr = stroke.xRange
+        val yr = stroke.yRange
 
         // Pattern A (left-to-right): top-right → bottom-left → top-left → bottom-right
-        val patternA = p0.y < p1.y - yRange * margin &&
-            p0.x > p1.x + xRange * margin &&
-            p2.y < p1.y - yRange * margin &&
-            p3.y > p2.y + yRange * margin &&
-            p3.x > p2.x + xRange * margin
+        val patternA = p0.y < p1.y - yr * margin &&
+            p0.x > p1.x + xr * margin &&
+            p2.y < p1.y - yr * margin &&
+            p3.y > p2.y + yr * margin &&
+            p3.x > p2.x + xr * margin
 
         // Pattern B (right-to-left mirror): top-left → bottom-right → top-right → bottom-left
-        val patternB = p0.y < p1.y - yRange * margin &&
-            p0.x < p1.x - xRange * margin &&
-            p2.y < p1.y - yRange * margin &&
-            p3.y > p2.y + yRange * margin &&
-            p3.x < p2.x - xRange * margin
+        val patternB = p0.y < p1.y - yr * margin &&
+            p0.x < p1.x - xr * margin &&
+            p2.y < p1.y - yr * margin &&
+            p3.y > p2.y + yr * margin &&
+            p3.x < p2.x - xr * margin
 
         return patternA || patternB
     }
@@ -224,18 +239,8 @@ class GestureHandler(
 
     private fun isVerticalLineGesture(stroke: InkStroke): Boolean {
         if (stroke.points.size < 2) return false
-
-        val minX = stroke.points.minOf { it.x }
-        val maxX = stroke.points.maxOf { it.x }
-        val minY = stroke.points.minOf { it.y }
-        val maxY = stroke.points.maxOf { it.y }
-
-        val xRange = maxX - minX
-        val yRange = maxY - minY
-
-        if (yRange < HandwritingCanvasView.LINE_SPACING * 1.5f) return false
-        if (xRange > yRange * 0.3f) return false
-
+        if (stroke.yRange < HandwritingCanvasView.LINE_SPACING * INSERT_LINE_MIN_SPANS) return false
+        if (stroke.xRange > stroke.yRange * STRIKETHROUGH_MAX_HEIGHT_RATIO) return false
         return true
     }
 
@@ -243,14 +248,12 @@ class GestureHandler(
         val centroidY = gestureStroke.points.map { it.y }.average().toFloat()
         val lineIdx = lineSegmenter.getLineIndex(centroidY)
 
-        val gestureMinX = gestureStroke.points.minOf { it.x }
-        val gestureMaxX = gestureStroke.points.maxOf { it.x }
+        val gestureMinX = gestureStroke.minX
+        val gestureMaxX = gestureStroke.maxX
 
         val lineStrokes = lineSegmenter.getStrokesForLine(documentModel.activeStrokes, lineIdx)
         val overlapping = lineStrokes.filter { stroke ->
-            val strokeMinX = stroke.points.minOf { it.x }
-            val strokeMaxX = stroke.points.maxOf { it.x }
-            strokeMaxX >= gestureMinX && strokeMinX <= gestureMaxX
+            stroke.maxX >= gestureMinX && stroke.minX <= gestureMaxX
         }
 
         if (overlapping.isEmpty()) {

@@ -3,7 +3,7 @@ package com.writer.ui.writing
 import android.content.Context
 import android.widget.LinearLayout
 import com.writer.model.InkStroke
-import com.writer.storage.DocumentData
+import com.writer.model.DocumentData
 import com.writer.view.HandwritingCanvasView
 import com.writer.view.RecognizedTextView
 
