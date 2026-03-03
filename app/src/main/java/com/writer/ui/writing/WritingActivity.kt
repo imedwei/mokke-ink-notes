@@ -7,6 +7,7 @@ import android.util.Log
 import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.app.Activity
+import android.widget.Button
 import android.widget.LinearLayout
 import android.view.Gravity
 import android.view.LayoutInflater
@@ -133,6 +134,10 @@ class WritingActivity : AppCompatActivity() {
 
         // Tap "I" logo to open menu
         recognizedTextView.onLogoTap = { showMenu() }
+
+        // Temporary undo/redo buttons
+        findViewById<Button>(R.id.btnUndo).setOnClickListener { coordinator?.undo() }
+        findViewById<Button>(R.id.btnRedo).setOnClickListener { coordinator?.redo() }
 
         // Create coordinator early so cached text can be displayed before model loads
         startCoordinator()

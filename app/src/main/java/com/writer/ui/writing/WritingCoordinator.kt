@@ -32,6 +32,7 @@ class WritingCoordinator(
     }
 
     private val lineSegmenter = LineSegmenter()
+    private val undoManager = UndoManager()
 
     private val gestureHandler = GestureHandler(
         documentModel = documentModel,
@@ -42,7 +43,8 @@ class WritingCoordinator(
                 lineTextCache.remove(line)
             }
             displayHiddenLines()
-        }
+        },
+        onBeforeMutation = { saveUndoSnapshot() }
     )
 
     // Eager recognition: cache of recognized text per line index
@@ -89,6 +91,7 @@ class WritingCoordinator(
     private fun onStrokeCompleted(stroke: InkStroke) {
         if (gestureHandler.tryHandle(stroke)) return
 
+        saveUndoSnapshot()
         documentModel.activeStrokes.add(stroke)
 
         val lineIdx = lineSegmenter.getStrokeLineIndex(stroke)
@@ -613,6 +616,50 @@ class WritingCoordinator(
         }
 
         return paragraphs.joinToString("\n\n")
+    }
+
+    // --- Undo / Redo ---
+
+    private fun saveUndoSnapshot() {
+        undoManager.saveSnapshot(UndoManager.Snapshot(
+            strokes = documentModel.activeStrokes.toList(),
+            scrollOffsetY = inkCanvas.scrollOffsetY,
+            lineTextCache = lineTextCache.toMap()
+        ))
+    }
+
+    private fun applySnapshot(snapshot: UndoManager.Snapshot) {
+        documentModel.activeStrokes.clear()
+        documentModel.activeStrokes.addAll(snapshot.strokes)
+        inkCanvas.loadStrokes(snapshot.strokes)
+        inkCanvas.scrollOffsetY = snapshot.scrollOffsetY
+        inkCanvas.drawToSurface()
+        lineTextCache.clear()
+        lineTextCache.putAll(snapshot.lineTextCache)
+        everHiddenLines.clear()
+        displayHiddenLines()
+    }
+
+    private fun currentSnapshot() = UndoManager.Snapshot(
+        strokes = documentModel.activeStrokes.toList(),
+        scrollOffsetY = inkCanvas.scrollOffsetY,
+        lineTextCache = lineTextCache.toMap()
+    )
+
+    fun undo() {
+        val snapshot = undoManager.undo(currentSnapshot()) ?: return
+        inkCanvas.pauseRawDrawing()
+        applySnapshot(snapshot)
+        inkCanvas.resumeRawDrawing()
+        Log.i(TAG, "Undo: restored ${snapshot.strokes.size} strokes")
+    }
+
+    fun redo() {
+        val snapshot = undoManager.redo(currentSnapshot()) ?: return
+        inkCanvas.pauseRawDrawing()
+        applySnapshot(snapshot)
+        inkCanvas.resumeRawDrawing()
+        Log.i(TAG, "Redo: restored ${snapshot.strokes.size} strokes")
     }
 
     // --- State persistence ---

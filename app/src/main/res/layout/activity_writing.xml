@@ -6,6 +6,31 @@
     android:orientation="vertical"
     android:background="@color/white">
 
+    <!-- Temporary undo/redo buttons -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center"
+        android:paddingTop="4dp"
+        android:paddingBottom="4dp">
+
+        <Button
+            android:id="@+id/btnUndo"
+            android:layout_width="wrap_content"
+            android:layout_height="36dp"
+            android:text="Undo"
+            android:textSize="14sp"
+            android:layout_marginEnd="16dp" />
+
+        <Button
+            android:id="@+id/btnRedo"
+            android:layout_width="wrap_content"
+            android:layout_height="36dp"
+            android:text="Redo"
+            android:textSize="14sp" />
+    </LinearLayout>
+
     <!-- Recognized text area — 25% of space, bottom-aligned -->
     <com.writer.view.RecognizedTextView
         android:id="@+id/recognizedTextView"

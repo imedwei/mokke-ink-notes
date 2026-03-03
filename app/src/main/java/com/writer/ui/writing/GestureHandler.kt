@@ -17,7 +17,8 @@ class GestureHandler(
     private val documentModel: DocumentModel,
     private val inkCanvas: HandwritingCanvasView,
     private val lineSegmenter: LineSegmenter,
-    private val onLinesChanged: (invalidatedLines: Set<Int>) -> Unit
+    private val onLinesChanged: (invalidatedLines: Set<Int>) -> Unit,
+    private val onBeforeMutation: () -> Unit = {}
 ) {
 
     companion object {
@@ -257,6 +258,8 @@ class GestureHandler(
             return
         }
 
+        onBeforeMutation()
+
         val idsToRemove = overlapping.map { it.strokeId }.toMutableSet()
         idsToRemove.add(gestureStroke.strokeId)
 
@@ -269,6 +272,8 @@ class GestureHandler(
     }
 
     private fun handleDeleteLine(gestureStroke: InkStroke) {
+        onBeforeMutation()
+
         val startY = gestureStroke.points.first().y
         val lineIdx = lineSegmenter.getLineIndex(startY)
 
@@ -308,6 +313,8 @@ class GestureHandler(
     }
 
     private fun handleInsertLine(gestureStroke: InkStroke) {
+        onBeforeMutation()
+
         val startY = gestureStroke.points.first().y
         val endY = gestureStroke.points.last().y
         val startLineIdx = lineSegmenter.getLineIndex(startY)
