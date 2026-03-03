@@ -3,16 +3,9 @@ package com.writer.ui.writing
 import android.util.Log
 import com.writer.model.DocumentModel
 import com.writer.model.InkStroke
-import com.writer.model.minX
-import com.writer.model.maxX
-import com.writer.model.minY
-import com.writer.model.maxY
-import com.writer.model.xRange
-import com.writer.model.yRange
-import com.writer.model.pathLength
-import com.writer.model.diagonal
 import com.writer.recognition.HandwritingRecognizer
 import com.writer.recognition.LineSegmenter
+import com.writer.recognition.StrokeClassifier
 import com.writer.model.DocumentData
 import com.writer.view.HandwritingCanvasView
 import com.writer.view.RecognizedTextView
@@ -36,29 +29,14 @@ class WritingCoordinator(
         // Scroll when writing passes this fraction of canvas height from top
         // 25% of canvas ≈ 50% of full screen (since canvas is 75% of screen)
         private const val SCROLL_THRESHOLD = 0.25f
-        // A line indented more than ~10% from the left starts a new paragraph
-        private const val INDENT_THRESHOLD = 0.105f
         private val GUTTER_WIDTH = HandwritingCanvasView.GUTTER_WIDTH
         // Delay before refreshing e-ink display after text view updates
         private const val TEXT_REFRESH_DELAY_MS = 500L
-
-        // List marker detection
-        private const val MARKER_MIN_WIDTH = 15f
-        private const val MARKER_MAX_WIDTH = 120f
-        private const val MARKER_MAX_HEIGHT_RATIO = 0.4f
-        private const val MARKER_MIN_GAP = 20f
-
-        // Underline detection
-        private const val UNDERLINE_MAX_HEIGHT_RATIO = 0.3f
-        private const val UNDERLINE_MIN_WIDTH = 100f
-        private const val UNDERLINE_TOP_FRACTION = 0.5f
-        private const val UNDERLINE_MIN_TEXT_COVERAGE = 0.8f
-
-        // Simplicity check: max path-to-diagonal ratio
-        private const val SIMPLICITY_MAX_RATIO = 2f
     }
 
     private val lineSegmenter = LineSegmenter()
+    private val strokeClassifier = StrokeClassifier(lineSegmenter)
+    private val paragraphBuilder = ParagraphBuilder(strokeClassifier)
     private val undoManager = UndoManager()
 
     private val gestureHandler = GestureHandler(
@@ -217,7 +195,7 @@ class WritingCoordinator(
                 recognizingLines.remove(lineIndex)
                 return null
             }
-            val strokes = filterMarkerStroke(allStrokes)
+            val strokes = strokeClassifier.filterMarkerStrokes(allStrokes, inkCanvas.width - GUTTER_WIDTH)
             if (strokes.isEmpty()) {
                 recognizingLines.remove(lineIndex)
                 return null
@@ -372,7 +350,7 @@ class WritingCoordinator(
                     if (lineTextCache.containsKey(lineIdx)) continue
                     try {
                         val allStrokes = strokesByLine[lineIdx] ?: continue
-                        val strokes = filterMarkerStroke(allStrokes)
+                        val strokes = strokeClassifier.filterMarkerStrokes(allStrokes, inkCanvas.width - GUTTER_WIDTH)
                         if (strokes.isEmpty()) continue
                         val line = lineSegmenter.buildInkLine(strokes, lineIdx)
                         val preContext = buildPreContext(lineIdx)
@@ -404,132 +382,25 @@ class WritingCoordinator(
         val strokesByLine = lineSegmenter.groupByLine(documentModel.activeStrokes)
         val writingWidth = inkCanvas.width - GUTTER_WIDTH
 
-        val linesToShow = everHiddenLines.sorted()
-
-        val paragraphs = mutableListOf<List<TextSegment>>()
-        var currentSegments = mutableListOf<TextSegment>()
-
-        for (lineIdx in linesToShow) {
-            val text = lineTextCache[lineIdx]
-            if (text.isNullOrEmpty() || text == "[?]") continue
-
-            val lineStrokes = strokesByLine[lineIdx]
-            val isList = lineStrokes != null && findListMarkerStrokeId(lineStrokes, writingWidth) != null
-            val isHeading = lineStrokes != null && findUnderlineStrokeId(lineStrokes, lineIdx) != null
-
-            if (lineStrokes != null && lineStrokes.isNotEmpty() && currentSegments.isNotEmpty()) {
-                val leftmostX = lineStrokes.minOf { it.minX }
-                val prevWasList = currentSegments.any { it.listItem }
-                val prevWasHeading = currentSegments.any { it.heading }
-                val isIndented = leftmostX > writingWidth * INDENT_THRESHOLD
-                // Break paragraph on:
-                // - indent (unless continuing a list item)
-                // - new list item
-                // - non-indented line after a list item (back to normal text)
-                // - heading (always its own paragraph)
-                // - line after a heading
-                val shouldBreak = isList || isHeading || prevWasHeading ||
-                    (isIndented && !prevWasList) ||
-                    (prevWasList && !isIndented && !isList)
-                if (shouldBreak) {
-                    paragraphs.add(currentSegments)
-                    currentSegments = mutableListOf()
-                }
-            }
-
-            currentSegments.add(TextSegment(text, dimmed = lineIdx !in currentlyHidden, lineIndex = lineIdx, listItem = isList, heading = isHeading))
+        val classifiedLines = everHiddenLines.sorted().mapNotNull { lineIdx ->
+            paragraphBuilder.classifyLine(lineIdx, lineTextCache[lineIdx], strokesByLine[lineIdx], writingWidth)
         }
 
-        if (currentSegments.isNotEmpty()) {
-            paragraphs.add(currentSegments)
+        val grouped = paragraphBuilder.groupIntoParagraphs(classifiedLines, strokesByLine, writingWidth)
+
+        val paragraphs = grouped.map { group ->
+            group.map { line ->
+                TextSegment(
+                    text = line.text,
+                    dimmed = line.lineIndex !in currentlyHidden,
+                    lineIndex = line.lineIndex,
+                    listItem = line.isList,
+                    heading = line.isHeading
+                )
+            }
         }
 
         textView.setParagraphs(paragraphs)
-    }
-
-    /**
-     * Find the list marker stroke on a line, if present: a short, flat horizontal
-     * stroke on the far left, separated from the main text by a gap.
-     * Returns the marker stroke ID, or null if no marker found.
-     */
-    private fun findListMarkerStrokeId(strokes: List<InkStroke>, writingWidth: Float): String? {
-        if (strokes.size < 2) return null
-
-        // Sort strokes by their leftmost x position
-        val sorted = strokes.sortedBy { it.minX }
-        val first = sorted[0]
-
-        // Must be on the far left
-        if (first.minX > writingWidth * INDENT_THRESHOLD) return null
-
-        // Must be short and very flat (a dash, not a letter)
-        if (first.xRange < MARKER_MIN_WIDTH || first.xRange > MARKER_MAX_WIDTH) return null
-        if (first.yRange > first.xRange * MARKER_MAX_HEIGHT_RATIO) return null
-
-        // A real dash is a simple stroke — reject if the path length is much
-        // longer than the bounding box diagonal (indicates curves/loops like letters)
-        if (first.pathLength > first.diagonal * SIMPLICITY_MAX_RATIO) return null
-
-        // Must have a gap between the marker and the next stroke
-        val gap = sorted[1].minX - first.maxX
-        if (gap < MARKER_MIN_GAP) return null
-
-        return first.strokeId
-    }
-
-    /**
-     * Find an underline stroke on a line, if present: a long horizontal stroke
-     * near the bottom of the line that spans at least 80% of the text width.
-     * The underline is always assigned to the line where it starts, even if
-     * it wiggles into the line below.
-     * Returns the underline stroke ID, or null if no underline found.
-     */
-    private fun findUnderlineStrokeId(strokes: List<InkStroke>, lineIndex: Int): String? {
-        if (strokes.size < 2) return null
-
-        val lineTop = lineSegmenter.getLineY(lineIndex)
-
-        for (stroke in strokes) {
-            // Underline candidate: horizontal, near bottom of line, flat
-            if (stroke.yRange > stroke.xRange * UNDERLINE_MAX_HEIGHT_RATIO) continue  // not flat enough
-            if (stroke.xRange < UNDERLINE_MIN_WIDTH) continue  // too short to be an underline
-            if (stroke.minY < lineTop + HandwritingCanvasView.LINE_SPACING * UNDERLINE_TOP_FRACTION) continue  // too high up
-
-            // Check path simplicity (same as list marker check)
-            if (stroke.pathLength > stroke.diagonal * SIMPLICITY_MAX_RATIO) continue  // too complex
-
-            // Now check that it spans at least 80% of the text on this line
-            val textStrokes = strokes.filter { it.strokeId != stroke.strokeId }
-            if (textStrokes.isEmpty()) continue
-            val textMinX = textStrokes.minOf { s -> s.minX }
-            val textMaxX = textStrokes.maxOf { s -> s.maxX }
-            val textWidth = textMaxX - textMinX
-            if (textWidth <= 0f) continue
-
-            if (stroke.xRange >= textWidth * UNDERLINE_MIN_TEXT_COVERAGE) {
-                return stroke.strokeId
-            }
-        }
-
-        return null
-    }
-
-    /**
-     * Filter out the list marker and underline strokes before recognition.
-     */
-    private fun filterMarkerStroke(strokes: List<InkStroke>): List<InkStroke> {
-        val writingWidth = inkCanvas.width - GUTTER_WIDTH
-        val excludeIds = mutableSetOf<String>()
-
-        val markerId = findListMarkerStrokeId(strokes, writingWidth)
-        if (markerId != null) excludeIds.add(markerId)
-
-        // Need to determine line index from strokes for underline detection
-        val lineIndex = lineSegmenter.getStrokeLineIndex(strokes.first())
-        val underlineId = findUnderlineStrokeId(strokes, lineIndex)
-        if (underlineId != null) excludeIds.add(underlineId)
-
-        return if (excludeIds.isEmpty()) strokes else strokes.filter { it.strokeId !in excludeIds }
     }
 
     private fun updateTextScrollOffset() {
@@ -580,49 +451,19 @@ class WritingCoordinator(
 
         val strokesByLine = lineSegmenter.groupByLine(documentModel.activeStrokes)
         val writingWidth = inkCanvas.width - GUTTER_WIDTH
-        val sortedLines = lineTextCache.keys.sorted()
 
-        val paragraphs = mutableListOf<String>()
-        var currentLines = mutableListOf<String>()
-        var currentIsList = false
-        var currentIsHeading = false
-
-        for (lineIdx in sortedLines) {
-            val text = lineTextCache[lineIdx]
-            if (text.isNullOrEmpty() || text == "[?]") continue
-
-            val lineStrokes = strokesByLine[lineIdx]
-            val isList = lineStrokes != null && findListMarkerStrokeId(lineStrokes, writingWidth) != null
-            val isHeading = lineStrokes != null && findUnderlineStrokeId(lineStrokes, lineIdx) != null
-
-            if (lineStrokes != null && lineStrokes.isNotEmpty() && currentLines.isNotEmpty()) {
-                val leftmostX = lineStrokes.minOf { it.minX }
-                val isIndented = leftmostX > writingWidth * INDENT_THRESHOLD
-                val shouldBreak = isList || isHeading || currentIsHeading ||
-                    (isIndented && !currentIsList) ||
-                    (currentIsList && !isIndented && !isList)
-                if (shouldBreak) {
-                    val joined = currentLines.joinToString(" ")
-                    val prefix = if (currentIsHeading) "## " else if (currentIsList) "- " else ""
-                    paragraphs.add("$prefix$joined")
-                    currentLines = mutableListOf()
-                }
-            }
-
-            if (currentLines.isEmpty()) {
-                currentIsList = isList
-                currentIsHeading = isHeading
-            }
-            currentLines.add(text)
+        val classifiedLines = lineTextCache.keys.sorted().mapNotNull { lineIdx ->
+            paragraphBuilder.classifyLine(lineIdx, lineTextCache[lineIdx], strokesByLine[lineIdx], writingWidth)
         }
 
-        if (currentLines.isNotEmpty()) {
-            val joined = currentLines.joinToString(" ")
-            val prefix = if (currentIsHeading) "## " else if (currentIsList) "- " else ""
-            paragraphs.add("$prefix$joined")
-        }
+        val grouped = paragraphBuilder.groupIntoParagraphs(classifiedLines, strokesByLine, writingWidth)
 
-        return paragraphs.joinToString("\n\n")
+        return grouped.joinToString("\n\n") { group ->
+            val joined = group.joinToString(" ") { it.text }
+            val first = group.first()
+            val prefix = if (first.isHeading) "## " else if (first.isList) "- " else ""
+            "$prefix$joined"
+        }
     }
 
     // --- Undo / Redo ---
