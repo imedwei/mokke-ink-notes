@@ -52,7 +52,9 @@ class WritingCoordinator(
         onBeforeMutation = { saveUndoSnapshot() }
     )
 
-    // Eager recognition: cache of recognized text per line index
+    // Eager recognition: cache of recognized text per line index.
+    // All shared mutable state below is accessed only from Dispatchers.Main
+    // (scope is lifecycleScope; only recognizer.recognizeLine runs on IO).
     private val lineTextCache = mutableMapOf<Int, String>()
     // Track which lines are currently being recognized (avoid duplicates)
     private val recognizingLines = mutableSetOf<Int>()
@@ -154,7 +156,7 @@ class WritingCoordinator(
             val text = doRecognizeLine(lineIndex) ?: return@launch
             Log.d(TAG, "Eager recognized line $lineIndex: \"$text\"")
             if (lineIndex in everHiddenLines) {
-                withContext(Dispatchers.Main) { displayHiddenLines() }
+                displayHiddenLines()
             }
         }
     }
@@ -170,10 +172,8 @@ class WritingCoordinator(
         scope.launch {
             val text = doRecognizeLine(lineIndex) ?: return@launch
             Log.d(TAG, "Rendered line recognized $lineIndex: \"$text\"")
-            withContext(Dispatchers.Main) {
-                displayHiddenLines()
-                scheduleTextRefresh()
-            }
+            displayHiddenLines()
+            scheduleTextRefresh()
             if (lineIndex in pendingRerecognize) {
                 pendingRerecognize.remove(lineIndex)
                 recognizeRenderedLine(lineIndex)
@@ -287,7 +287,7 @@ class WritingCoordinator(
 
         val distance = toOffset - fromOffset
 
-        scope.launch(Dispatchers.Main) {
+        scope.launch {
             val startTime = System.currentTimeMillis()
             while (scrollAnimating) {
                 val elapsed = System.currentTimeMillis() - startTime
@@ -314,7 +314,7 @@ class WritingCoordinator(
      *  Cancelled if a new stroke arrives, so we never interrupt active writing. */
     private fun scheduleTextRefresh() {
         textRefreshJob?.cancel()
-        textRefreshJob = scope.launch(Dispatchers.Main) {
+        textRefreshJob = scope.launch {
             delay(TEXT_REFRESH_DELAY_MS)
             inkCanvas.pauseRawDrawing()
             inkCanvas.drawToSurface()
@@ -364,13 +364,11 @@ class WritingCoordinator(
                         lineTextCache[lineIdx] = "[?]"
                     }
                 }
-                withContext(Dispatchers.Main) {
-                    val stillNotVisible = strokesByLine.keys.filter { lineIdx ->
-                        val lineMid = lineSegmenter.getLineY(lineIdx) + HandwritingCanvasView.LINE_SPACING / 2f
-                        lineMid <= inkCanvas.scrollOffsetY
-                    }.toSet()
-                    updateTextView(stillNotVisible)
-                }
+                val stillNotVisible = strokesByLine.keys.filter { lineIdx ->
+                    val lineMid = lineSegmenter.getLineY(lineIdx) + HandwritingCanvasView.LINE_SPACING / 2f
+                    lineMid <= inkCanvas.scrollOffsetY
+                }.toSet()
+                updateTextView(stillNotVisible)
             }
         }
     }

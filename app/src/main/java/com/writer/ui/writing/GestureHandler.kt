@@ -101,6 +101,10 @@ class GestureHandler(
      * Check if a horizontal stroke is a heading underline rather than a strikethrough.
      * A heading underline starts in the bottom 20% of the line and spans at least 80%
      * of the existing text width on that line.
+     *
+     * Note: StrokeClassifier has a similar underline check with a more lenient
+     * threshold (bottom 50%) for recognition filtering. This stricter threshold
+     * avoids swallowing legitimate strikethrough gestures.
      */
     private fun isHeadingUnderline(stroke: InkStroke, lineIdx: Int): Boolean {
         val lineTop = lineSegmenter.getLineY(lineIdx)

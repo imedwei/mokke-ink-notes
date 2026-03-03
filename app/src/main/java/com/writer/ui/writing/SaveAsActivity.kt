@@ -131,8 +131,7 @@ class SaveAsActivity : AppCompatActivity() {
 
         // Build a single InkLine from all strokes, sorted left-to-right
         val sorted = allStrokes.sortedBy { it.minX }
-        val line = InkLine(strokes = sorted.toMutableList())
-        line.computeBoundingBox()
+        val line = InkLine.build(sorted)
 
         lifecycleScope.launch {
             try {

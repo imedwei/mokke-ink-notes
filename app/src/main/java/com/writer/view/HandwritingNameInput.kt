@@ -27,7 +27,6 @@ class HandwritingNameInput @JvmOverloads constructor(
 
     companion object {
         private const val TAG = "HandwritingNameInput"
-        private const val DEFAULT_STROKE_WIDTH = 5f
         private val LINE_SPACING = HandwritingCanvasView.LINE_SPACING
         private val TOP_MARGIN = HandwritingCanvasView.TOP_MARGIN
     }
@@ -35,21 +34,10 @@ class HandwritingNameInput @JvmOverloads constructor(
     private val completedStrokes = mutableListOf<InkStroke>()
     private val currentStrokePoints = mutableListOf<StrokePoint>()
     private val currentPath = Path()
+    private val renderPath = Path()
 
-    private val strokePaint = Paint().apply {
-        color = Color.BLACK
-        strokeWidth = DEFAULT_STROKE_WIDTH
-        style = Paint.Style.STROKE
-        isAntiAlias = false
-        strokeCap = Paint.Cap.ROUND
-        strokeJoin = Paint.Join.ROUND
-    }
-
-    private val linePaint = Paint().apply {
-        color = Color.parseColor("#AAAAAA")
-        strokeWidth = 2f
-        style = Paint.Style.STROKE
-    }
+    private val strokePaint = CanvasTheme.newStrokePaint()
+    private val linePaint = CanvasTheme.newLinePaint()
 
     private val placeholderPaint = Paint().apply {
         color = Color.parseColor("#444444")
@@ -183,19 +171,7 @@ class HandwritingNameInput @JvmOverloads constructor(
     }
 
     private fun drawStroke(canvas: Canvas, stroke: InkStroke) {
-        if (stroke.points.size < 2) return
-        val path = Path()
-        path.moveTo(stroke.points[0].x, stroke.points[0].y)
-        for (i in 1 until stroke.points.size) {
-            val prev = stroke.points[i - 1]
-            val curr = stroke.points[i]
-            val midX = (prev.x + curr.x) / 2f
-            val midY = (prev.y + curr.y) / 2f
-            path.quadTo(prev.x, prev.y, midX, midY)
-        }
-        val last = stroke.points.last()
-        path.lineTo(last.x, last.y)
-        canvas.drawPath(path, strokePaint)
+        CanvasTheme.drawStroke(canvas, stroke, renderPath, strokePaint)
     }
 
     // --- Public API ---

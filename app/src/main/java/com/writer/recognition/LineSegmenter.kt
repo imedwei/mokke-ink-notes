@@ -54,8 +54,6 @@ class LineSegmenter {
     fun buildInkLine(strokes: List<InkStroke>, lineIndex: Int): InkLine {
         val lineStrokes = getStrokesForLine(strokes, lineIndex)
             .sortedBy { it.minX }
-        val line = InkLine(strokes = lineStrokes.toMutableList())
-        line.computeBoundingBox()
-        return line
+        return InkLine.build(lineStrokes)
     }
 }

@@ -36,7 +36,6 @@ class HandwritingCanvasView @JvmOverloads constructor(
 
     companion object {
         private const val TAG = "HandwritingCanvas"
-        private const val DEFAULT_STROKE_WIDTH = 5f
         // Line spacing in pixels. ~128px at 300ppi ≈ 0.43 inches.
         const val LINE_SPACING = 128f
         // Idle timeout before checking scroll condition (ms)
@@ -61,31 +60,10 @@ class HandwritingCanvasView @JvmOverloads constructor(
     // Reused during rendering to avoid allocating a new Path per stroke per frame
     private val renderPath = Path()
 
-    private val strokePaint = Paint().apply {
-        color = Color.BLACK
-        strokeWidth = DEFAULT_STROKE_WIDTH
-        style = Paint.Style.STROKE
-        isAntiAlias = false
-        strokeCap = Paint.Cap.ROUND
-        strokeJoin = Paint.Join.ROUND
-    }
-
-    private val linePaint = Paint().apply {
-        color = Color.parseColor("#AAAAAA")
-        strokeWidth = 2f
-        style = Paint.Style.STROKE
-    }
-
-    private val gutterPaint = Paint().apply {
-        color = Color.parseColor("#DDDDDD")
-        style = Paint.Style.FILL
-    }
-
-    private val gutterLinePaint = Paint().apply {
-        color = Color.parseColor("#AAAAAA")
-        strokeWidth = 1f
-        style = Paint.Style.STROKE
-    }
+    private val strokePaint = CanvasTheme.newStrokePaint()
+    private val linePaint = CanvasTheme.newLinePaint()
+    private val gutterPaint = CanvasTheme.newGutterFillPaint()
+    private val gutterLinePaint = CanvasTheme.newGutterLinePaint()
 
     private val annotationPaint = Paint().apply {
         style = Paint.Style.STROKE
@@ -232,7 +210,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
             limit.right = (limit.right - GUTTER_WIDTH).toInt()
 
             touchHelper = TouchHelper.create(this, onyxCallback)
-            touchHelper?.setStrokeWidth(DEFAULT_STROKE_WIDTH)
+            touchHelper?.setStrokeWidth(CanvasTheme.DEFAULT_STROKE_WIDTH)
             touchHelper?.setStrokeStyle(TouchHelper.STROKE_STYLE_PENCIL)
             touchHelper?.setStrokeColor(Color.BLACK)
             touchHelper?.setLimitRect(limit, emptyList())
@@ -577,19 +555,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
     }
 
     private fun drawStroke(canvas: Canvas, stroke: InkStroke) {
-        if (stroke.points.size < 2) return
-        renderPath.reset()
-        renderPath.moveTo(stroke.points[0].x, stroke.points[0].y)
-        for (i in 1 until stroke.points.size) {
-            val prev = stroke.points[i - 1]
-            val curr = stroke.points[i]
-            val midX = (prev.x + curr.x) / 2f
-            val midY = (prev.y + curr.y) / 2f
-            renderPath.quadTo(prev.x, prev.y, midX, midY)
-        }
-        val last = stroke.points.last()
-        renderPath.lineTo(last.x, last.y)
-        canvas.drawPath(renderPath, strokePaint)
+        CanvasTheme.drawStroke(canvas, stroke, renderPath, strokePaint)
     }
 
     /** Fully close Onyx SDK raw drawing session (e.g. before launching another activity). */

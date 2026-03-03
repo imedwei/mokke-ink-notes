@@ -34,6 +34,15 @@ class RecognizedTextView @JvmOverloads constructor(
 
     companion object {
         private const val GUTTER_WIDTH = HandwritingCanvasView.GUTTER_WIDTH
+        private const val HORIZONTAL_PADDING = 40f
+        private const val PARAGRAPH_SPACING = 22f
+        private const val LIST_ITEM_SPACING = 6f
+        private const val FIRST_LINE_INDENT = 80
+        private const val LIST_BASE_INDENT = 60
+        private const val BULLET_HANG_INDENT = 100
+        private const val BULLET_PREFIX = "\u2022  "
+        private const val HEADING_SPACING_AFTER = 12f
+        private const val BOTTOM_PADDING = 10f
     }
 
     private val textPaint = TextPaint().apply {
@@ -42,18 +51,10 @@ class RecognizedTextView @JvmOverloads constructor(
         isAntiAlias = false // e-ink
     }
 
-    private val dimmedColor = Color.parseColor("#AAAAAA")
+    private val dimmedColor = CanvasTheme.LINE_COLOR
 
-    private val gutterPaint = Paint().apply {
-        color = Color.parseColor("#DDDDDD")
-        style = Paint.Style.FILL
-    }
-
-    private val gutterLinePaint = Paint().apply {
-        color = Color.parseColor("#AAAAAA")
-        strokeWidth = 1f
-        style = Paint.Style.STROKE
-    }
+    private val gutterPaint = CanvasTheme.newGutterFillPaint()
+    private val gutterLinePaint = CanvasTheme.newGutterLinePaint()
 
     private val logoPaint = TextPaint().apply {
         color = Color.BLACK
@@ -137,16 +138,6 @@ class RecognizedTextView @JvmOverloads constructor(
             invalidate()
         }
 
-    private val horizontalPadding = 40f
-    private val paragraphSpacing = 22f
-    private val listItemSpacing = 6f
-    private val firstLineIndent = 80
-    private val listBaseIndent = 60
-    private val bulletHangIndent = 100
-    private val bulletPrefix = "\u2022  "
-    private val headingSpacingAfter = 12f
-    private val bottomPadding = 10f
-
     // Gutter drag state
     private var isGutterDragging = false
     private var gutterDragLastY = 0f
@@ -169,7 +160,7 @@ class RecognizedTextView @JvmOverloads constructor(
     }
 
     private fun rebuildLayouts(paragraphs: List<List<TextSegment>>) {
-        val availableWidth = (width - horizontalPadding - GUTTER_WIDTH).toInt()
+        val availableWidth = (width - HORIZONTAL_PADDING - GUTTER_WIDTH).toInt()
         if (availableWidth <= 0) return
 
         var height = 0f
@@ -185,7 +176,7 @@ class RecognizedTextView @JvmOverloads constructor(
 
             // Prepend bullet for list items
             if (isListItem) {
-                spannable.append(bulletPrefix)
+                spannable.append(BULLET_PREFIX)
             }
 
             for ((i, segment) in segments.withIndex()) {
@@ -217,13 +208,13 @@ class RecognizedTextView @JvmOverloads constructor(
             } else if (isListItem) {
                 // Hanging indent: all lines indented, bullet hangs in the margin
                 spannable.setSpan(
-                    LeadingMarginSpan.Standard(listBaseIndent, bulletHangIndent),
+                    LeadingMarginSpan.Standard(LIST_BASE_INDENT, BULLET_HANG_INDENT),
                     0, spannable.length,
                     SpannableStringBuilder.SPAN_EXCLUSIVE_EXCLUSIVE
                 )
             } else {
                 spannable.setSpan(
-                    LeadingMarginSpan.Standard(firstLineIndent, 0),
+                    LeadingMarginSpan.Standard(FIRST_LINE_INDENT, 0),
                     0, spannable.length,
                     SpannableStringBuilder.SPAN_EXCLUSIVE_EXCLUSIVE
                 )
@@ -238,9 +229,9 @@ class RecognizedTextView @JvmOverloads constructor(
             // Determine spacing after this paragraph
             val nextIsListItem = paragraphs.getOrNull(pIdx + 1)?.firstOrNull()?.listItem == true
             val spacing = when {
-                isHeading -> headingSpacingAfter
-                isListItem && nextIsListItem -> listItemSpacing
-                else -> paragraphSpacing
+                isHeading -> HEADING_SPACING_AFTER
+                isListItem && nextIsListItem -> LIST_ITEM_SPACING
+                else -> PARAGRAPH_SPACING
             }
 
             // Attribute each rendered line to the segment whose text starts it.
@@ -383,14 +374,14 @@ class RecognizedTextView @JvmOverloads constructor(
         if (staticLayouts.isEmpty() || currentParagraphs.isEmpty()) return
         val callback = onTextTap ?: return
 
-        val baseY = height - totalTextHeight - bottomPadding
+        val baseY = height - totalTextHeight - BOTTOM_PADDING
         val startY = baseY + textScrollOffset
-        val localX = x - horizontalPadding
+        val localX = x - HORIZONTAL_PADDING
 
         var cumulativeY = startY
         for (pIdx in staticLayouts.indices) {
             val layout = staticLayouts[pIdx]
-            val pEnd = cumulativeY + paragraphHeights.getOrElse(pIdx) { layout.height + paragraphSpacing }
+            val pEnd = cumulativeY + paragraphHeights.getOrElse(pIdx) { layout.height + PARAGRAPH_SPACING }
 
             if (y >= cumulativeY && y < pEnd) {
                 val localY = (y - cumulativeY).toInt()
@@ -428,16 +419,16 @@ class RecognizedTextView @JvmOverloads constructor(
             val baseY = if (tutorialMode) {
                 closeButtonHeight + 5f  // top-align below close button
             } else {
-                height - totalTextHeight - bottomPadding
+                height - totalTextHeight - BOTTOM_PADDING
             }
             val startY = baseY + textScrollOffset
 
             canvas.save()
-            canvas.translate(horizontalPadding, startY)
+            canvas.translate(HORIZONTAL_PADDING, startY)
 
             for ((i, layout) in staticLayouts.withIndex()) {
                 layout.draw(canvas)
-                canvas.translate(0f, paragraphHeights.getOrElse(i) { layout.height + paragraphSpacing })
+                canvas.translate(0f, paragraphHeights.getOrElse(i) { layout.height + PARAGRAPH_SPACING })
             }
 
             canvas.restore()
