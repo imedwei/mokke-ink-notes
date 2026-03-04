@@ -18,3 +18,14 @@ val InkStroke.diagonal: Float get() {
     val h = yRange
     return kotlin.math.sqrt(w * w + h * h)
 }
+
+fun InkStroke.shiftY(dy: Float): InkStroke {
+    val shiftedPoints = points.map { pt ->
+        StrokePoint(pt.x, pt.y + dy, pt.pressure, pt.timestamp)
+    }
+    return InkStroke(
+        strokeId = strokeId,
+        points = shiftedPoints,
+        strokeWidth = strokeWidth
+    )
+}

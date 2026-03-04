@@ -111,47 +111,34 @@ object TutorialContent {
             TextAnnotation("Drag in gutter to scroll", writingWidth - 680f, arrowY + 10f, blue, 34f)
         )
 
-        // --- Line 6: Delete line demo (X gesture) ---
-        strokes.addAll(textToStrokes("Once upon a time", 60f, baseline(6), 64f))
+        // --- Lines 6-8: Insert line demo ---
+        strokes.addAll(textToStrokes("Line above", 60f, baseline(6), 64f))
+        strokes.addAll(textToStrokes("Line below", 60f, baseline(8), 64f))
 
-        val xCenterX = 580f
-        val xCenterY = baseline(6) - 22f
-        val xSize = 28f
-        annotations.add(makeLine(xCenterX + xSize, xCenterY - xSize, xCenterX - xSize, xCenterY + xSize, red, 5f))
-        annotations.add(makeLine(xCenterX - xSize, xCenterY + xSize, xCenterX - xSize, xCenterY - xSize, red, 5f))
-        annotations.add(makeLine(xCenterX - xSize, xCenterY - xSize, xCenterX + xSize, xCenterY + xSize, red, 5f))
-        textAnnotations.add(
-            TextAnnotation("Draw X in one stroke to delete line", xCenterX + xSize + 20f, xCenterY + 10f, red, 32f)
-        )
-
-        // --- Lines 7-9: Insert line demo ---
-        strokes.addAll(textToStrokes("Line above", 60f, baseline(7), 64f))
-        strokes.addAll(textToStrokes("Line below", 60f, baseline(9), 64f))
-
-        // Downward vertical line (draw ↓ to insert below)
+        // Downward vertical line (drag ↓ to insert below)
         val vertDownX = 450f
-        val vertDownStart = lineTop(7) + LINE_SPACING / 2f
+        val vertDownStart = lineTop(6) + LINE_SPACING / 2f
         val vertDownEnd = vertDownStart + LINE_SPACING * 1.5f - 10f
         annotations.add(makeLine(vertDownX, vertDownStart, vertDownX, vertDownEnd, green, 5f))
         annotations.add(makeLine(vertDownX - 12f, vertDownEnd - 20f, vertDownX, vertDownEnd, green, 4f))
         annotations.add(makeLine(vertDownX + 12f, vertDownEnd - 20f, vertDownX, vertDownEnd, green, 4f))
         textAnnotations.add(
-            TextAnnotation("Draw ↓ to insert below", vertDownX + 30f, (vertDownStart + vertDownEnd) / 2f + 8f, green, 32f)
+            TextAnnotation("Drag ↓ to insert below", vertDownX + 30f, (vertDownStart + vertDownEnd) / 2f + 8f, green, 32f)
         )
 
-        // Upward vertical line (draw ↑ to insert above) — 35px left of the down arrow
+        // Upward vertical line (drag ↑ to delete above) — 35px left of the down arrow
         val vertUpX = vertDownX - 35f
-        val vertUpMid = baseline(9) - 10f
+        val vertUpMid = baseline(8) - 10f
         val vertUpEnd = vertUpMid - LINE_SPACING * 1.5f
         annotations.add(makeLine(vertUpX, vertUpMid, vertUpX, vertUpEnd, green, 5f))
         annotations.add(makeLine(vertUpX - 12f, vertUpEnd + 20f, vertUpX, vertUpEnd, green, 4f))
         annotations.add(makeLine(vertUpX + 12f, vertUpEnd + 20f, vertUpX, vertUpEnd, green, 4f))
         textAnnotations.add(
-            TextAnnotation("Draw ↑ to insert above", vertUpX + 30f, (vertUpMid + vertUpEnd) / 2f + 8f + LINE_SPACING / 2f, green, 32f)
+            TextAnnotation("Drag ↑ to delete above", vertUpX + 30f, (vertUpMid + vertUpEnd) / 2f + 8f + LINE_SPACING / 2f, green, 32f)
         )
 
         // --- Undo/redo gesture demo: down-then-left arrow ---
-        val undoStartY = xCenterY  // same Y as the X gesture
+        val undoStartY = baseline(6) - 22f
         val undoDownLen = 2f * LINE_SPACING
         val undoLeftLen = undoDownLen
         val undoX = writingWidth - 140f  // far right of writing surface
@@ -177,8 +164,8 @@ object TutorialContent {
             )
         )
 
-        // Canvas content extends to bottom of line 9
-        val canvasContentHeight = lineTop(9) + LINE_SPACING + 20f - scrollOffset
+        // Canvas content extends to bottom of line 8
+        val canvasContentHeight = lineTop(8) + LINE_SPACING + 20f - scrollOffset
 
         // --- Text paragraphs for the text view ---
         val textParagraphs = listOf(
@@ -199,8 +186,8 @@ object TutorialContent {
                 WritingCoordinator.TextSegment("Hello world", dimmed = false, lineIndex = 5)
             ),
             listOf(
-                WritingCoordinator.TextSegment("Line above", dimmed = false, lineIndex = 7),
-                WritingCoordinator.TextSegment("Line below", dimmed = false, lineIndex = 9)
+                WritingCoordinator.TextSegment("Line above", dimmed = false, lineIndex = 6),
+                WritingCoordinator.TextSegment("Line below", dimmed = false, lineIndex = 8)
             )
         )
 

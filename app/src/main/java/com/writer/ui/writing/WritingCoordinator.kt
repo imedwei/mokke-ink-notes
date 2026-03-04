@@ -3,6 +3,7 @@ package com.writer.ui.writing
 import android.util.Log
 import com.writer.model.DocumentModel
 import com.writer.model.InkStroke
+import com.writer.model.shiftY
 import com.writer.recognition.HandwritingRecognizer
 import com.writer.recognition.LineSegmenter
 import com.writer.recognition.StrokeClassifier
@@ -71,12 +72,20 @@ class WritingCoordinator(
     // Deferred e-ink refresh for text view updates (avoids interrupting active writing)
     private var textRefreshJob: Job? = null
 
+    // Line-drag gesture state
+    private var lineDragAnchorLine = -1
+    private var lineDragOriginalStrokes: List<InkStroke>? = null
+    private var lineDragCurrentShift = 0
+
     fun start() {
         Log.i(TAG, "Coordinator started")
         inkCanvas.onStrokeCompleted = { stroke -> onStrokeCompleted(stroke) }
         inkCanvas.onIdleTimeout = { onIdle() }
         inkCanvas.onManualScroll = { displayHiddenLines() }
         textView.onTextTap = { lineIndex -> scrollToLine(lineIndex) }
+        inkCanvas.onLineDragStart = { anchorLine -> onLineDragStart(anchorLine) }
+        inkCanvas.onLineDragStep = { shiftLines -> onLineDragStep(shiftLines) }
+        inkCanvas.onLineDragEnd = { onLineDragEnd() }
         inkCanvas.onUndoGestureStart = {
             undoManager.beginScrub(currentSnapshot())
         }
@@ -96,6 +105,9 @@ class WritingCoordinator(
         inkCanvas.onIdleTimeout = null
         inkCanvas.onManualScroll = null
         textView.onTextTap = null
+        inkCanvas.onLineDragStart = null
+        inkCanvas.onLineDragStep = null
+        inkCanvas.onLineDragEnd = null
         inkCanvas.onUndoGestureStart = null
         inkCanvas.onUndoGestureStep = null
         inkCanvas.onUndoGestureEnd = null
@@ -462,6 +474,80 @@ class WritingCoordinator(
             val prefix = if (first.isHeading) "## " else if (first.isList) "- " else ""
             "$prefix$joined"
         }
+    }
+
+    // --- Line-drag gesture ---
+
+    private fun onLineDragStart(anchorLine: Int) {
+        saveUndoSnapshot()
+        lineDragAnchorLine = anchorLine
+        lineDragOriginalStrokes = documentModel.activeStrokes.toList()
+        lineDragCurrentShift = 0
+        Log.i(TAG, "Line-drag started: anchorLine=$anchorLine")
+    }
+
+    private fun onLineDragStep(shiftLines: Int) {
+        val originals = lineDragOriginalStrokes ?: return
+        val clamped = shiftLines.coerceAtLeast(-lineDragAnchorLine)
+        if (clamped == lineDragCurrentShift) return
+        lineDragCurrentShift = clamped
+
+        val shiftAmount = clamped * HandwritingCanvasView.LINE_SPACING
+        val newStrokes = mutableListOf<InkStroke>()
+
+        for (stroke in originals) {
+            val strokeLine = lineSegmenter.getStrokeLineIndex(stroke)
+            if (strokeLine >= lineDragAnchorLine) {
+                // Anchor line and below: shift
+                newStrokes.add(stroke.shiftY(shiftAmount))
+            } else if (clamped < 0) {
+                // Upward drag: check if this stroke is in the overwritten zone
+                val overwrittenStart = lineDragAnchorLine + clamped
+                if (strokeLine >= overwrittenStart) {
+                    // This stroke is being overwritten — skip it
+                    continue
+                }
+                newStrokes.add(stroke)
+            } else {
+                newStrokes.add(stroke)
+            }
+        }
+
+        documentModel.activeStrokes.clear()
+        documentModel.activeStrokes.addAll(newStrokes)
+        inkCanvas.loadStrokes(newStrokes)
+    }
+
+    private fun onLineDragEnd() {
+        val shift = lineDragCurrentShift
+        if (shift == 0) {
+            // No net shift — restore originals
+            val originals = lineDragOriginalStrokes
+            if (originals != null) {
+                documentModel.activeStrokes.clear()
+                documentModel.activeStrokes.addAll(originals)
+                inkCanvas.loadStrokes(originals)
+            }
+        } else {
+            // Invalidate text cache for all affected lines
+            val minAffected = if (shift < 0) {
+                lineDragAnchorLine + shift
+            } else {
+                lineDragAnchorLine
+            }
+            val maxAffected = (lineSegmenter.getBottomOccupiedLine(documentModel.activeStrokes)
+                .coerceAtLeast(lineDragAnchorLine)) + kotlin.math.abs(shift)
+            val invalidated = (minAffected..maxAffected).toSet()
+            for (line in invalidated) {
+                lineTextCache.remove(line)
+            }
+            displayHiddenLines()
+        }
+
+        lineDragOriginalStrokes = null
+        lineDragAnchorLine = -1
+        lineDragCurrentShift = 0
+        Log.i(TAG, "Line-drag ended: shift=$shift lines")
     }
 
     // --- Undo / Redo ---
