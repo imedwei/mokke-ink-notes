@@ -196,20 +196,32 @@ class WritingActivity : AppCompatActivity() {
 
     private fun setupTextGutter() {
         recognizedTextView.onGutterDrag = { delta ->
-            splitOffset = (splitOffset + delta).coerceIn(0f, defaultCanvasHeight.toFloat())
+            if (delta > 0f && splitOffset >= defaultCanvasHeight.toFloat()) {
+                // At max size, dragging down scrolls text content
+                val topPadding = 40f
+                val maxOverscroll = (recognizedTextView.totalTextHeight - recognizedTextView.height + topPadding).coerceAtLeast(0f)
+                inkCanvas.textOverscroll = (inkCanvas.textOverscroll + delta).coerceIn(0f, maxOverscroll)
+                coordinator?.onManualTextScroll()
+            } else if (delta < 0f && inkCanvas.textOverscroll > 0f) {
+                // Dragging back up — reduce overscroll first
+                inkCanvas.textOverscroll = (inkCanvas.textOverscroll + delta).coerceAtLeast(0f)
+                coordinator?.onManualTextScroll()
+            } else {
+                splitOffset = (splitOffset + delta).coerceIn(0f, defaultCanvasHeight.toFloat())
 
-            val newTextHeight = defaultTextHeight + splitOffset.toInt()
-            val newCanvasHeight = defaultCanvasHeight - splitOffset.toInt()
+                val newTextHeight = defaultTextHeight + splitOffset.toInt()
+                val newCanvasHeight = defaultCanvasHeight - splitOffset.toInt()
 
-            val textParams = recognizedTextView.layoutParams as LinearLayout.LayoutParams
-            textParams.height = newTextHeight
-            textParams.weight = 0f
-            recognizedTextView.layoutParams = textParams
+                val textParams = recognizedTextView.layoutParams as LinearLayout.LayoutParams
+                textParams.height = newTextHeight
+                textParams.weight = 0f
+                recognizedTextView.layoutParams = textParams
 
-            val canvasParams = inkCanvas.layoutParams as LinearLayout.LayoutParams
-            canvasParams.height = newCanvasHeight.coerceAtLeast(0)
-            canvasParams.weight = 0f
-            inkCanvas.layoutParams = canvasParams
+                val canvasParams = inkCanvas.layoutParams as LinearLayout.LayoutParams
+                canvasParams.height = newCanvasHeight.coerceAtLeast(0)
+                canvasParams.weight = 0f
+                inkCanvas.layoutParams = canvasParams
+            }
         }
     }
 

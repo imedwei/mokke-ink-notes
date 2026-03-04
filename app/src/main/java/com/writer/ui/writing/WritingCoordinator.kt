@@ -441,6 +441,12 @@ class WritingCoordinator(
         textView.setParagraphs(paragraphs)
     }
 
+    /** Called when the text view is scrolled via its gutter overscroll. */
+    fun onManualTextScroll() {
+        textView.textContentScroll = inkCanvas.textOverscroll
+        textView.invalidate()
+    }
+
     private fun updateTextScrollOffset() {
         val lineHeights = textView.writtenLineHeights
         if (lineHeights.isEmpty()) {
@@ -479,7 +485,7 @@ class WritingCoordinator(
             break
         }
 
-        textView.textScrollOffset = offset - inkCanvas.textOverscroll
+        textView.textScrollOffset = offset
     }
 
     // --- Markdown export ---

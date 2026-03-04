@@ -129,6 +129,9 @@ class RecognizedTextView @JvmOverloads constructor(
     /** Pixel offset to shift text content downward (for scroll sync with canvas). */
     var textScrollOffset: Float = 0f
 
+    /** Pixel offset to scroll text content upward (for viewing earlier text). */
+    var textContentScroll: Float = 0f
+
     /** Called when the user drags the gutter. Delta is positive = drag down. */
     var onGutterDrag: ((Float) -> Unit)? = null
 
@@ -389,7 +392,7 @@ class RecognizedTextView @JvmOverloads constructor(
         val callback = onTextTap ?: return
 
         val baseY = height - totalTextHeight - BOTTOM_PADDING
-        val startY = baseY + textScrollOffset
+        val startY = baseY + textScrollOffset + textContentScroll
         val localX = x - HORIZONTAL_PADDING
 
         var cumulativeY = startY
@@ -443,7 +446,7 @@ class RecognizedTextView @JvmOverloads constructor(
             } else {
                 height - totalTextHeight - BOTTOM_PADDING
             }
-            val startY = baseY + textScrollOffset
+            val startY = baseY + textScrollOffset + textContentScroll
 
             canvas.save()
             canvas.translate(HORIZONTAL_PADDING, startY)
