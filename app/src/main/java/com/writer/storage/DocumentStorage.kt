@@ -100,6 +100,39 @@ object DocumentStorage {
         return "$base ($i)"
     }
 
+    /** Convert a heading string to a safe file name. */
+    fun headingToFileName(heading: String): String {
+        return heading.trim()
+            .replace(Regex("[/\\\\]"), "-")
+            .replace(Regex("[*?\"<>|:]"), "")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+            .take(80)
+    }
+
+    /** Generate a unique file name from a heading, appending date if needed. */
+    fun generateNameFromHeading(context: Context, heading: String): String? {
+        val base = headingToFileName(heading)
+        if (base.isEmpty()) return null
+        if (!docFile(context, base).exists()) return base
+
+        val dateStr = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
+        val dated = "$base $dateStr"
+        if (!docFile(context, dated).exists()) return dated
+
+        var i = 2
+        while (docFile(context, "$dated ($i)").exists()) i++
+        return "$dated ($i)"
+    }
+
+    /** Rename a document file on disk. Returns true on success. */
+    fun rename(context: Context, oldName: String, newName: String): Boolean {
+        val oldFile = docFile(context, oldName)
+        val newFile = docFile(context, newName)
+        if (!oldFile.exists() || newFile.exists()) return false
+        return oldFile.renameTo(newFile)
+    }
+
     // --- Sync folder export ---
 
     fun exportToSyncFolder(
@@ -148,6 +181,7 @@ object DocumentStorage {
         json.put("scrollOffsetY", data.scrollOffsetY.toDouble())
         json.put("highestLineIndex", data.highestLineIndex)
         json.put("currentLineIndex", data.currentLineIndex)
+        json.put("userRenamed", data.userRenamed)
 
         val cacheObj = JSONObject()
         for ((key, value) in data.lineTextCache) {
@@ -190,6 +224,7 @@ object DocumentStorage {
         val scrollOffsetY = json.optDouble("scrollOffsetY", 0.0).toFloat()
         val highestLineIndex = json.optInt("highestLineIndex", -1)
         val currentLineIndex = json.optInt("currentLineIndex", -1)
+        val userRenamed = json.optBoolean("userRenamed", false)
 
         val lineTextCache = mutableMapOf<Int, String>()
         val cacheObj = json.optJSONObject("lineTextCache")
@@ -245,7 +280,8 @@ object DocumentStorage {
             lineTextCache = lineTextCache,
             everHiddenLines = everHiddenLines,
             highestLineIndex = highestLineIndex,
-            currentLineIndex = currentLineIndex
+            currentLineIndex = currentLineIndex,
+            userRenamed = userRenamed
         )
     }
 }

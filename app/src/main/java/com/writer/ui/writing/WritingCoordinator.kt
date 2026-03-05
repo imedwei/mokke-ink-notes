@@ -69,6 +69,10 @@ class WritingCoordinator(
     private var scrollAnimating = false
     // Track which line the user is currently writing on
     private var currentLineIndex = -1
+    // Whether the user has manually renamed this document
+    var userRenamed = false
+    // Callback to notify activity when heading-based rename should happen
+    var onHeadingDetected: ((String) -> Unit)? = null
     // Deferred e-ink refresh for text view updates (avoids interrupting active writing)
     private var textRefreshJob: Job? = null
 
@@ -129,6 +133,7 @@ class WritingCoordinator(
         everHiddenLines.clear()
         highestLineIndex = -1
         currentLineIndex = -1
+        userRenamed = false
     }
 
     private fun onStrokeCompleted(stroke: InkStroke) {
@@ -249,6 +254,7 @@ class WritingCoordinator(
 
             lineTextCache[lineIndex] = text
             recognizingLines.remove(lineIndex)
+            checkHeadingRename(lineIndex, text, allStrokes)
             return text
         } catch (e: Exception) {
             Log.e(TAG, "Recognition failed for line $lineIndex", e)
@@ -257,6 +263,15 @@ class WritingCoordinator(
             pendingRerecognize.remove(lineIndex)
             return null
         }
+    }
+
+    private fun checkHeadingRename(lineIndex: Int, text: String, strokes: List<InkStroke>) {
+        if (userRenamed) return
+        if (lineIndex != 0) return
+        if (text.isEmpty() || text == "[?]") return
+        val isHeading = strokeClassifier.findUnderlineStrokeId(strokes, lineIndex) != null
+        if (!isHeading) return
+        onHeadingDetected?.invoke(text)
     }
 
     private fun buildPreContext(lineIndex: Int): String {
@@ -637,7 +652,8 @@ class WritingCoordinator(
             lineTextCache = lineTextCache.toMap(),
             everHiddenLines = everHiddenLines.toSet(),
             highestLineIndex = highestLineIndex,
-            currentLineIndex = currentLineIndex
+            currentLineIndex = currentLineIndex,
+            userRenamed = userRenamed
         )
     }
 
@@ -646,6 +662,7 @@ class WritingCoordinator(
         everHiddenLines.addAll(data.everHiddenLines)
         highestLineIndex = data.highestLineIndex
         currentLineIndex = data.currentLineIndex
+        userRenamed = data.userRenamed
         displayHiddenLines()
     }
 }

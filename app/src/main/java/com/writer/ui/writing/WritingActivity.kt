@@ -63,6 +63,7 @@ class WritingActivity : AppCompatActivity() {
             if (!name.isNullOrBlank() && name != currentDocumentName) {
                 val oldName = currentDocumentName
                 currentDocumentName = name
+                coordinator?.userRenamed = true
                 getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
                     .putString(PREF_CURRENT_DOC, name).apply()
                 saveDocument()
@@ -238,7 +239,19 @@ class WritingActivity : AppCompatActivity() {
                 }
             }
         )
+        coordinator?.onHeadingDetected = { heading -> autoRenameFromHeading(heading) }
         coordinator?.start()
+    }
+
+    private fun autoRenameFromHeading(heading: String) {
+        val newName = DocumentStorage.generateNameFromHeading(this, heading) ?: return
+        if (newName == currentDocumentName) return
+        val oldName = currentDocumentName
+        DocumentStorage.rename(this, oldName, newName)
+        currentDocumentName = newName
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+            .putString(PREF_CURRENT_DOC, newName).apply()
+        Log.i(TAG, "Auto-renamed document: \"$oldName\" → \"$newName\"")
     }
 
     // --- Document operations ---

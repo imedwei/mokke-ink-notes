@@ -6,5 +6,6 @@ data class DocumentData(
     val lineTextCache: Map<Int, String>,
     val everHiddenLines: Set<Int>,
     val highestLineIndex: Int,
-    val currentLineIndex: Int
+    val currentLineIndex: Int,
+    val userRenamed: Boolean = false
 )
