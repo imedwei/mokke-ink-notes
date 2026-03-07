@@ -36,14 +36,14 @@ class HandwritingCanvasView @JvmOverloads constructor(
 
     companion object {
         private const val TAG = "HandwritingCanvas"
-        // Line spacing in pixels. ~128px at 300ppi ≈ 0.43 inches.
-        const val LINE_SPACING = 128f
+        // Line spacing in pixels.
+        const val LINE_SPACING = 115f
         // Idle timeout before checking scroll condition (ms)
         private const val IDLE_TIMEOUT_MS = 2000L
         // Top margin before the first line
         const val TOP_MARGIN = 40f
-        // Width of the scroll gutter on the right edge
-        const val GUTTER_WIDTH = 144f
+        // Width of the scroll gutter: 7% of screen width
+        fun gutterWidth(viewWidth: Int): Float = viewWidth * 0.07f
         // Line-drag gesture: vertical span to activate (either direction)
         private const val LINE_DRAG_MIN_SPANS = 1f
         // Line-drag gesture: max horizontal drift ratio during activation
@@ -209,7 +209,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
             try {
                 val limit = Rect()
                 getLocalVisibleRect(limit)
-                limit.right = (limit.right - GUTTER_WIDTH).toInt()
+                limit.right = (limit.right - gutterWidth(width)).toInt()
                 touchHelper?.setLimitRect(limit, emptyList())
             } catch (e: Exception) {
                 Log.w(TAG, "Error updating limit rect: ${e.message}")
@@ -234,7 +234,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
         try {
             val limit = Rect()
             getLocalVisibleRect(limit)
-            limit.right = (limit.right - GUTTER_WIDTH).toInt()
+            limit.right = (limit.right - gutterWidth(width)).toInt()
 
             touchHelper = TouchHelper.create(this, onyxCallback)
             touchHelper?.setStrokeWidth(CanvasTheme.DEFAULT_STROKE_WIDTH)
@@ -270,7 +270,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
         }
 
         // Stylus/mouse in gutter area → scroll drag
-        if (event.x >= width - GUTTER_WIDTH) {
+        if (event.x >= width - gutterWidth(width)) {
             return handleGutterTouch(event)
         }
 
@@ -635,7 +635,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
         // Clear background
         canvas.drawColor(Color.WHITE)
 
-        val gutterLeft = width - GUTTER_WIDTH
+        val gutterLeft = width - gutterWidth(width)
 
         // Apply scroll offset
         canvas.save()

@@ -41,11 +41,12 @@ class GestureHandler(
         // Underline: must span this fraction of text width
         private const val UNDERLINE_MIN_TEXT_COVERAGE = 0.8f
 
-        /** Check if a stroke has the shape of a strikethrough: wide, flat, horizontal. */
+        /** Check if a stroke has the shape of a strikethrough: wide, flat, horizontal, and straight. */
         fun isStrikethroughShape(stroke: InkStroke): Boolean {
             if (stroke.points.size < 2) return false
             return stroke.xRange >= STRIKETHROUGH_MIN_WIDTH &&
-                stroke.yRange < stroke.xRange * STRIKETHROUGH_MAX_HEIGHT_RATIO
+                stroke.yRange < stroke.xRange * STRIKETHROUGH_MAX_HEIGHT_RATIO &&
+                stroke.pathLength <= stroke.diagonal * SIMPLICITY_MAX_RATIO
         }
     }
 

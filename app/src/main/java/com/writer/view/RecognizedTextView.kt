@@ -33,7 +33,6 @@ class RecognizedTextView @JvmOverloads constructor(
 ) : View(context, attrs, defStyleAttr) {
 
     companion object {
-        private const val GUTTER_WIDTH = HandwritingCanvasView.GUTTER_WIDTH
         private const val HORIZONTAL_PADDING = 40f
         private const val PARAGRAPH_SPACING = 22f
         private const val LIST_ITEM_SPACING = 6f
@@ -177,7 +176,7 @@ class RecognizedTextView @JvmOverloads constructor(
     }
 
     private fun rebuildLayouts(paragraphs: List<List<TextSegment>>) {
-        val availableWidth = (width - HORIZONTAL_PADDING - GUTTER_WIDTH).toInt()
+        val availableWidth = (width - HORIZONTAL_PADDING - HandwritingCanvasView.gutterWidth(width)).toInt()
         if (availableWidth <= 0) return
 
         var height = 0f
@@ -306,7 +305,7 @@ class RecognizedTextView @JvmOverloads constructor(
         }
 
         // Tutorial: close button tap at top of text area
-        if (tutorialMode && event.x < width - GUTTER_WIDTH && event.y < closeButtonHeight) {
+        if (tutorialMode && event.x < width - HandwritingCanvasView.gutterWidth(width) && event.y < closeButtonHeight) {
             if (event.action == MotionEvent.ACTION_DOWN) {
                 return true
             }
@@ -317,7 +316,7 @@ class RecognizedTextView @JvmOverloads constructor(
         }
 
         // Stylus/mouse in gutter area → resize drag
-        if (event.x >= width - GUTTER_WIDTH) {
+        if (event.x >= width - HandwritingCanvasView.gutterWidth(width)) {
             return handleGutterTouch(event)
         }
 
@@ -377,7 +376,7 @@ class RecognizedTextView @JvmOverloads constructor(
                 if (!isGutterDragging) return false
                 isGutterDragging = false
                 // Detect tap on the logo area (top of gutter, no significant drag)
-                if (!gutterDragMoved && gutterDragStartY < GUTTER_WIDTH * 1.2f) {
+                if (!gutterDragMoved && gutterDragStartY < 130f) {
                     onLogoTap?.invoke()
                 }
                 return true
@@ -428,13 +427,13 @@ class RecognizedTextView @JvmOverloads constructor(
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
 
-        val gutterLeft = width - GUTTER_WIDTH
-        val gutterCenterX = gutterLeft + GUTTER_WIDTH / 2f
+        val gutterLeft = width - HandwritingCanvasView.gutterWidth(width)
+        val gutterCenterX = gutterLeft + HandwritingCanvasView.gutterWidth(width) / 2f
 
         // Draw text content or status message
         if (statusMessage.isNotEmpty() && staticLayouts.isEmpty()) {
             // Draw status message centered in the content area
-            val contentCenterX = (width - GUTTER_WIDTH) / 2f
+            val contentCenterX = (width - HandwritingCanvasView.gutterWidth(width)) / 2f
             val contentCenterY = height / 2f
             canvas.drawText(statusMessage, contentCenterX, contentCenterY, statusPaint)
             if (statusSubtext.isNotEmpty()) {
@@ -464,12 +463,12 @@ class RecognizedTextView @JvmOverloads constructor(
         canvas.drawLine(gutterLeft, 0f, gutterLeft, height.toFloat(), gutterLinePaint)
 
         // Draw "I" logo in the top of the gutter
-        val logoY = GUTTER_WIDTH * 0.7f
+        val logoY = 100f
         canvas.drawText("I", gutterCenterX, logoY, logoPaint)
 
         if (tutorialMode) {
             // "Close Tutorial" button centered at top of text area
-            val contentCenterX = (width - GUTTER_WIDTH) / 2f
+            val contentCenterX = (width - HandwritingCanvasView.gutterWidth(width)) / 2f
             val btnTextY = 52f
             canvas.drawText("Close Tutorial", contentCenterX, btnTextY, closeButtonPaint)
             val btnTextWidth = closeButtonPaint.measureText("Close Tutorial")

@@ -37,7 +37,7 @@ object TutorialContent {
 
     private val LINE_SPACING = HandwritingCanvasView.LINE_SPACING
     private val TOP_MARGIN = HandwritingCanvasView.TOP_MARGIN
-    private val GUTTER_WIDTH = HandwritingCanvasView.GUTTER_WIDTH
+    private fun gutterWidth(viewWidth: Int) = HandwritingCanvasView.gutterWidth(viewWidth)
 
     private val textPaint = Paint().apply {
         typeface = Typeface.create("cursive", Typeface.NORMAL)
@@ -45,7 +45,7 @@ object TutorialContent {
     }
 
     fun generate(canvasWidth: Int, canvasHeight: Int): TutorialData {
-        val writingWidth = canvasWidth - GUTTER_WIDTH
+        val writingWidth = canvasWidth - gutterWidth(canvasWidth)
 
         val strokes = mutableListOf<InkStroke>()
         val annotations = mutableListOf<AnnotationStroke>()

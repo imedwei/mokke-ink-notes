@@ -30,7 +30,7 @@ class WritingCoordinator(
         // Scroll when writing passes this fraction of canvas height from top
         // 25% of canvas ≈ 50% of full screen (since canvas is 75% of screen)
         private const val SCROLL_THRESHOLD = 0.25f
-        private val GUTTER_WIDTH = HandwritingCanvasView.GUTTER_WIDTH
+        private fun gutterWidth(viewWidth: Int) = HandwritingCanvasView.gutterWidth(viewWidth)
         // Delay before refreshing e-ink display after text view updates
         private const val TEXT_REFRESH_DELAY_MS = 500L
     }
@@ -240,7 +240,7 @@ class WritingCoordinator(
                 recognizingLines.remove(lineIndex)
                 return null
             }
-            val strokes = strokeClassifier.filterMarkerStrokes(allStrokes, inkCanvas.width - GUTTER_WIDTH)
+            val strokes = strokeClassifier.filterMarkerStrokes(allStrokes, inkCanvas.width - gutterWidth(inkCanvas.width))
             if (strokes.isEmpty()) {
                 recognizingLines.remove(lineIndex)
                 return null
@@ -405,7 +405,7 @@ class WritingCoordinator(
                     if (lineTextCache.containsKey(lineIdx)) continue
                     try {
                         val allStrokes = strokesByLine[lineIdx] ?: continue
-                        val strokes = strokeClassifier.filterMarkerStrokes(allStrokes, inkCanvas.width - GUTTER_WIDTH)
+                        val strokes = strokeClassifier.filterMarkerStrokes(allStrokes, inkCanvas.width - gutterWidth(inkCanvas.width))
                         if (strokes.isEmpty()) continue
                         val line = lineSegmenter.buildInkLine(strokes, lineIdx)
                         val preContext = buildPreContext(lineIdx)
@@ -433,7 +433,7 @@ class WritingCoordinator(
 
     private fun updateTextView(currentlyHidden: Set<Int>) {
         val strokesByLine = lineSegmenter.groupByLine(documentModel.activeStrokes)
-        val writingWidth = inkCanvas.width - GUTTER_WIDTH
+        val writingWidth = inkCanvas.width - gutterWidth(inkCanvas.width)
 
         val classifiedLines = everHiddenLines.sorted().mapNotNull { lineIdx ->
             paragraphBuilder.classifyLine(lineIdx, lineTextCache[lineIdx], strokesByLine[lineIdx], writingWidth)
@@ -509,7 +509,7 @@ class WritingCoordinator(
         if (lineTextCache.isEmpty()) return ""
 
         val strokesByLine = lineSegmenter.groupByLine(documentModel.activeStrokes)
-        val writingWidth = inkCanvas.width - GUTTER_WIDTH
+        val writingWidth = inkCanvas.width - gutterWidth(inkCanvas.width)
 
         val classifiedLines = lineTextCache.keys.sorted().mapNotNull { lineIdx ->
             paragraphBuilder.classifyLine(lineIdx, lineTextCache[lineIdx], strokesByLine[lineIdx], writingWidth)
