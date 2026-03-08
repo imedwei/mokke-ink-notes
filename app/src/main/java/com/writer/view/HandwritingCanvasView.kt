@@ -155,6 +155,17 @@ class HandwritingCanvasView @JvmOverloads constructor(
     private var touchHelper: TouchHelper? = null
     private var surfaceReady = false
 
+    // ── Running stroke bounding box ───────────────────────────────────────────
+    // checkGestures needs xRange and yRange of the stroke so far.  Maintaining
+    // a running bounding box updated O(1) per point avoids an O(n²) scan.
+    //
+    // Coordinates are in document space (y includes scrollOffsetY), matching
+    // currentStrokePoints.  Reset at stroke start; updated by updateStrokeBounds().
+    private var strokeMinX = 0f
+    private var strokeMaxX = 0f
+    private var strokeMinY = 0f
+    private var strokeMaxY = 0f
+
     init {
         holder.addCallback(this)
     }
@@ -177,6 +188,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
             diagramInsertActive = false
             undoGestureReady = false
             undoScrubActive = false
+            initStrokeBounds(currentStrokePoints.last())
         }
 
         override fun onRawDrawingTouchPointMoveReceived(tp: TouchPoint) {
@@ -190,6 +202,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
                 if (docPt.y < topY || docPt.y > bottomY) return
             }
             currentStrokePoints.add(docPt)
+            updateStrokeBounds(currentStrokePoints.last())
             if (undoGestureReady) {
                 // Horizontal threshold met — check for vertical activation
                 processUndoReadyMove(tp.y)
@@ -371,6 +384,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
                 diagramInsertActive = false
                 undoGestureReady = false
                 undoScrubActive = false
+                initStrokeBounds(currentStrokePoints.last())
                 drawToSurface()
                 return true
             }
@@ -384,11 +398,13 @@ class HandwritingCanvasView @JvmOverloads constructor(
                     if (bounds == null || (hy >= bounds.first && hy <= bounds.second)) {
                         currentPath.lineTo(hx, hy)
                         currentStrokePoints.add(StrokePoint(hx, hy, hp, ht))
+                        updateStrokeBounds(currentStrokePoints.last())
                     }
                 }
                 if (bounds == null || (y >= bounds.first && y <= bounds.second)) {
                     currentPath.lineTo(x, y)
                     currentStrokePoints.add(StrokePoint(x, y, pressure, timestamp))
+                    updateStrokeBounds(currentStrokePoints.last())
                 }
                 checkGesturesFallback(event.x, event.y)
                 if (lineDragActive || diagramInsertActive || undoScrubActive) return true
@@ -531,9 +547,39 @@ class HandwritingCanvasView @JvmOverloads constructor(
     }
 
     /**
+     * Initialise the running stroke bounding box from the first point of a new stroke.
+     * Must be called once at stroke start (ACTION_DOWN / onBeginRawDrawing).
+     */
+    private fun initStrokeBounds(p: StrokePoint) {
+        strokeMinX = p.x; strokeMaxX = p.x
+        strokeMinY = p.y; strokeMaxY = p.y
+    }
+
+    /**
+     * Expand the running bounding box to include [p].
+     *
+     * Called in O(1) on every incoming point so that [checkGestures] can read
+     * xRange and yRange in O(1) rather than scanning [currentStrokePoints] each time.
+     *
+     * The naive approach called currentStrokePoints.maxOf/minOf on every point:
+     * O(n) per point → O(n²) per stroke. Profiling with STROKE_DIAG confirmed
+     * this cost: 136 ms for a 551-point stroke, 267 ms for a 781-point stroke.
+     * With running bounds the total cost across the whole stroke is O(n);
+     * the same strokes measured 3 ms and were not observed in the new session.
+     */
+    private fun updateStrokeBounds(p: StrokePoint) {
+        if (p.x < strokeMinX) strokeMinX = p.x
+        if (p.x > strokeMaxX) strokeMaxX = p.x
+        if (p.y < strokeMinY) strokeMinY = p.y
+        if (p.y > strokeMaxY) strokeMaxY = p.y
+    }
+
+    /**
      * Check if the in-progress stroke qualifies as a gesture.
      * Called during Onyx SDK move events with screen-space coordinates.
      * Detects vertical strokes (line-drag) and horizontal strokes (undo).
+     *
+     * xRange and yRange are read from the running bounding box — O(1) per call.
      */
     private fun checkGestures(screenX: Float, screenY: Float) {
         if (lineDragActive || diagramInsertActive || undoGestureReady || undoScrubActive) return
@@ -541,12 +587,10 @@ class HandwritingCanvasView @JvmOverloads constructor(
         // No gestures start inside diagram areas
         if (isInDiagramArea(currentStrokePoints.first().y)) return
 
-        val first = currentStrokePoints.first()
-        val last = currentStrokePoints.last()
-        val yDelta = last.y - first.y
+        val yDelta = currentStrokePoints.last().y - currentStrokePoints.first().y
         val absYDelta = kotlin.math.abs(yDelta)
-        val xRange = currentStrokePoints.maxOf { it.x } - currentStrokePoints.minOf { it.x }
-        val yRange = currentStrokePoints.maxOf { it.y } - currentStrokePoints.minOf { it.y }
+        val xRange = strokeMaxX - strokeMinX
+        val yRange = strokeMaxY - strokeMinY
 
         // Vertical stroke → line-drag or diagram insert
         if (absYDelta > LINE_DRAG_MIN_SPANS * LINE_SPACING) {
@@ -566,8 +610,9 @@ class HandwritingCanvasView @JvmOverloads constructor(
     }
 
     /**
-     * Fallback version for non-Onyx touch path. Also handles in-progress
-     * step updates for active gestures inline.
+     * Fallback version of [checkGestures] for the non-Onyx touch path.
+     * Also handles in-progress step updates for active gestures inline.
+     * Reads xRange/yRange from the running bounding box — same O(1) approach.
      */
     private fun checkGesturesFallback(screenX: Float, screenY: Float) {
         if (undoScrubActive) {
@@ -597,12 +642,10 @@ class HandwritingCanvasView @JvmOverloads constructor(
         // No gestures start inside diagram areas
         if (isInDiagramArea(currentStrokePoints.first().y)) return
 
-        val first = currentStrokePoints.first()
-        val last = currentStrokePoints.last()
-        val yDelta = last.y - first.y
+        val yDelta = currentStrokePoints.last().y - currentStrokePoints.first().y
         val absYDelta = kotlin.math.abs(yDelta)
-        val xRange = currentStrokePoints.maxOf { it.x } - currentStrokePoints.minOf { it.x }
-        val yRange = currentStrokePoints.maxOf { it.y } - currentStrokePoints.minOf { it.y }
+        val xRange = strokeMaxX - strokeMinX
+        val yRange = strokeMaxY - strokeMinY
 
         // Vertical stroke → line-drag or diagram insert
         if (absYDelta > LINE_DRAG_MIN_SPANS * LINE_SPACING) {
