@@ -94,6 +94,59 @@ class ScratchOutDetectionTest {
         assertTrue(ScratchOutDetection.detect(xs, yRange = totalXTravel * ScratchOutDetection.MAX_Y_DRIFT - 1f, lineSpacing = LS))
     }
 
+    // ── Bug 1: closed-loop strokes must not trigger scratch-out ──────────────
+    //
+    // When the user draws a shape (e.g. a rounded-rectangle outline) around existing
+    // handwritten letters, the shape snap may fail if the stroke is too wobbly.
+    // checkPostStrokeScratchOut() then runs.  A closed loop with multiple x-reversals
+    // satisfies all three scratch-out criteria (reversals ≥ 2, travel ≥ 177 px, low
+    // y-drift) and currently ERASES the letters inside — a false positive.
+    //
+    // The fix: ScratchOutDetection.detect() must return false whenever the stroke is
+    // a closed loop (stroke start ≈ stroke end relative to its own diagonal).
+
+    /**
+     * BUG 1 — CURRENTLY FAILS.
+     *
+     * A stroke whose x-coordinate series returns to the same value as it started
+     * (xs.first() == xs.last()) with multiple x-reversals is detected as scratch-out.
+     * This can happen when the user draws a bumpy oval around text:
+     *   — shape snap fails (stroke too irregular for any shape detector)
+     *   — scratch-out sees ≥ 2 reversals + ≥ 177 px travel + low y-drift → true
+     *   — interior letters are erased
+     *
+     * Correct behaviour: a closed loop is NEVER a scratch-out.
+     */
+    @Test fun closedLoop_multipleXReversals_notScratchOut() {
+        // xs traces a figure-8 / bumpy closed oval: 0 → 200 → 0 → 200 → 0
+        // reversals = 3, total x-travel = 800 px, yRange = 30 px → passes all three checks.
+        // But the stroke IS a closed loop — must never be treated as scratch-out.
+        val xs = floatArrayOf(0f, 200f, 0f, 200f, 0f)
+        val yRange = 30f
+        assertFalse(
+            "Closed loop must NOT trigger scratch-out (Bug 1: erases letters drawn inside a shape)",
+            ScratchOutDetection.detect(xs, yRange, LS, isClosedLoop = true)
+        )
+    }
+
+    /**
+     * BUG 1 variant: a rectangular outline with corner overshoots.
+     *
+     * Real freehand rectangles commonly overshoot corners: after going right the pen
+     * briefly continues then reverses, adding extra x-reversals.
+     * 300×100 px rectangle, 2 corner overshoots → 2 reversals, total x-travel = 620 px,
+     * yRange = 100 px → 100 < 0.4×620 = 248 — passes all scratch-out checks.
+     * But the stroke is closed, so it must not trigger scratch-out.
+     */
+    @Test fun closedRectangleWithCornerOvershoots_notScratchOut() {
+        val xs = floatArrayOf(0f, 310f, 300f, -10f, 0f, 0f)
+        val yRange = 100f
+        assertFalse(
+            "Rectangular closed stroke with overshoots must NOT trigger scratch-out (Bug 1)",
+            ScratchOutDetection.detect(xs, yRange, LS, isClosedLoop = true)
+        )
+    }
+
     // ── Connected cursive false positives ─────────────────────────────────────
     //
     // A connected cursive word is a single stroke that advances left-to-right,

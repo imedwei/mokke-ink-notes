@@ -7,5 +7,7 @@ data class InkStroke(
     val points: List<StrokePoint>,
     val strokeWidth: Float = 3f,
     val startTime: Long = points.firstOrNull()?.timestamp ?: 0L,
-    val endTime: Long = points.lastOrNull()?.timestamp ?: 0L
+    val endTime: Long = points.lastOrNull()?.timestamp ?: 0L,
+    /** True for snapped geometric shapes (rectangle, triangle) rendered with sharp lineTo corners. */
+    val isGeometric: Boolean = false
 )

@@ -119,7 +119,11 @@ class WritingActivity : AppCompatActivity() {
             getCoordinator = { coordinator },
             getPendingRestore = { pendingRestore },
             clearPendingRestore = { pendingRestore = null },
-            onClosed = { recognizedTextView.onLogoTap = { showMenu() } }
+            onClosed = {
+                recognizedTextView.onLogoTap = { showMenu() }
+                recognizedTextView.onUndoTap = { coordinator?.undo() }
+                recognizedTextView.onRedoTap = { coordinator?.redo() }
+            }
         )
 
         // Migrate old single-file storage if needed, then determine current document
@@ -136,6 +140,8 @@ class WritingActivity : AppCompatActivity() {
 
         // Tap "I" logo to open menu
         recognizedTextView.onLogoTap = { showMenu() }
+        recognizedTextView.onUndoTap = { coordinator?.undo() }
+        recognizedTextView.onRedoTap = { coordinator?.redo() }
 
         // Pick the best available recognizer synchronously (initialized later in coroutine)
         recognizer = TextRecognizerFactory.create(this)

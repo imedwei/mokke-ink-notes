@@ -5,7 +5,9 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.PointF
 import android.graphics.Rect
+import android.graphics.RectF
 import android.graphics.Typeface
 import android.util.AttributeSet
 import android.util.Log
@@ -19,10 +21,16 @@ import com.onyx.android.sdk.pen.RawInputCallback
 import com.onyx.android.sdk.pen.TouchHelper
 import com.onyx.android.sdk.pen.data.TouchPointList
 import com.writer.model.DiagramArea
+import com.writer.model.DiagramNode
+import com.writer.model.DocumentModel
 import com.writer.model.InkStroke
 import com.writer.model.StrokePoint
+import com.writer.model.StrokeType
 import com.writer.model.minY
 import com.writer.model.maxY
+import kotlin.math.cos
+import kotlin.math.hypot
+import kotlin.math.sin
 
 /**
  * Primary ink input surface. Uses Onyx Pen SDK for low-latency
@@ -63,6 +71,11 @@ class HandwritingCanvasView @JvmOverloads constructor(
         private const val SCRIBBLE_MIN_COMPLEXITY = 3.0f
         // Diagram insert: minimum height in lines
         private const val DIAGRAM_MIN_HEIGHT = 2
+        // Arrow dwell detection: radius and time for start/end dwell
+        private const val ARROW_DWELL_RADIUS_PX = 15f   // ~8 dp
+        private const val ARROW_DWELL_MS = 300L
+        // Magnetic snap: max distance in line-spacings to snap arrow to node
+        private const val MAGNET_THRESHOLD_SPANS = 1.5f
     }
 
     private val completedStrokes = mutableListOf<InkStroke>()
@@ -92,6 +105,24 @@ class HandwritingCanvasView @JvmOverloads constructor(
     /** Diagram areas in the current document. */
     var diagramAreas: List<DiagramArea> = emptyList()
 
+    /** Document model reference for magnetic snap access. */
+    var documentModel: DocumentModel? = null
+
+    /** Arrow endpoint snap results for WritingCoordinator to read. */
+    var lastSnapFromNodeId: String? = null
+    var lastSnapToNodeId: String? = null
+
+    // Dwell indicator state (arrow start-dwell inside diagram areas)
+    private var dwellJob: Runnable? = null
+    private var dwellIndicatorShown = false
+    private var dwellDotCenter: PointF? = null
+
+    private val dwellDotPaint = Paint().apply {
+        color = Color.DKGRAY
+        style = Paint.Style.FILL
+        isAntiAlias = true
+    }
+
     /** When true, all pen input is blocked and annotations are rendered. */
     var tutorialMode = false
     var annotationStrokes: List<AnnotationStroke> = emptyList()
@@ -116,6 +147,9 @@ class HandwritingCanvasView @JvmOverloads constructor(
     var onUndoGestureStart: (() -> Unit)? = null
     var onUndoGestureStep: ((absoluteOffset: Int) -> Unit)? = null
     var onUndoGestureEnd: (() -> Unit)? = null
+
+    // Scratch-out callback (inside diagram areas: erase overlapping strokes)
+    var onScratchOut: ((left: Float, top: Float, right: Float, bottom: Float) -> Unit)? = null
 
     /** Scroll offset in document-space pixels. Increase to scroll content up. */
     var scrollOffsetY: Float = 0f
@@ -205,6 +239,8 @@ class HandwritingCanvasView @JvmOverloads constructor(
             undoGestureReady = false
             undoScrubActive = false
             initStrokeBounds(currentStrokePoints.last())
+            // Start arrow dwell detection only inside diagram areas
+            if (currentDiagramBounds != null) startDwellJob()
         }
 
         override fun onRawDrawingTouchPointMoveReceived(tp: TouchPoint) {
@@ -232,6 +268,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
         }
 
         override fun onEndRawDrawing(b: Boolean, tp: TouchPoint) {
+            cancelDwellJob()
             Log.d(TAG, "onEndRawDrawing: ${currentStrokePoints.size} points, lineDrag=$lineDragActive, diagramInsert=$diagramInsertActive, undoReady=$undoGestureReady, undoScrub=$undoScrubActive")
             if (lineDragActive || diagramInsertActive || undoScrubActive) {
                 // SDK fires this when disabled mid-stroke (buffer dump).
@@ -401,6 +438,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
                 undoGestureReady = false
                 undoScrubActive = false
                 initStrokeBounds(currentStrokePoints.last())
+                if (currentDiagramBounds != null) startDwellJob()
                 drawToSurface()
                 return true
             }
@@ -428,6 +466,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
                 return true
             }
             MotionEvent.ACTION_UP -> {
+                cancelDwellJob()
                 if (lineDragActive) {
                     endLineDrag()
                     return true
@@ -505,14 +544,52 @@ class HandwritingCanvasView @JvmOverloads constructor(
             currentStrokePoints.clear()
             currentPath.reset()
             currentDiagramBounds = null
+            dwellDotCenter = null
+            dwellIndicatorShown = false
             return
         }
-        val stroke = InkStroke(points = currentStrokePoints.toList())
-        completedStrokes.add(stroke)
-        onStrokeCompleted?.invoke(stroke)
-        currentStrokePoints.clear()
-        currentPath.reset()
-        currentDiagramBounds = null
+
+        if (currentDiagramBounds != null) {
+            // INSIDE DIAGRAM AREA: post-stroke shape-snap pipeline
+            val tailDwell = dwellIndicatorShown
+            dwellDotCenter = null
+            dwellIndicatorShown = false
+
+            // Shape snap before scratch-out: rectangles have X-reversals that
+            // would otherwise be consumed as scratch-out.
+            val snapData = checkShapeSnap(tailDwell)
+
+            // Only check scratch-out if no shape was snapped.
+            if (snapData == null && checkPostStrokeScratchOut()) {
+                currentDiagramBounds = null
+                return
+            }
+
+            val stroke = InkStroke(
+                points = currentStrokePoints.toList(),
+                isGeometric = snapData?.isGeometric ?: false,
+                strokeType = snapData?.strokeType ?: StrokeType.FREEHAND
+            )
+            completedStrokes.add(stroke)
+            onStrokeCompleted?.invoke(stroke)
+            currentStrokePoints.clear()
+            currentPath.reset()
+            currentDiagramBounds = null
+            if (snapData != null) {
+                // Flush SDK hardware overlay showing freehand stroke, redraw clean snapped shape
+                pauseRawDrawing()
+                drawToSurface()
+                resumeRawDrawing()
+            }
+        } else {
+            // OUTSIDE DIAGRAM AREA: master's original behavior
+            val stroke = InkStroke(points = currentStrokePoints.toList())
+            completedStrokes.add(stroke)
+            onStrokeCompleted?.invoke(stroke)
+            currentStrokePoints.clear()
+            currentPath.reset()
+            currentDiagramBounds = null
+        }
     }
 
     // --- Gesture detection ---
@@ -561,6 +638,227 @@ class HandwritingCanvasView @JvmOverloads constructor(
             Log.w(TAG, "Error restoring limit rect: ${e.message}")
         }
     }
+
+    // ── Diagram-area post-stroke detection ──────────────────────────────────
+
+    /** Result of shape snap: strokeType + isGeometric flag + optional magnetic connection IDs. */
+    private data class SnapData(
+        val strokeType: StrokeType,
+        val isGeometric: Boolean,
+        val fromNodeId: String? = null,
+        val toNodeId: String? = null
+    )
+
+    /**
+     * Attempt to snap the completed stroke to a known geometric shape.
+     * Only called for strokes inside diagram areas.
+     */
+    private fun checkShapeSnap(tailDwell: Boolean = false): SnapData? {
+        if (currentStrokePoints.size < 2) return null
+        val xs = FloatArray(currentStrokePoints.size) { currentStrokePoints[it].x }
+        val ys = FloatArray(currentStrokePoints.size) { currentStrokePoints[it].y }
+        val result = ShapeSnapDetection.detect(xs, ys, LINE_SPACING) ?: return null
+
+        val t = currentStrokePoints.first().timestamp
+        var strokeType = StrokeType.FREEHAND
+        var isGeometric = false
+        var fromNodeId: String? = null
+        var toNodeId: String? = null
+
+        val snappedPoints: List<StrokePoint> = when (result) {
+            is ShapeSnapDetection.SnapResult.Line -> {
+                val tipDwell = ArrowDwellDetection.hasDwellAtEnd(
+                    currentStrokePoints, result.x2, result.y2, ARROW_DWELL_RADIUS_PX, ARROW_DWELL_MS
+                )
+                strokeType = ArrowDwellDetection.classifyArrow(tipDwell, tailDwell)
+                isGeometric = true
+
+                var x1 = result.x1; var y1 = result.y1
+                var x2 = result.x2; var y2 = result.y2
+                if (strokeType != StrokeType.LINE) {
+                    val threshold = MAGNET_THRESHOLD_SPANS * LINE_SPACING
+                    val nodes = documentModel?.diagram?.nodes ?: emptyMap()
+                    val (snappedFrom, snappedTo, nodeIds) =
+                        DiagramNodeSnap.snapArrowEndpoints(x1, y1, x2, y2, nodes, threshold)
+                    x1 = snappedFrom.first; y1 = snappedFrom.second; fromNodeId = nodeIds.first
+                    x2 = snappedTo.first;   y2 = snappedTo.second;   toNodeId   = nodeIds.second
+                }
+                listOf(
+                    StrokePoint(x1, y1, 0f, t),
+                    StrokePoint(x2, y2, 0f, t)
+                )
+            }
+            is ShapeSnapDetection.SnapResult.Arrow -> return null
+            is ShapeSnapDetection.SnapResult.Ellipse -> {
+                strokeType = StrokeType.ELLIPSE
+                val n = 60
+                (0..n).map { i ->
+                    val angle = 2 * Math.PI * i / n
+                    StrokePoint(
+                        (result.cx + result.a * cos(angle)).toFloat(),
+                        (result.cy + result.b * sin(angle)).toFloat(),
+                        0f, t
+                    )
+                }
+            }
+            is ShapeSnapDetection.SnapResult.RoundedRectangle -> {
+                strokeType = StrokeType.ROUNDED_RECTANGLE
+                val r = result.cornerRadius.coerceAtMost(
+                    minOf(result.right - result.left, result.bottom - result.top) / 2f
+                )
+                val cl = result.left + r;  val cr = result.right - r
+                val ct = result.top + r;   val cb = result.bottom - r
+                val arcN = 8
+                val list = mutableListOf<StrokePoint>()
+                fun arc(cx: Float, cy: Float, startDeg: Double, endDeg: Double) {
+                    for (i in 0 until arcN) {
+                        val a = Math.toRadians(startDeg + (endDeg - startDeg) * i / arcN)
+                        list += StrokePoint((cx + r * cos(a)).toFloat(),
+                                            (cy + r * sin(a)).toFloat(), 0f, t)
+                    }
+                }
+                arc(cr, ct, -90.0,   0.0);  list += StrokePoint(result.right, cb, 0f, t)
+                arc(cr, cb,   0.0,  90.0);  list += StrokePoint(cl, result.bottom, 0f, t)
+                arc(cl, cb,  90.0, 180.0);  list += StrokePoint(result.left, ct, 0f, t)
+                arc(cl, ct, 180.0, 270.0);  list += StrokePoint(cr, result.top, 0f, t)
+                list
+            }
+            is ShapeSnapDetection.SnapResult.Rectangle -> {
+                strokeType = StrokeType.RECTANGLE
+                isGeometric = true
+                listOf(
+                    StrokePoint(result.left,  result.top,    0f, t),
+                    StrokePoint(result.right, result.top,    0f, t),
+                    StrokePoint(result.right, result.bottom, 0f, t),
+                    StrokePoint(result.left,  result.bottom, 0f, t),
+                    StrokePoint(result.left,  result.top,    0f, t),
+                )
+            }
+            is ShapeSnapDetection.SnapResult.Diamond -> {
+                strokeType = StrokeType.DIAMOND
+                isGeometric = true
+                val cx = (result.left + result.right) / 2f
+                val cy = (result.top + result.bottom) / 2f
+                listOf(
+                    StrokePoint(cx,           result.top,    0f, t),
+                    StrokePoint(result.right, cy,            0f, t),
+                    StrokePoint(cx,           result.bottom, 0f, t),
+                    StrokePoint(result.left,  cy,            0f, t),
+                    StrokePoint(cx,           result.top,    0f, t),
+                )
+            }
+            is ShapeSnapDetection.SnapResult.Triangle -> {
+                strokeType = StrokeType.TRIANGLE
+                isGeometric = true
+                listOf(
+                    StrokePoint(result.x1, result.y1, 0f, t),
+                    StrokePoint(result.x2, result.y2, 0f, t),
+                    StrokePoint(result.x3, result.y3, 0f, t),
+                    StrokePoint(result.x1, result.y1, 0f, t),
+                )
+            }
+        }
+        currentStrokePoints.clear()
+        currentStrokePoints.addAll(snappedPoints)
+        Log.i(TAG, "Shape snap: $result → $strokeType")
+
+        lastSnapFromNodeId = fromNodeId
+        lastSnapToNodeId = toNodeId
+        return SnapData(strokeType, isGeometric, fromNodeId, toNodeId)
+    }
+
+    /** Check if the completed stroke is a scratch-out erase gesture (inside diagram area). */
+    private fun checkPostStrokeScratchOut(): Boolean {
+        val diagonal = hypot(strokeMaxX - strokeMinX, strokeMaxY - strokeMinY)
+        val first = currentStrokePoints.first()
+        val last  = currentStrokePoints.last()
+        val closeDist = hypot(last.x - first.x, last.y - first.y)
+        val isClosedLoop = diagonal > 0f && closeDist < ShapeSnapDetection.CLOSE_FRACTION * diagonal
+
+        val xs = FloatArray(currentStrokePoints.size) { currentStrokePoints[it].x }
+        val yRange = strokeMaxY - strokeMinY
+        if (!ScratchOutDetection.detect(xs, yRange, LINE_SPACING, isClosedLoop)) return false
+
+        val left = strokeMinX; val top = strokeMinY
+        val right = strokeMaxX; val bottom = strokeMaxY
+
+        currentStrokePoints.clear()
+        currentPath.reset()
+
+        pauseRawDrawing()
+        onScratchOut?.invoke(left, top, right, bottom)
+        resumeRawDrawing()
+
+        Log.i(TAG, "Post-stroke scratch-out: region=[$left,$top,$right,$bottom]")
+        return true
+    }
+
+    // ── Dwell helpers ─────────────────────────────────────────────────────────
+
+    private fun startDwellJob() {
+        dwellIndicatorShown = false
+        dwellDotCenter = null
+        val job = Runnable {
+            val pts = currentStrokePoints
+            if (pts.isEmpty()) return@Runnable
+            val first = pts.first()
+            val last = pts.lastOrNull() ?: return@Runnable
+            val dx = last.x - first.x
+            val dy = last.y - first.y
+            if (dx * dx + dy * dy < ARROW_DWELL_RADIUS_PX * ARROW_DWELL_RADIUS_PX) {
+                dwellIndicatorShown = true
+                dwellDotCenter = PointF(first.x, first.y)
+                if (!useOnyxSdk) {
+                    drawToSurface()
+                }
+            }
+        }
+        dwellJob = job
+        handler.postDelayed(job, ARROW_DWELL_MS)
+    }
+
+    private fun cancelDwellJob() {
+        dwellJob?.let { handler.removeCallbacks(it) }
+        dwellJob = null
+    }
+
+    // ── Magnetic snap helpers ─────────────────────────────────────────────────
+
+    /** Distance from point ([px],[py]) to nearest point on [bounds] perimeter (0 if inside). */
+    private fun distToBbox(px: Float, py: Float, bounds: RectF): Float {
+        val cx = px.coerceIn(bounds.left, bounds.right)
+        val cy = py.coerceIn(bounds.top, bounds.bottom)
+        return hypot(px - cx, py - cy)
+    }
+
+    /** Nearest point on [node]'s perimeter to ([px],[py]). */
+    private fun nearestPerimeterPoint(px: Float, py: Float, node: DiagramNode): Pair<Float, Float> {
+        val b = node.bounds
+        if (node.shapeType == StrokeType.ELLIPSE) {
+            val cx = b.centerX(); val cy = b.centerY()
+            val ra = b.width() / 2f; val rb = b.height() / 2f
+            val dx = px - cx; val dy = py - cy
+            val len = hypot(dx, dy)
+            return if (len == 0f) Pair(cx + ra, cy)
+            else Pair(cx + ra * dx / len, cy + rb * dy / len)
+        }
+        val cx = px.coerceIn(b.left, b.right)
+        val cy = py.coerceIn(b.top, b.bottom)
+        if (cx != px || cy != py) return Pair(cx, cy)
+        val dLeft = px - b.left
+        val dRight = b.right - px
+        val dTop = py - b.top
+        val dBottom = b.bottom - py
+        val minD = minOf(dLeft, dRight, dTop, dBottom)
+        return when (minD) {
+            dLeft   -> Pair(b.left, py)
+            dRight  -> Pair(b.right, py)
+            dTop    -> Pair(px, b.top)
+            else    -> Pair(px, b.bottom)
+        }
+    }
+
+    // ── Running stroke bounding box ───────────────────────────────────────────
 
     /**
      * Initialise the running stroke bounding box from the first point of a new stroke.
@@ -982,6 +1280,11 @@ class HandwritingCanvasView @JvmOverloads constructor(
         // Draw current in-progress stroke (fallback only)
         if (!useOnyxSdk && currentStrokePoints.size > 1) {
             canvas.drawPath(currentPath, strokePaint)
+        }
+
+        // Draw dwell indicator dot (arrow start-dwell inside diagram areas)
+        dwellDotCenter?.let { dot ->
+            canvas.drawCircle(dot.x, dot.y, CanvasTheme.DEFAULT_STROKE_WIDTH * 3f, dwellDotPaint)
         }
 
         canvas.restore()

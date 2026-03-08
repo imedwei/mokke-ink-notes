@@ -43,12 +43,17 @@ object ScratchOutDetection {
     /**
      * Detect a scratch-out gesture.
      *
-     * @param xs          x-coordinates of all stroke points
-     * @param yRange      vertical bounding-box height: maxY − minY
-     * @param lineSpacing line spacing in pixels
+     * @param xs           x-coordinates of all stroke points
+     * @param yRange       vertical bounding-box height: maxY − minY
+     * @param lineSpacing  line spacing in pixels
+     * @param isClosedLoop true if the stroke is a closed loop (start ≈ end in 2D space).
+     *                     A closed loop is never a scratch-out — it is a shape drawn around
+     *                     existing content.  Callers should compute this from full (x,y)
+     *                     data before calling detect().
      * @return true if the stroke is a scratch-out gesture
      */
-    fun detect(xs: FloatArray, yRange: Float, lineSpacing: Float): Boolean {
+    fun detect(xs: FloatArray, yRange: Float, lineSpacing: Float, isClosedLoop: Boolean = false): Boolean {
+        if (isClosedLoop) return false
         if (xs.size < 4) return false
 
         var reversals = 0

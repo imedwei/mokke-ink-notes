@@ -57,15 +57,22 @@ object CanvasTheme {
         if (stroke.points.size < 2) return
         path.reset()
         path.moveTo(stroke.points[0].x, stroke.points[0].y)
-        for (i in 1 until stroke.points.size) {
-            val prev = stroke.points[i - 1]
-            val curr = stroke.points[i]
-            val midX = (prev.x + curr.x) / 2f
-            val midY = (prev.y + curr.y) / 2f
-            path.quadTo(prev.x, prev.y, midX, midY)
+        if (stroke.isGeometric) {
+            // Sharp corners: lineTo each point (rectangle, triangle).
+            for (i in 1 until stroke.points.size) {
+                path.lineTo(stroke.points[i].x, stroke.points[i].y)
+            }
+        } else {
+            // Smooth freehand rendering via quadratic bezier through midpoints.
+            for (i in 1 until stroke.points.size) {
+                val prev = stroke.points[i - 1]
+                val curr = stroke.points[i]
+                val midX = (prev.x + curr.x) / 2f
+                val midY = (prev.y + curr.y) / 2f
+                path.quadTo(prev.x, prev.y, midX, midY)
+            }
+            path.lineTo(stroke.points.last().x, stroke.points.last().y)
         }
-        val last = stroke.points.last()
-        path.lineTo(last.x, last.y)
         canvas.drawPath(path, paint)
     }
 }

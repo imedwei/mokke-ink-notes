@@ -41,4 +41,12 @@ object LineDragDetection {
         if (xRange >= absYDelta * MAX_DRIFT) return null
         return (yDelta / lineSpacing).roundToInt()
     }
+
+    /**
+     * Returns true if the stroke would snap to a straight line via [ShapeSnapDetection],
+     * meaning it should NOT be consumed as a line-drag gesture.
+     */
+    fun isSnappableLine(xs: FloatArray, ys: FloatArray, lineSpacing: Float): Boolean {
+        return ShapeSnapDetection.detect(xs, ys, lineSpacing) is ShapeSnapDetection.SnapResult.Line
+    }
 }
