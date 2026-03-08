@@ -25,6 +25,7 @@ import com.writer.model.DocumentData
 import com.writer.storage.DocumentStorage
 import com.writer.view.HandwritingCanvasView
 import com.writer.view.RecognizedTextView
+import com.writer.view.ScreenMetrics
 import kotlinx.coroutines.launch
 
 class WritingActivity : AppCompatActivity() {
@@ -142,10 +143,24 @@ class WritingActivity : AppCompatActivity() {
         // Create coordinator early so cached text can be displayed before model loads
         startCoordinator()
 
-        // Capture default heights after initial layout, then wire up the gutter
+        // Capture default heights after initial layout, then wire up the gutter.
+        // Override the XML weight-based split with an adaptive calculation so that
+        // all supported screen sizes get a proportional canvas/text split.
         recognizedTextView.post {
-            defaultTextHeight = recognizedTextView.height
-            defaultCanvasHeight = inkCanvas.height
+            val totalHeight = recognizedTextView.height + inkCanvas.height
+            defaultCanvasHeight = ScreenMetrics.computeDefaultCanvasHeight(totalHeight)
+            defaultTextHeight = totalHeight - defaultCanvasHeight
+
+            val textParams = recognizedTextView.layoutParams as LinearLayout.LayoutParams
+            textParams.height = defaultTextHeight
+            textParams.weight = 0f
+            recognizedTextView.layoutParams = textParams
+
+            val canvasParams = inkCanvas.layoutParams as LinearLayout.LayoutParams
+            canvasParams.height = defaultCanvasHeight
+            canvasParams.weight = 0f
+            inkCanvas.layoutParams = canvasParams
+
             setupTextGutter()
 
             // Restore cached text and scroll position immediately (no recognizer needed)

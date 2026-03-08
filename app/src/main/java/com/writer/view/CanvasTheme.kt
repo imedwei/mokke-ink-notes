@@ -11,7 +11,7 @@ import com.writer.model.InkStroke
  * HandwritingCanvasView and HandwritingNameInput.
  */
 object CanvasTheme {
-    const val DEFAULT_STROKE_WIDTH = 5f
+    val DEFAULT_STROKE_WIDTH get() = ScreenMetrics.strokeWidth
     val LINE_COLOR: Int = Color.parseColor("#AAAAAA")
     val GUTTER_FILL_COLOR: Int = Color.parseColor("#DDDDDD")
 
