@@ -25,7 +25,7 @@ The app is organized into four layers:
 │  ParagraphBuilder · UndoManager · TutorialManager   │
 ├─────────────────────────────────────────────────────┤
 │              Recognition & View Layer                │
-│  HandwritingRecognizer · LineSegmenter              │
+│  GoogleMLKitTextRecognizer · LineSegmenter              │
 │  StrokeClassifier · ModelManager                    │
 │  HandwritingCanvasView · RecognizedTextView         │
 ├─────────────────────────────────────────────────────┤
@@ -51,7 +51,7 @@ com.writer
 │
 ├── recognition/
 │   ├── ModelManager.kt         — downloads/caches ML Kit language models
-│   ├── HandwritingRecognizer.kt — wraps ML Kit, recognizes InkLine → String
+│   ├── GoogleMLKitTextRecognizer.kt — wraps ML Kit, recognizes InkLine → text
 │   ├── LineSegmenter.kt        — maps strokes to line indices, builds InkLines
 │   └── StrokeClassifier.kt     — detects list-marker and underline (heading) strokes
 │
@@ -180,7 +180,7 @@ Detected *after* stroke completion (in `WritingCoordinator`, before adding to `D
 ## Recognition Pipeline
 
 ### Model Lifecycle
-`ModelManager` uses `RemoteModelManager` (ML Kit) to download language models on demand. `HandwritingRecognizer` holds one `DigitalInkRecognizer` instance per language session and reuses it across all recognition calls.
+`ModelManager` uses `RemoteModelManager` (ML Kit) to download language models on demand. `GoogleMLKitTextRecognizer` holds one `DigitalInkRecognizer` instance per language session and reuses it across all recognition calls.
 
 ### Eager Recognition
 Recognition is triggered eagerly — not on demand. The coordinator uses these triggers:

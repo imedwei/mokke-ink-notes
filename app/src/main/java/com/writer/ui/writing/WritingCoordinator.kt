@@ -215,12 +215,6 @@ class WritingCoordinator(
         val idsToRemove = overlapping.map { it.strokeId }.toSet()
         documentModel.activeStrokes.removeAll { it.strokeId in idsToRemove }
 
-        // Remove from diagram model
-        for (id in idsToRemove) {
-            documentModel.diagram.nodes.remove(id)
-            documentModel.diagram.edges.remove(id)
-        }
-
         inkCanvas.removeStrokes(idsToRemove)
         inkCanvas.drawToSurface()
 
