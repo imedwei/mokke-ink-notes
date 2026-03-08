@@ -7,5 +7,6 @@ data class DocumentData(
     val everHiddenLines: Set<Int>,
     val highestLineIndex: Int,
     val currentLineIndex: Int,
-    val userRenamed: Boolean = false
+    val userRenamed: Boolean = false,
+    val diagramAreas: List<DiagramArea> = emptyList()
 )

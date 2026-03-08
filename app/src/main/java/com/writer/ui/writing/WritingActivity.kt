@@ -181,6 +181,8 @@ class WritingActivity : AppCompatActivity() {
         Log.i(TAG, "Restoring ${data.strokes.size} strokes, scroll=${data.scrollOffsetY}")
 
         documentModel.activeStrokes.addAll(data.strokes)
+        documentModel.diagramAreas.addAll(data.diagramAreas)
+        inkCanvas.diagramAreas = data.diagramAreas
         inkCanvas.loadStrokes(data.strokes)
         inkCanvas.scrollOffsetY = data.scrollOffsetY
         inkCanvas.drawToSurface()

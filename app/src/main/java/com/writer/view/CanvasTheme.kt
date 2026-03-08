@@ -41,6 +41,14 @@ object CanvasTheme {
         style = Paint.Style.STROKE
     }
 
+    val DIAGRAM_BORDER_COLOR: Int = Color.parseColor("#555555")
+
+    fun newDiagramBorderPaint() = Paint().apply {
+        color = DIAGRAM_BORDER_COLOR
+        strokeWidth = 3f
+        style = Paint.Style.STROKE
+    }
+
     /**
      * Draw a stroke with quadratic-bezier smoothing.
      * [path] is a reusable Path to avoid allocation; it will be reset.

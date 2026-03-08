@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.util.Log
 import androidx.documentfile.provider.DocumentFile
+import com.writer.model.DiagramArea
 import com.writer.model.DocumentData
 import com.writer.model.InkStroke
 import com.writer.model.StrokePoint
@@ -215,6 +216,16 @@ object DocumentStorage {
         }
         json.put("strokes", strokesArr)
 
+        val diagramArr = JSONArray()
+        for (area in data.diagramAreas) {
+            val areaObj = JSONObject()
+            areaObj.put("id", area.id)
+            areaObj.put("startLineIndex", area.startLineIndex)
+            areaObj.put("heightInLines", area.heightInLines)
+            diagramArr.put(areaObj)
+        }
+        json.put("diagramAreas", diagramArr)
+
         return json
     }
 
@@ -274,6 +285,21 @@ object DocumentStorage {
             }
         }
 
+        val diagramAreas = mutableListOf<DiagramArea>()
+        val diagramArr = json.optJSONArray("diagramAreas")
+        if (diagramArr != null) {
+            for (i in 0 until diagramArr.length()) {
+                val areaObj = diagramArr.getJSONObject(i)
+                diagramAreas.add(
+                    DiagramArea(
+                        id = areaObj.getString("id"),
+                        startLineIndex = areaObj.getInt("startLineIndex"),
+                        heightInLines = areaObj.getInt("heightInLines")
+                    )
+                )
+            }
+        }
+
         return DocumentData(
             strokes = strokes,
             scrollOffsetY = scrollOffsetY,
@@ -281,7 +307,8 @@ object DocumentStorage {
             everHiddenLines = everHiddenLines,
             highestLineIndex = highestLineIndex,
             currentLineIndex = currentLineIndex,
-            userRenamed = userRenamed
+            userRenamed = userRenamed,
+            diagramAreas = diagramAreas
         )
     }
 }

@@ -1,6 +1,7 @@
 package com.writer.ui.writing
 
 import android.util.Log
+import com.writer.model.DiagramArea
 import com.writer.model.DocumentModel
 import com.writer.model.InkStroke
 import com.writer.model.minX
@@ -57,6 +58,10 @@ class GestureHandler(
      * (caller should not add the stroke to the document model).
      */
     fun tryHandle(stroke: InkStroke): Boolean {
+        // No gestures inside diagram areas
+        val strokeLine = lineSegmenter.getStrokeLineIndex(stroke)
+        if (documentModel.diagramAreas.any { it.containsLine(strokeLine) }) return false
+
         if (isStrikethroughGesture(stroke)) {
             handleStrikethrough(stroke)
             return true

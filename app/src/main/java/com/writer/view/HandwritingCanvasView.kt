@@ -18,6 +18,7 @@ import com.onyx.android.sdk.data.note.TouchPoint
 import com.onyx.android.sdk.pen.RawInputCallback
 import com.onyx.android.sdk.pen.TouchHelper
 import com.onyx.android.sdk.pen.data.TouchPointList
+import com.writer.model.DiagramArea
 import com.writer.model.InkStroke
 import com.writer.model.StrokePoint
 import com.writer.model.minY
@@ -56,6 +57,12 @@ class HandwritingCanvasView @JvmOverloads constructor(
         private const val UNDO_VERTICAL_ACTIVATION = 0.75f
         // Undo scrub: vertical pixels per undo/redo step
         private const val UNDO_STEP_SIZE = 20f
+        // Diagram insert: fraction of stroke to analyze for scribble detection
+        private const val SCRIBBLE_SEGMENT_FRACTION = 0.4f
+        // Diagram insert: path-length / displacement ratio threshold for scribble
+        private const val SCRIBBLE_MIN_COMPLEXITY = 3.0f
+        // Diagram insert: minimum height in lines
+        private const val DIAGRAM_MIN_HEIGHT = 2
     }
 
     private val completedStrokes = mutableListOf<InkStroke>()
@@ -68,6 +75,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
     private val linePaint = CanvasTheme.newLinePaint()
     private val gutterPaint = CanvasTheme.newGutterFillPaint()
     private val gutterLinePaint = CanvasTheme.newGutterLinePaint()
+    private val diagramBorderPaint = CanvasTheme.newDiagramBorderPaint()
 
     private val annotationPaint = Paint().apply {
         style = Paint.Style.STROKE
@@ -80,6 +88,9 @@ class HandwritingCanvasView @JvmOverloads constructor(
         isAntiAlias = true
         typeface = Typeface.DEFAULT_BOLD
     }
+
+    /** Diagram areas in the current document. */
+    var diagramAreas: List<DiagramArea> = emptyList()
 
     /** When true, all pen input is blocked and annotations are rendered. */
     var tutorialMode = false
@@ -95,6 +106,11 @@ class HandwritingCanvasView @JvmOverloads constructor(
     var onLineDragStart: ((anchorLine: Int) -> Unit)? = null
     var onLineDragStep: ((shiftLines: Int) -> Unit)? = null
     var onLineDragEnd: (() -> Unit)? = null
+
+    // Diagram insert gesture callbacks
+    var onDiagramInsertStart: ((anchorLine: Int) -> Unit)? = null
+    var onDiagramInsertStep: ((heightInLines: Int) -> Unit)? = null
+    var onDiagramInsertEnd: (() -> Unit)? = null
 
     // Undo scrub callbacks (horizontal stroke then vertical movement)
     var onUndoGestureStart: (() -> Unit)? = null
@@ -116,12 +132,22 @@ class HandwritingCanvasView @JvmOverloads constructor(
     private var lineDragStartScreenY = 0f
     private var lineDragLastShift = 0
 
+    // Diagram insert gesture state
+    private var diagramInsertActive = false
+    private var diagramInsertStartScreenY = 0f
+    private var diagramInsertLastHeight = 0
+
     // Undo gesture state: horizontal stroke → vertical scrub
     private var undoGestureReady = false
     private var undoReadyScreenY = 0f
     private var undoScrubActive = false
     private var undoScrubTriggerY = 0f
     private var undoScrubLastStep = 0
+
+    // Diagram drawing bounds: when stroke starts in a diagram area, Y is clamped to these bounds
+    private var currentDiagramBounds: Pair<Float, Float>? = null // (topY, bottomY) in doc space
+    // Whether we've temporarily changed the Onyx SDK limit rect for a diagram stroke
+    private var diagramLimitActive = false
 
     private val idleRunnable = Runnable { onIdleTimeout?.invoke() }
 
@@ -137,19 +163,33 @@ class HandwritingCanvasView @JvmOverloads constructor(
         override fun onBeginRawDrawing(b: Boolean, tp: TouchPoint) {
             handler.removeCallbacks(idleRunnable)
             currentStrokePoints.clear()
-            currentStrokePoints.add(tp.toDocStrokePoint())
+            val docPt = tp.toDocStrokePoint()
+            currentDiagramBounds = getDiagramBounds(docPt.y)
+            if (currentDiagramBounds != null) {
+                val (topY, bottomY) = currentDiagramBounds!!
+                setDiagramLimitRect(topY, bottomY)
+            } else if (diagramLimitActive) {
+                // Safety: previous diagram limit wasn't cleaned up
+                restoreLimitRect()
+            }
+            currentStrokePoints.add(docPt)
             lineDragActive = false
+            diagramInsertActive = false
             undoGestureReady = false
             undoScrubActive = false
         }
 
         override fun onRawDrawingTouchPointMoveReceived(tp: TouchPoint) {
-            if (lineDragActive || undoScrubActive) {
+            if (lineDragActive || diagramInsertActive || undoScrubActive) {
                 // SDK buffer dump after we disabled it — ignore.
                 // Real movement comes via onTouchEvent now.
                 return
             }
-            currentStrokePoints.add(tp.toDocStrokePoint())
+            val docPt = tp.toDocStrokePoint()
+            currentDiagramBounds?.let { (topY, bottomY) ->
+                if (docPt.y < topY || docPt.y > bottomY) return
+            }
+            currentStrokePoints.add(docPt)
             if (undoGestureReady) {
                 // Horizontal threshold met — check for vertical activation
                 processUndoReadyMove(tp.y)
@@ -163,8 +203,8 @@ class HandwritingCanvasView @JvmOverloads constructor(
         }
 
         override fun onEndRawDrawing(b: Boolean, tp: TouchPoint) {
-            Log.d(TAG, "onEndRawDrawing: ${currentStrokePoints.size} points, lineDrag=$lineDragActive, undoReady=$undoGestureReady, undoScrub=$undoScrubActive")
-            if (lineDragActive || undoScrubActive) {
+            Log.d(TAG, "onEndRawDrawing: ${currentStrokePoints.size} points, lineDrag=$lineDragActive, diagramInsert=$diagramInsertActive, undoReady=$undoGestureReady, undoScrub=$undoScrubActive")
+            if (lineDragActive || diagramInsertActive || undoScrubActive) {
                 // SDK fires this when disabled mid-stroke (buffer dump).
                 // Ignore it — the real pen-up comes via onTouchEvent.
                 Log.d(TAG, "Ignoring SDK onEndRawDrawing during interactive gesture")
@@ -174,8 +214,22 @@ class HandwritingCanvasView @JvmOverloads constructor(
             // horizontal stroke without going vertical — treat as normal stroke
             // (e.g. strikethrough).
             undoGestureReady = false
-            currentStrokePoints.add(tp.toDocStrokePoint())
+            val docPt = tp.toDocStrokePoint()
+            currentDiagramBounds?.let { (topY, bottomY) ->
+                if (docPt.y >= topY && docPt.y <= bottomY) {
+                    currentStrokePoints.add(docPt)
+                }
+            } ?: currentStrokePoints.add(docPt)
             finishStroke()
+            if (diagramLimitActive) {
+                // Pen exited diagram limit rect or lifted inside diagram.
+                // DON'T restore limit rect here — if pen exited, it's still
+                // physically down and restoring would let the SDK start a new
+                // stroke outside the diagram. Restore on true pen-up instead
+                // (via onTouchEvent ACTION_UP).
+                drawToSurface()
+                return
+            }
             handler.postDelayed(idleRunnable, IDLE_TIMEOUT_MS)
         }
 
@@ -278,6 +332,9 @@ class HandwritingCanvasView @JvmOverloads constructor(
         if (lineDragActive) {
             return handleLineDragTouch(event)
         }
+        if (diagramInsertActive) {
+            return handleDiagramInsertTouch(event)
+        }
         if (undoScrubActive) {
             return handleUndoTouch(event)
         }
@@ -286,7 +343,15 @@ class HandwritingCanvasView @JvmOverloads constructor(
         if (tutorialMode) return false
 
         // If using Onyx SDK, pen input in the canvas area is handled by SDK callbacks
-        if (useOnyxSdk) return true
+        if (useOnyxSdk) {
+            // Detect true pen-up to restore limit rect after diagram stroke
+            if (diagramLimitActive && event.action == MotionEvent.ACTION_UP) {
+                restoreLimitRect()
+                drawToSurface()
+                handler.postDelayed(idleRunnable, IDLE_TIMEOUT_MS)
+            }
+            return true
+        }
 
         // Stylus/mouse on canvas → writing (fallback for non-Boox devices)
         val x = event.x
@@ -299,27 +364,34 @@ class HandwritingCanvasView @JvmOverloads constructor(
                 handler.removeCallbacks(idleRunnable)
                 currentStrokePoints.clear()
                 currentPath.reset()
+                currentDiagramBounds = getDiagramBounds(y)
                 currentPath.moveTo(x, y)
                 currentStrokePoints.add(StrokePoint(x, y, pressure, timestamp))
                 lineDragActive = false
+                diagramInsertActive = false
                 undoGestureReady = false
                 undoScrubActive = false
                 drawToSurface()
                 return true
             }
             MotionEvent.ACTION_MOVE -> {
+                val bounds = currentDiagramBounds
                 for (i in 0 until event.historySize) {
                     val hx = event.getHistoricalX(i)
                     val hy = event.getHistoricalY(i) + scrollOffsetY
                     val hp = event.getHistoricalPressure(i)
                     val ht = event.getHistoricalEventTime(i)
-                    currentPath.lineTo(hx, hy)
-                    currentStrokePoints.add(StrokePoint(hx, hy, hp, ht))
+                    if (bounds == null || (hy >= bounds.first && hy <= bounds.second)) {
+                        currentPath.lineTo(hx, hy)
+                        currentStrokePoints.add(StrokePoint(hx, hy, hp, ht))
+                    }
                 }
-                currentPath.lineTo(x, y)
-                currentStrokePoints.add(StrokePoint(x, y, pressure, timestamp))
+                if (bounds == null || (y >= bounds.first && y <= bounds.second)) {
+                    currentPath.lineTo(x, y)
+                    currentStrokePoints.add(StrokePoint(x, y, pressure, timestamp))
+                }
                 checkGesturesFallback(event.x, event.y)
-                if (lineDragActive || undoScrubActive) return true
+                if (lineDragActive || diagramInsertActive || undoScrubActive) return true
                 drawToSurface()
                 return true
             }
@@ -328,14 +400,21 @@ class HandwritingCanvasView @JvmOverloads constructor(
                     endLineDrag()
                     return true
                 }
+                if (diagramInsertActive) {
+                    endDiagramInsert()
+                    return true
+                }
                 if (undoScrubActive) {
                     endUndoGesture()
                     return true
                 }
                 // If undoGestureReady but not active, treat as normal stroke
                 undoGestureReady = false
-                currentPath.lineTo(x, y)
-                currentStrokePoints.add(StrokePoint(x, y, pressure, timestamp))
+                val upBounds = currentDiagramBounds
+                if (upBounds == null || (y >= upBounds.first && y <= upBounds.second)) {
+                    currentPath.lineTo(x, y)
+                    currentStrokePoints.add(StrokePoint(x, y, pressure, timestamp))
+                }
                 finishStroke()
                 handler.postDelayed(idleRunnable, IDLE_TIMEOUT_MS)
                 drawToSurface()
@@ -393,6 +472,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
         if (currentStrokePoints.size < 2) {
             currentStrokePoints.clear()
             currentPath.reset()
+            currentDiagramBounds = null
             return
         }
         val stroke = InkStroke(points = currentStrokePoints.toList())
@@ -400,9 +480,55 @@ class HandwritingCanvasView @JvmOverloads constructor(
         onStrokeCompleted?.invoke(stroke)
         currentStrokePoints.clear()
         currentPath.reset()
+        currentDiagramBounds = null
     }
 
     // --- Gesture detection ---
+
+    /** Check if a document-space Y coordinate falls inside a diagram area. */
+    private fun isInDiagramArea(docY: Float): Boolean {
+        val lineIdx = ((docY - TOP_MARGIN) / LINE_SPACING).toInt().coerceAtLeast(0)
+        return diagramAreas.any { it.containsLine(lineIdx) }
+    }
+
+    /** Get the Y-bounds (topY, bottomY) of the diagram area containing [docY], or null. */
+    private fun getDiagramBounds(docY: Float): Pair<Float, Float>? {
+        val lineIdx = ((docY - TOP_MARGIN) / LINE_SPACING).toInt().coerceAtLeast(0)
+        val area = diagramAreas.find { it.containsLine(lineIdx) } ?: return null
+        val topY = TOP_MARGIN + area.startLineIndex * LINE_SPACING
+        val bottomY = TOP_MARGIN + (area.startLineIndex + area.heightInLines) * LINE_SPACING
+        return Pair(topY, bottomY)
+    }
+
+    /** Temporarily constrain Onyx SDK drawing area to the diagram bounds (screen coords). */
+    private fun setDiagramLimitRect(topY: Float, bottomY: Float) {
+        if (!useOnyxSdk) return
+        try {
+            val limit = Rect()
+            limit.left = 0
+            limit.right = (width - gutterWidth(width)).toInt()
+            limit.top = (topY - scrollOffsetY).toInt().coerceAtLeast(0)
+            limit.bottom = (bottomY - scrollOffsetY).toInt().coerceAtMost(height)
+            touchHelper?.setLimitRect(limit, emptyList())
+            diagramLimitActive = true
+        } catch (e: Exception) {
+            Log.w(TAG, "Error setting diagram limit rect: ${e.message}")
+        }
+    }
+
+    /** Restore Onyx SDK drawing area to the full canvas minus gutter. */
+    private fun restoreLimitRect() {
+        if (!diagramLimitActive || !useOnyxSdk) return
+        try {
+            val limit = Rect()
+            getLocalVisibleRect(limit)
+            limit.right = (limit.right - gutterWidth(width)).toInt()
+            touchHelper?.setLimitRect(limit, emptyList())
+            diagramLimitActive = false
+        } catch (e: Exception) {
+            Log.w(TAG, "Error restoring limit rect: ${e.message}")
+        }
+    }
 
     /**
      * Check if the in-progress stroke qualifies as a gesture.
@@ -410,8 +536,10 @@ class HandwritingCanvasView @JvmOverloads constructor(
      * Detects vertical strokes (line-drag) and horizontal strokes (undo).
      */
     private fun checkGestures(screenX: Float, screenY: Float) {
-        if (lineDragActive || undoGestureReady || undoScrubActive) return
+        if (lineDragActive || diagramInsertActive || undoGestureReady || undoScrubActive) return
         if (currentStrokePoints.size < 3) return
+        // No gestures start inside diagram areas
+        if (isInDiagramArea(currentStrokePoints.first().y)) return
 
         val first = currentStrokePoints.first()
         val last = currentStrokePoints.last()
@@ -420,9 +548,14 @@ class HandwritingCanvasView @JvmOverloads constructor(
         val xRange = currentStrokePoints.maxOf { it.x } - currentStrokePoints.minOf { it.x }
         val yRange = currentStrokePoints.maxOf { it.y } - currentStrokePoints.minOf { it.y }
 
-        // Vertical stroke → line-drag
-        if (absYDelta > LINE_DRAG_MIN_SPANS * LINE_SPACING && xRange < absYDelta * LINE_DRAG_MAX_DRIFT) {
-            activateLineDrag(screenX, screenY)
+        // Vertical stroke → line-drag or diagram insert
+        if (absYDelta > LINE_DRAG_MIN_SPANS * LINE_SPACING) {
+            if (yDelta > 0 && isScribbleStart()) {
+                // Scribble then downward → diagram insert
+                activateDiagramInsert(screenX, screenY)
+            } else if (xRange < absYDelta * LINE_DRAG_MAX_DRIFT) {
+                activateLineDrag(screenX, screenY)
+            }
             return
         }
 
@@ -451,12 +584,18 @@ class HandwritingCanvasView @JvmOverloads constructor(
             processUndoReadyMove(screenY)
             return
         }
+        if (diagramInsertActive) {
+            processDiagramInsertMove(screenY)
+            return
+        }
         if (lineDragActive) {
             // Already in line-drag — process vertical movement
             processLineDragMove(screenY)
             return
         }
         if (currentStrokePoints.size < 3) return
+        // No gestures start inside diagram areas
+        if (isInDiagramArea(currentStrokePoints.first().y)) return
 
         val first = currentStrokePoints.first()
         val last = currentStrokePoints.last()
@@ -465,9 +604,13 @@ class HandwritingCanvasView @JvmOverloads constructor(
         val xRange = currentStrokePoints.maxOf { it.x } - currentStrokePoints.minOf { it.x }
         val yRange = currentStrokePoints.maxOf { it.y } - currentStrokePoints.minOf { it.y }
 
-        // Vertical stroke → line-drag
-        if (absYDelta > LINE_DRAG_MIN_SPANS * LINE_SPACING && xRange < absYDelta * LINE_DRAG_MAX_DRIFT) {
-            activateLineDrag(screenX, screenY)
+        // Vertical stroke → line-drag or diagram insert
+        if (absYDelta > LINE_DRAG_MIN_SPANS * LINE_SPACING) {
+            if (yDelta > 0 && isScribbleStart()) {
+                activateDiagramInsert(screenX, screenY)
+            } else if (xRange < absYDelta * LINE_DRAG_MAX_DRIFT) {
+                activateLineDrag(screenX, screenY)
+            }
             return
         }
 
@@ -539,6 +682,89 @@ class HandwritingCanvasView @JvmOverloads constructor(
         onLineDragEnd?.invoke()
         finishInteractiveGesture()
         Log.i(TAG, "Line-drag ended")
+    }
+
+    // --- Diagram insert gesture (scribble → downward drag) ---
+
+    /** Check if the first segment of the stroke is a scribble (high path complexity). */
+    private fun isScribbleStart(): Boolean {
+        val points = currentStrokePoints
+        if (points.size < 10) return false
+
+        val segmentEnd = (points.size * SCRIBBLE_SEGMENT_FRACTION).toInt().coerceAtLeast(5)
+        val segment = points.subList(0, segmentEnd)
+
+        var pathLen = 0f
+        for (i in 1 until segment.size) {
+            val dx = segment[i].x - segment[i - 1].x
+            val dy = segment[i].y - segment[i - 1].y
+            pathLen += kotlin.math.sqrt(dx * dx + dy * dy)
+        }
+
+        val dx = segment.last().x - segment.first().x
+        val dy = segment.last().y - segment.first().y
+        val displacement = kotlin.math.sqrt(dx * dx + dy * dy)
+        if (displacement < 1f) return true
+
+        return pathLen / displacement > SCRIBBLE_MIN_COMPLEXITY
+    }
+
+    private fun activateDiagramInsert(screenX: Float, screenY: Float) {
+        diagramInsertActive = true
+
+        val anchorDocY = currentStrokePoints.first().y
+        val anchorLine = ((anchorDocY - TOP_MARGIN) / LINE_SPACING).toInt().coerceAtLeast(0)
+
+        diagramInsertStartScreenY = TOP_MARGIN + anchorLine * LINE_SPACING - scrollOffsetY
+        diagramInsertLastHeight = 0
+
+        currentStrokePoints.clear()
+        currentPath.reset()
+
+        if (useOnyxSdk) {
+            try {
+                touchHelper?.setRawDrawingEnabled(false)
+            } catch (e: Exception) {
+                Log.w(TAG, "Error disabling SDK for diagram insert: ${e.message}")
+            }
+        }
+
+        onDiagramInsertStart?.invoke(anchorLine)
+        Log.i(TAG, "Diagram insert activated: anchorLine=$anchorLine")
+    }
+
+    private fun handleDiagramInsertTouch(event: MotionEvent): Boolean {
+        when (event.action) {
+            MotionEvent.ACTION_MOVE -> {
+                processDiagramInsertMove(event.y)
+                return true
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                endDiagramInsert()
+                return true
+            }
+        }
+        return true
+    }
+
+    private fun processDiagramInsertMove(screenY: Float) {
+        val delta = screenY - diagramInsertStartScreenY
+        val heightInLines = kotlin.math.floor(delta / LINE_SPACING).toInt()
+            .coerceAtLeast(DIAGRAM_MIN_HEIGHT)
+        if (heightInLines != diagramInsertLastHeight) {
+            diagramInsertLastHeight = heightInLines
+            onDiagramInsertStep?.invoke(heightInLines)
+        }
+    }
+
+    private fun endDiagramInsert() {
+        diagramInsertActive = false
+        diagramInsertLastHeight = 0
+        currentStrokePoints.clear()
+        currentPath.reset()
+        onDiagramInsertEnd?.invoke()
+        finishInteractiveGesture()
+        Log.i(TAG, "Diagram insert ended")
     }
 
     // --- Undo gesture (horizontal stroke → vertical scrub) ---
@@ -641,11 +867,19 @@ class HandwritingCanvasView @JvmOverloads constructor(
         canvas.save()
         canvas.translate(0f, -scrollOffsetY)
 
-        // Draw ruled lines
+        // Draw ruled lines (skip interior of diagram areas, darken borders)
         val maxDocY = scrollOffsetY + height + LINE_SPACING
         var lineY = TOP_MARGIN + LINE_SPACING
         while (lineY < maxDocY) {
-            canvas.drawLine(0f, lineY, gutterLeft, lineY, linePaint)
+            val lineIdx = ((lineY - TOP_MARGIN) / LINE_SPACING).toInt()
+            val isTopBorder = diagramAreas.any { lineIdx == it.startLineIndex }
+            val isBottomBorder = diagramAreas.any { lineIdx == it.endLineIndex + 1 }
+            val isInterior = diagramAreas.any { lineIdx > it.startLineIndex && lineIdx <= it.endLineIndex }
+            if (isTopBorder || isBottomBorder) {
+                canvas.drawLine(0f, lineY, gutterLeft, lineY, diagramBorderPaint)
+            } else if (!isInterior) {
+                canvas.drawLine(0f, lineY, gutterLeft, lineY, linePaint)
+            }
             lineY += LINE_SPACING
         }
 
@@ -796,6 +1030,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
         currentPath.reset()
         scrollOffsetY = 0f
         textOverscroll = 0f
+        diagramAreas = emptyList()
         handler.removeCallbacks(idleRunnable)
         drawToSurface()
     }

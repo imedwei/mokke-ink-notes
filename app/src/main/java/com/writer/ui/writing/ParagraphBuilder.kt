@@ -1,5 +1,6 @@
 package com.writer.ui.writing
 
+import com.writer.model.DiagramArea
 import com.writer.model.InkStroke
 import com.writer.model.minX
 import com.writer.recognition.StrokeClassifier
@@ -52,7 +53,8 @@ class ParagraphBuilder(private val strokeClassifier: StrokeClassifier) {
     fun groupIntoParagraphs(
         lines: List<LineInfo>,
         strokesByLine: Map<Int, List<InkStroke>>,
-        writingWidth: Float
+        writingWidth: Float,
+        diagramAreas: List<DiagramArea> = emptyList()
     ): List<List<LineInfo>> {
         val paragraphs = mutableListOf<List<LineInfo>>()
         var current = mutableListOf<LineInfo>()
@@ -60,15 +62,23 @@ class ParagraphBuilder(private val strokeClassifier: StrokeClassifier) {
         for (line in lines) {
             val lineStrokes = strokesByLine[line.lineIndex]
 
-            if (lineStrokes != null && lineStrokes.isNotEmpty() && current.isNotEmpty()) {
-                val leftmostX = lineStrokes.minOf { it.minX }
-                val isIndented = leftmostX > writingWidth * StrokeClassifier.INDENT_THRESHOLD
-                val prevWasList = current.any { it.isList }
-                val prevWasHeading = current.any { it.isHeading }
+            if (current.isNotEmpty()) {
+                // Break if a diagram area sits between the previous line and this one
+                val prevLineIndex = current.last().lineIndex
+                val diagramBetween = diagramAreas.any {
+                    it.startLineIndex > prevLineIndex && it.startLineIndex <= line.lineIndex
+                }
 
-                val shouldBreak = line.isList || line.isHeading || prevWasHeading ||
-                    (isIndented && !prevWasList) ||
-                    (prevWasList && !isIndented && !line.isList)
+                val shouldBreak = diagramBetween || (lineStrokes != null && lineStrokes.isNotEmpty() && run {
+                    val leftmostX = lineStrokes.minOf { it.minX }
+                    val isIndented = leftmostX > writingWidth * StrokeClassifier.INDENT_THRESHOLD
+                    val prevWasList = current.any { it.isList }
+                    val prevWasHeading = current.any { it.isHeading }
+
+                    line.isList || line.isHeading || prevWasHeading ||
+                        (isIndented && !prevWasList) ||
+                        (prevWasList && !isIndented && !line.isList)
+                })
 
                 if (shouldBreak) {
                     paragraphs.add(current)

@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.Typeface
 import android.text.Layout
 import android.text.SpannableStringBuilder
@@ -16,6 +17,8 @@ import android.text.style.StyleSpan
 import android.util.AttributeSet
 import android.view.MotionEvent
 import android.view.View
+import com.writer.model.InkStroke
+import com.writer.ui.writing.WritingCoordinator.DiagramDisplay
 import com.writer.ui.writing.WritingCoordinator.TextSegment
 
 /**
@@ -106,6 +109,30 @@ class RecognizedTextView @JvmOverloads constructor(
         isAntiAlias = true
     }
 
+    // Diagram rendering
+    private val diagramStrokePaint = CanvasTheme.newStrokePaint()
+    private val diagramPath = Path()
+
+    // Render items: text paragraphs and inline diagrams
+    private sealed class RenderItem {
+        abstract val heightPx: Float
+    }
+
+    private data class TextRenderItem(
+        val layout: StaticLayout,
+        override val heightPx: Float,
+        val segments: List<TextSegment>,
+        val segmentStarts: List<Int>
+    ) : RenderItem()
+
+    private data class DiagramRenderItem(
+        val strokes: List<InkStroke>,
+        val scale: Float,
+        val offsetY: Float,
+        override val heightPx: Float,
+        val lineIndex: Int
+    ) : RenderItem()
+
 
     /** When true, show tutorial annotations and close button. */
     var tutorialMode = false
@@ -115,10 +142,10 @@ class RecognizedTextView @JvmOverloads constructor(
 
     private val closeButtonHeight = 110f
 
-    private var staticLayouts: List<StaticLayout> = emptyList()
+    private var renderItems: List<RenderItem> = emptyList()
     var totalTextHeight = 0
         private set
-    /** Height of each paragraph (layout height + spacing), for scroll sync. */
+    /** Height of each render item, for scroll sync. */
     var paragraphHeights: List<Float> = emptyList()
         private set
     /** Per written line: (lineIndex, renderedTextHeight) for scroll sync. */
@@ -165,32 +192,28 @@ class RecognizedTextView @JvmOverloads constructor(
     private var textTapDownY = 0f
     private var textTapTracking = false
 
-    // Hit-test data (stored on each setParagraphs call)
-    private var currentParagraphs: List<List<TextSegment>> = emptyList()
-    private var paragraphSegmentStarts: List<List<Int>> = emptyList()
-
     fun setParagraphs(paragraphs: List<List<TextSegment>>) {
-        currentParagraphs = paragraphs
-        rebuildLayouts(paragraphs)
+        setContent(paragraphs, emptyList())
+    }
+
+    fun setContent(paragraphs: List<List<TextSegment>>, diagrams: List<DiagramDisplay>) {
+        rebuildRenderItems(paragraphs, diagrams)
         invalidate()
     }
 
-    private fun rebuildLayouts(paragraphs: List<List<TextSegment>>) {
+    private fun rebuildRenderItems(paragraphs: List<List<TextSegment>>, diagrams: List<DiagramDisplay>) {
         val availableWidth = (width - HORIZONTAL_PADDING - HandwritingCanvasView.gutterWidth(width)).toInt()
         if (availableWidth <= 0) return
 
-        var height = 0f
-        val allWrittenLineHeights = mutableListOf<Pair<Int, Float>>()
-        val allSegmentStarts = mutableListOf<List<Int>>()
-        val allParagraphHeights = mutableListOf<Float>()
+        data class Indexed(val lineIndex: Int, val item: RenderItem, val lineHeights: List<Pair<Int, Float>>)
 
-        staticLayouts = paragraphs.mapIndexed { pIdx, segments ->
+        // Build text render items
+        val textItems = paragraphs.mapIndexed { pIdx, segments ->
             val isListItem = segments.firstOrNull()?.listItem == true
             val isHeading = segments.firstOrNull()?.heading == true
             val spannable = SpannableStringBuilder()
             val segmentStarts = mutableListOf<Int>()
 
-            // Prepend bullet for list items
             if (isListItem) {
                 spannable.append(BULLET_PREFIX)
             }
@@ -210,7 +233,6 @@ class RecognizedTextView @JvmOverloads constructor(
             }
 
             if (isHeading) {
-                // Heading: larger bold text, no indent
                 spannable.setSpan(
                     RelativeSizeSpan(1.3f),
                     0, spannable.length,
@@ -222,7 +244,6 @@ class RecognizedTextView @JvmOverloads constructor(
                     SpannableStringBuilder.SPAN_EXCLUSIVE_EXCLUSIVE
                 )
             } else if (isListItem) {
-                // Hanging indent: all lines indented, bullet hangs in the margin
                 spannable.setSpan(
                     LeadingMarginSpan.Standard(LIST_BASE_INDENT, BULLET_HANG_INDENT),
                     0, spannable.length,
@@ -242,7 +263,6 @@ class RecognizedTextView @JvmOverloads constructor(
                 .setLineSpacing(8f, 1f)
                 .build()
 
-            // Determine spacing after this paragraph
             val nextIsListItem = paragraphs.getOrNull(pIdx + 1)?.firstOrNull()?.listItem == true
             val spacing = when {
                 isHeading -> HEADING_SPACING_AFTER
@@ -269,19 +289,38 @@ class RecognizedTextView @JvmOverloads constructor(
             }
             segHeights[segments.lastIndex] += spacing
 
-            for ((i, segment) in segments.withIndex()) {
-                allWrittenLineHeights.add(Pair(segment.lineIndex, segHeights[i]))
+            val lineHeights = segments.mapIndexed { i, segment ->
+                Pair(segment.lineIndex, segHeights[i])
             }
 
-            allSegmentStarts.add(segmentStarts.toList())
-            allParagraphHeights.add(layout.height.toFloat() + spacing)
-            height += layout.height + spacing
-            layout
+            val heightPx = layout.height.toFloat() + spacing
+
+            Indexed(
+                lineIndex = segments.first().lineIndex,
+                item = TextRenderItem(layout, heightPx, segments, segmentStarts.toList()),
+                lineHeights = lineHeights
+            )
         }
-        paragraphSegmentStarts = allSegmentStarts
-        paragraphHeights = allParagraphHeights
-        writtenLineHeights = allWrittenLineHeights
-        totalTextHeight = height.toInt()
+
+        // Build diagram render items (full width, no text padding)
+        val diagramItems = diagrams.map { diagram ->
+            val fullWidth = width - HandwritingCanvasView.gutterWidth(width)
+            val scale = if (diagram.canvasWidth > 0f) fullWidth / diagram.canvasWidth else 1f
+            val renderedHeight = diagram.heightPx * scale + PARAGRAPH_SPACING
+            Indexed(
+                lineIndex = diagram.startLineIndex,
+                item = DiagramRenderItem(diagram.strokes, scale, diagram.offsetY, renderedHeight, diagram.startLineIndex),
+                lineHeights = listOf(Pair(diagram.startLineIndex, renderedHeight))
+            )
+        }
+
+        // Merge and sort by line index
+        val allItems = (textItems + diagramItems).sortedBy { it.lineIndex }
+
+        renderItems = allItems.map { it.item }
+        paragraphHeights = renderItems.map { it.heightPx }
+        writtenLineHeights = allItems.flatMap { it.lineHeights }
+        totalTextHeight = paragraphHeights.sum().toInt()
     }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
@@ -387,7 +426,7 @@ class RecognizedTextView @JvmOverloads constructor(
 
     /** Resolve a tap at screen coordinates (x, y) to a written lineIndex. */
     private fun resolveTextTap(x: Float, y: Float) {
-        if (staticLayouts.isEmpty() || currentParagraphs.isEmpty()) return
+        if (renderItems.isEmpty()) return
         val callback = onTextTap ?: return
 
         val baseY = height - totalTextHeight - BOTTOM_PADDING
@@ -395,30 +434,33 @@ class RecognizedTextView @JvmOverloads constructor(
         val localX = x - HORIZONTAL_PADDING
 
         var cumulativeY = startY
-        for (pIdx in staticLayouts.indices) {
-            val layout = staticLayouts[pIdx]
-            val pEnd = cumulativeY + paragraphHeights.getOrElse(pIdx) { layout.height + PARAGRAPH_SPACING }
+        for (item in renderItems) {
+            val itemEnd = cumulativeY + item.heightPx
 
-            if (y >= cumulativeY && y < pEnd) {
-                val localY = (y - cumulativeY).toInt()
-                val renderedLine = layout.getLineForVertical(localY)
-                val charOffset = layout.getOffsetForHorizontal(renderedLine, localX)
+            if (y >= cumulativeY && y < itemEnd) {
+                when (item) {
+                    is TextRenderItem -> {
+                        val localY = (y - cumulativeY).toInt()
+                        val renderedLine = item.layout.getLineForVertical(localY)
+                        val charOffset = item.layout.getOffsetForHorizontal(renderedLine, localX)
 
-                val segStarts = paragraphSegmentStarts.getOrNull(pIdx) ?: return
-                val segments = currentParagraphs.getOrNull(pIdx) ?: return
+                        var ownerIdx = 0
+                        for (s in item.segmentStarts.indices) {
+                            if (item.segmentStarts[s] <= charOffset) ownerIdx = s
+                            else break
+                        }
 
-                var ownerIdx = 0
-                for (s in segStarts.indices) {
-                    if (segStarts[s] <= charOffset) ownerIdx = s
-                    else break
+                        val segment = item.segments.getOrNull(ownerIdx) ?: return
+                        callback(segment.lineIndex)
+                    }
+                    is DiagramRenderItem -> {
+                        callback(item.lineIndex)
+                    }
                 }
-
-                val segment = segments.getOrNull(ownerIdx) ?: return
-                callback(segment.lineIndex)
                 return
             }
 
-            cumulativeY = pEnd
+            cumulativeY = itemEnd
         }
     }
 
@@ -431,7 +473,7 @@ class RecognizedTextView @JvmOverloads constructor(
         val gutterCenterX = gutterLeft + HandwritingCanvasView.gutterWidth(width) / 2f
 
         // Draw text content or status message
-        if (statusMessage.isNotEmpty() && staticLayouts.isEmpty()) {
+        if (statusMessage.isNotEmpty() && renderItems.isEmpty()) {
             // Draw status message centered in the content area
             val contentCenterX = (width - HandwritingCanvasView.gutterWidth(width)) / 2f
             val contentCenterY = height / 2f
@@ -439,7 +481,7 @@ class RecognizedTextView @JvmOverloads constructor(
             if (statusSubtext.isNotEmpty()) {
                 canvas.drawText(statusSubtext, contentCenterX, contentCenterY + 50f, statusSubtextPaint)
             }
-        } else if (staticLayouts.isNotEmpty()) {
+        } else if (renderItems.isNotEmpty()) {
             val baseY = if (tutorialMode) {
                 closeButtonHeight + 5f  // top-align below close button
             } else {
@@ -450,9 +492,12 @@ class RecognizedTextView @JvmOverloads constructor(
             canvas.save()
             canvas.translate(HORIZONTAL_PADDING, startY)
 
-            for ((i, layout) in staticLayouts.withIndex()) {
-                layout.draw(canvas)
-                canvas.translate(0f, paragraphHeights.getOrElse(i) { layout.height + PARAGRAPH_SPACING })
+            for (item in renderItems) {
+                when (item) {
+                    is TextRenderItem -> item.layout.draw(canvas)
+                    is DiagramRenderItem -> drawDiagramItem(canvas, item)
+                }
+                canvas.translate(0f, item.heightPx)
             }
 
             canvas.restore()
@@ -501,5 +546,18 @@ class RecognizedTextView @JvmOverloads constructor(
             canvas.drawLine(resizeRight - 20f, resizeY + 12f, resizeRight, resizeY, tutorialAnnotationPaint)
             canvas.drawText("Drag gutter to resize", resizeLeft, resizeY - 16f, tutorialTextPaint)
         }
+    }
+
+    private fun drawDiagramItem(canvas: Canvas, item: DiagramRenderItem) {
+        if (item.strokes.isEmpty()) return
+        canvas.save()
+        // Undo the HORIZONTAL_PADDING translation so diagram uses full page width
+        canvas.translate(-HORIZONTAL_PADDING, 0f)
+        canvas.scale(item.scale, item.scale)
+        canvas.translate(0f, -item.offsetY)
+        for (stroke in item.strokes) {
+            CanvasTheme.drawStroke(canvas, stroke, diagramPath, diagramStrokePaint)
+        }
+        canvas.restore()
     }
 }

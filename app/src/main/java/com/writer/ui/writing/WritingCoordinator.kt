@@ -1,6 +1,7 @@
 package com.writer.ui.writing
 
 import android.util.Log
+import com.writer.model.DiagramArea
 import com.writer.model.DocumentModel
 import com.writer.model.InkStroke
 import com.writer.model.shiftY
@@ -8,6 +9,7 @@ import com.writer.recognition.HandwritingRecognizer
 import com.writer.recognition.LineSegmenter
 import com.writer.recognition.StrokeClassifier
 import com.writer.model.DocumentData
+import com.writer.storage.SvgExporter
 import com.writer.view.HandwritingCanvasView
 import com.writer.view.RecognizedTextView
 import kotlinx.coroutines.CoroutineScope
@@ -79,7 +81,14 @@ class WritingCoordinator(
     // Line-drag gesture state
     private var lineDragAnchorLine = -1
     private var lineDragOriginalStrokes: List<InkStroke>? = null
+    private var lineDragOriginalDiagrams: List<DiagramArea>? = null
     private var lineDragCurrentShift = 0
+
+    // Diagram insert gesture state
+    private var diagramInsertAnchorLine = -1
+    private var diagramInsertOriginalStrokes: List<InkStroke>? = null
+    private var diagramInsertOriginalDiagrams: List<DiagramArea>? = null
+    private var diagramInsertCurrentHeight = 0
 
     fun start() {
         Log.i(TAG, "Coordinator started")
@@ -97,6 +106,9 @@ class WritingCoordinator(
         inkCanvas.onLineDragStart = { anchorLine -> onLineDragStart(anchorLine) }
         inkCanvas.onLineDragStep = { shiftLines -> onLineDragStep(shiftLines) }
         inkCanvas.onLineDragEnd = { onLineDragEnd() }
+        inkCanvas.onDiagramInsertStart = { anchorLine -> onDiagramInsertStart(anchorLine) }
+        inkCanvas.onDiagramInsertStep = { height -> onDiagramInsertStep(height) }
+        inkCanvas.onDiagramInsertEnd = { onDiagramInsertEnd() }
         inkCanvas.onUndoGestureStart = {
             undoManager.beginScrub(currentSnapshot())
         }
@@ -119,6 +131,9 @@ class WritingCoordinator(
         inkCanvas.onLineDragStart = null
         inkCanvas.onLineDragStep = null
         inkCanvas.onLineDragEnd = null
+        inkCanvas.onDiagramInsertStart = null
+        inkCanvas.onDiagramInsertStep = null
+        inkCanvas.onDiagramInsertEnd = null
         inkCanvas.onUndoGestureStart = null
         inkCanvas.onUndoGestureStep = null
         inkCanvas.onUndoGestureEnd = null
@@ -134,7 +149,13 @@ class WritingCoordinator(
         highestLineIndex = -1
         currentLineIndex = -1
         userRenamed = false
+        documentModel.diagramAreas.clear()
+        inkCanvas.diagramAreas = emptyList()
     }
+
+    /** Check if a line index falls inside any diagram area. */
+    private fun isDiagramLine(lineIdx: Int): Boolean =
+        documentModel.diagramAreas.any { it.containsLine(lineIdx) }
 
     private fun onStrokeCompleted(stroke: InkStroke) {
         textRefreshJob?.cancel()
@@ -144,6 +165,9 @@ class WritingCoordinator(
         documentModel.activeStrokes.add(stroke)
 
         val lineIdx = lineSegmenter.getStrokeLineIndex(stroke)
+
+        // Diagram strokes: no recognition, no line tracking
+        if (isDiagramLine(lineIdx)) return
 
         // If the user modified a previously recognized line, invalidate cache
         lineTextCache.remove(lineIdx)
@@ -177,6 +201,7 @@ class WritingCoordinator(
         if (strokesByLine.isEmpty()) return
         scope.launch {
             for (lineIndex in strokesByLine.keys.sorted()) {
+                if (isDiagramLine(lineIndex)) continue
                 // Re-recognize lines that failed ("[?]") or were never cached
                 val cached = lineTextCache[lineIndex]
                 if (cached != null && cached != "[?]") continue
@@ -232,6 +257,10 @@ class WritingCoordinator(
      * no strokes or recognition failed.
      */
     private suspend fun doRecognizeLine(lineIndex: Int): String? {
+        if (isDiagramLine(lineIndex)) {
+            recognizingLines.remove(lineIndex)
+            return null
+        }
         try {
             val allStrokes = lineSegmenter.getStrokesForLine(
                 documentModel.activeStrokes, lineIndex
@@ -398,11 +427,12 @@ class WritingCoordinator(
         updateTextView(notYetVisible)
         updateTextScrollOffset()
 
-        val uncached = everHiddenLines.filter { !lineTextCache.containsKey(it) }
+        val uncached = everHiddenLines.filter { !lineTextCache.containsKey(it) && !isDiagramLine(it) }
         if (uncached.isNotEmpty()) {
             scope.launch {
                 for (lineIdx in uncached) {
                     if (lineTextCache.containsKey(lineIdx)) continue
+                    if (isDiagramLine(lineIdx)) continue
                     try {
                         val allStrokes = strokesByLine[lineIdx] ?: continue
                         val strokes = strokeClassifier.filterMarkerStrokes(allStrokes, inkCanvas.width - gutterWidth(inkCanvas.width))
@@ -431,15 +461,24 @@ class WritingCoordinator(
     /** A segment of text within a paragraph, with its own dimming state. */
     data class TextSegment(val text: String, val dimmed: Boolean, val lineIndex: Int, val listItem: Boolean = false, val heading: Boolean = false)
 
+    /** Diagram display data for inline rendering in the text view. */
+    data class DiagramDisplay(
+        val startLineIndex: Int,
+        val strokes: List<InkStroke>,
+        val canvasWidth: Float,
+        val heightPx: Float,
+        val offsetY: Float
+    )
+
     private fun updateTextView(currentlyHidden: Set<Int>) {
         val strokesByLine = lineSegmenter.groupByLine(documentModel.activeStrokes)
         val writingWidth = inkCanvas.width - gutterWidth(inkCanvas.width)
 
-        val classifiedLines = everHiddenLines.sorted().mapNotNull { lineIdx ->
+        val classifiedLines = everHiddenLines.sorted().filter { !isDiagramLine(it) }.mapNotNull { lineIdx ->
             paragraphBuilder.classifyLine(lineIdx, lineTextCache[lineIdx], strokesByLine[lineIdx], writingWidth)
         }
 
-        val grouped = paragraphBuilder.groupIntoParagraphs(classifiedLines, strokesByLine, writingWidth)
+        val grouped = paragraphBuilder.groupIntoParagraphs(classifiedLines, strokesByLine, writingWidth, documentModel.diagramAreas)
 
         val paragraphs = grouped.map { group ->
             group.map { line ->
@@ -453,7 +492,25 @@ class WritingCoordinator(
             }
         }
 
-        textView.setParagraphs(paragraphs)
+        // Build diagram displays for fully-hidden diagram areas
+        val diagrams = documentModel.diagramAreas.filter { area ->
+            val areaBottom = lineSegmenter.getLineY(area.endLineIndex + 1)
+            areaBottom <= inkCanvas.scrollOffsetY
+        }.map { area ->
+            val areaStrokes = documentModel.activeStrokes.filter { stroke ->
+                val strokeLine = lineSegmenter.getStrokeLineIndex(stroke)
+                area.containsLine(strokeLine)
+            }
+            DiagramDisplay(
+                startLineIndex = area.startLineIndex,
+                strokes = areaStrokes,
+                canvasWidth = writingWidth,
+                heightPx = area.heightInLines * HandwritingCanvasView.LINE_SPACING,
+                offsetY = lineSegmenter.getLineY(area.startLineIndex)
+            )
+        }
+
+        textView.setContent(paragraphs, diagrams)
     }
 
     /** Called when the text view is scrolled via its gutter overscroll. */
@@ -506,23 +563,47 @@ class WritingCoordinator(
     // --- Markdown export ---
 
     fun getMarkdownText(): String {
-        if (lineTextCache.isEmpty()) return ""
+        if (lineTextCache.isEmpty() && documentModel.diagramAreas.isEmpty()) return ""
 
         val strokesByLine = lineSegmenter.groupByLine(documentModel.activeStrokes)
         val writingWidth = inkCanvas.width - gutterWidth(inkCanvas.width)
 
-        val classifiedLines = lineTextCache.keys.sorted().mapNotNull { lineIdx ->
+        val classifiedLines = lineTextCache.keys.sorted().filter { !isDiagramLine(it) }.mapNotNull { lineIdx ->
             paragraphBuilder.classifyLine(lineIdx, lineTextCache[lineIdx], strokesByLine[lineIdx], writingWidth)
         }
 
-        val grouped = paragraphBuilder.groupIntoParagraphs(classifiedLines, strokesByLine, writingWidth)
+        val grouped = paragraphBuilder.groupIntoParagraphs(classifiedLines, strokesByLine, writingWidth, documentModel.diagramAreas)
 
-        return grouped.joinToString("\n\n") { group ->
+        // Build text paragraphs with their starting line index
+        data class MdBlock(val lineIndex: Int, val text: String)
+        val blocks = mutableListOf<MdBlock>()
+
+        for (group in grouped) {
             val joined = group.joinToString(" ") { it.text }
             val first = group.first()
             val prefix = if (first.isHeading) "## " else if (first.isList) "- " else ""
-            "$prefix$joined"
+            blocks.add(MdBlock(first.lineIndex, "$prefix$joined"))
         }
+
+        // Insert diagram SVGs at correct positions
+        for (area in documentModel.diagramAreas.sortedBy { it.startLineIndex }) {
+            val diagramStrokes = documentModel.activeStrokes.filter { stroke ->
+                val strokeLine = lineSegmenter.getStrokeLineIndex(stroke)
+                area.containsLine(strokeLine)
+            }
+            if (diagramStrokes.isEmpty()) continue
+
+            val areaTop = lineSegmenter.getLineY(area.startLineIndex)
+            val areaHeight = area.heightInLines * HandwritingCanvasView.LINE_SPACING
+            val svg = SvgExporter.strokesToSvg(
+                diagramStrokes, writingWidth, areaHeight,
+                offsetX = 0f, offsetY = areaTop
+            )
+            val dataUri = SvgExporter.toBase64DataUri(svg)
+            blocks.add(MdBlock(area.startLineIndex, "![diagram]($dataUri)"))
+        }
+
+        return blocks.sortedBy { it.lineIndex }.joinToString("\n\n") { it.text }
     }
 
     // --- Line-drag gesture ---
@@ -531,12 +612,14 @@ class WritingCoordinator(
         saveUndoSnapshot()
         lineDragAnchorLine = anchorLine
         lineDragOriginalStrokes = documentModel.activeStrokes.toList()
+        lineDragOriginalDiagrams = documentModel.diagramAreas.toList()
         lineDragCurrentShift = 0
         Log.i(TAG, "Line-drag started: anchorLine=$anchorLine")
     }
 
     private fun onLineDragStep(shiftLines: Int) {
         val originals = lineDragOriginalStrokes ?: return
+        val originalDiagrams = lineDragOriginalDiagrams ?: return
         val clamped = shiftLines.coerceAtLeast(-lineDragAnchorLine)
         if (clamped == lineDragCurrentShift) return
         lineDragCurrentShift = clamped
@@ -553,7 +636,6 @@ class WritingCoordinator(
                 // Upward drag: check if this stroke is in the overwritten zone
                 val overwrittenStart = lineDragAnchorLine + clamped
                 if (strokeLine >= overwrittenStart) {
-                    // This stroke is being overwritten — skip it
                     continue
                 }
                 newStrokes.add(stroke)
@@ -562,9 +644,59 @@ class WritingCoordinator(
             }
         }
 
+        // Shift/shrink diagram areas
+        val newDiagrams = mutableListOf<DiagramArea>()
+        for (area in originalDiagrams) {
+            if (area.startLineIndex >= lineDragAnchorLine) {
+                // Below anchor: shift
+                newDiagrams.add(area.copy(startLineIndex = area.startLineIndex + clamped))
+            } else if (clamped < 0) {
+                val overwrittenStart = lineDragAnchorLine + clamped
+                if (area.endLineIndex < overwrittenStart) {
+                    // Entirely above overwritten zone: keep
+                    newDiagrams.add(area)
+                } else if (area.startLineIndex >= overwrittenStart) {
+                    // Entirely in overwritten zone: remove
+                } else {
+                    // Partially overlaps: shrink
+                    val newHeight = overwrittenStart - area.startLineIndex
+                    if (newHeight > 0) {
+                        newDiagrams.add(area.copy(heightInLines = newHeight))
+                    }
+                }
+            } else {
+                newDiagrams.add(area)
+            }
+        }
+
+        // Truncate strokes that extend outside their diagram area bounds
+        val truncatedStrokes = if (clamped < 0 && newDiagrams.isNotEmpty()) {
+            newStrokes.mapNotNull { stroke ->
+                val strokeLine = lineSegmenter.getStrokeLineIndex(stroke)
+                val area = newDiagrams.find { it.containsLine(strokeLine) }
+                if (area != null) {
+                    val topY = lineSegmenter.getLineY(area.startLineIndex)
+                    val bottomY = lineSegmenter.getLineY(area.startLineIndex + area.heightInLines)
+                    val clipped = stroke.points.filter { it.y >= topY && it.y <= bottomY }
+                    if (clipped.size >= 2) InkStroke(
+                        strokeId = stroke.strokeId,
+                        points = clipped,
+                        strokeWidth = stroke.strokeWidth
+                    ) else null
+                } else {
+                    stroke
+                }
+            }
+        } else {
+            newStrokes
+        }
+
         documentModel.activeStrokes.clear()
-        documentModel.activeStrokes.addAll(newStrokes)
-        inkCanvas.loadStrokes(newStrokes)
+        documentModel.activeStrokes.addAll(truncatedStrokes)
+        documentModel.diagramAreas.clear()
+        documentModel.diagramAreas.addAll(newDiagrams)
+        inkCanvas.diagramAreas = newDiagrams
+        inkCanvas.loadStrokes(truncatedStrokes)
     }
 
     private fun onLineDragEnd() {
@@ -572,10 +704,16 @@ class WritingCoordinator(
         if (shift == 0) {
             // No net shift — restore originals
             val originals = lineDragOriginalStrokes
+            val originalDiagrams = lineDragOriginalDiagrams
             if (originals != null) {
                 documentModel.activeStrokes.clear()
                 documentModel.activeStrokes.addAll(originals)
                 inkCanvas.loadStrokes(originals)
+            }
+            if (originalDiagrams != null) {
+                documentModel.diagramAreas.clear()
+                documentModel.diagramAreas.addAll(originalDiagrams)
+                inkCanvas.diagramAreas = originalDiagrams
             }
         } else {
             // Invalidate text cache for all affected lines
@@ -594,9 +732,125 @@ class WritingCoordinator(
         }
 
         lineDragOriginalStrokes = null
+        lineDragOriginalDiagrams = null
         lineDragAnchorLine = -1
         lineDragCurrentShift = 0
         Log.i(TAG, "Line-drag ended: shift=$shift lines")
+    }
+
+    // --- Diagram insert gesture ---
+
+    private fun onDiagramInsertStart(anchorLine: Int) {
+        saveUndoSnapshot()
+        diagramInsertAnchorLine = anchorLine
+        diagramInsertOriginalStrokes = documentModel.activeStrokes.toList()
+        diagramInsertOriginalDiagrams = documentModel.diagramAreas.toList()
+        diagramInsertCurrentHeight = 0
+        Log.i(TAG, "Diagram insert started: anchorLine=$anchorLine")
+    }
+
+    private fun onDiagramInsertStep(heightInLines: Int) {
+        val originals = diagramInsertOriginalStrokes ?: return
+        val originalDiagrams = diagramInsertOriginalDiagrams ?: return
+        if (heightInLines == diagramInsertCurrentHeight) return
+        diagramInsertCurrentHeight = heightInLines
+
+        val shiftAmount = heightInLines * HandwritingCanvasView.LINE_SPACING
+        val newStrokes = originals.map { stroke ->
+            val strokeLine = lineSegmenter.getStrokeLineIndex(stroke)
+            if (strokeLine >= diagramInsertAnchorLine) {
+                stroke.shiftY(shiftAmount)
+            } else {
+                stroke
+            }
+        }
+
+        // Shift existing diagram areas at/below anchor
+        val newDiagrams = originalDiagrams.map { area ->
+            if (area.startLineIndex >= diagramInsertAnchorLine) {
+                area.copy(startLineIndex = area.startLineIndex + heightInLines)
+            } else {
+                area
+            }
+        }
+
+        // Add preview diagram area so borders render during drag
+        val previewDiagram = DiagramArea(
+            startLineIndex = diagramInsertAnchorLine,
+            heightInLines = heightInLines
+        )
+
+        documentModel.activeStrokes.clear()
+        documentModel.activeStrokes.addAll(newStrokes)
+        documentModel.diagramAreas.clear()
+        documentModel.diagramAreas.addAll(newDiagrams)
+        inkCanvas.diagramAreas = newDiagrams + previewDiagram
+        inkCanvas.loadStrokes(newStrokes)
+    }
+
+    private fun onDiagramInsertEnd() {
+        val height = diagramInsertCurrentHeight
+        if (height == 0) {
+            // No insertion — restore originals
+            val originals = diagramInsertOriginalStrokes
+            val originalDiagrams = diagramInsertOriginalDiagrams
+            if (originals != null) {
+                documentModel.activeStrokes.clear()
+                documentModel.activeStrokes.addAll(originals)
+                inkCanvas.loadStrokes(originals)
+            }
+            if (originalDiagrams != null) {
+                documentModel.diagramAreas.clear()
+                documentModel.diagramAreas.addAll(originalDiagrams)
+                inkCanvas.diagramAreas = originalDiagrams
+            }
+        } else {
+            // Merge with adjacent diagram areas if present
+            var mergeStart = diagramInsertAnchorLine
+            var mergeHeight = height
+
+            // Check above: existing diagram ending right above the new one
+            val above = documentModel.diagramAreas.find {
+                it.endLineIndex + 1 == diagramInsertAnchorLine
+            }
+            if (above != null) {
+                mergeStart = above.startLineIndex
+                mergeHeight += above.heightInLines
+                documentModel.diagramAreas.remove(above)
+            }
+
+            // Check below: existing diagram starting right below the new one
+            val below = documentModel.diagramAreas.find {
+                it.startLineIndex == diagramInsertAnchorLine + height
+            }
+            if (below != null) {
+                mergeHeight += below.heightInLines
+                documentModel.diagramAreas.remove(below)
+            }
+
+            val newArea = DiagramArea(
+                startLineIndex = mergeStart,
+                heightInLines = mergeHeight
+            )
+            documentModel.diagramAreas.add(newArea)
+            inkCanvas.diagramAreas = documentModel.diagramAreas.toList()
+
+            // Invalidate text cache for affected lines
+            val maxAffected = (lineSegmenter.getBottomOccupiedLine(documentModel.activeStrokes)
+                .coerceAtLeast(diagramInsertAnchorLine)) + height
+            val invalidated = (diagramInsertAnchorLine..maxAffected).toSet()
+            for (line in invalidated) {
+                lineTextCache.remove(line)
+            }
+            displayHiddenLines()
+            inkCanvas.drawToSurface()
+        }
+
+        diagramInsertOriginalStrokes = null
+        diagramInsertOriginalDiagrams = null
+        diagramInsertAnchorLine = -1
+        diagramInsertCurrentHeight = 0
+        Log.i(TAG, "Diagram insert ended: height=$height lines")
     }
 
     // --- Undo / Redo ---
@@ -605,13 +859,17 @@ class WritingCoordinator(
         undoManager.saveSnapshot(UndoManager.Snapshot(
             strokes = documentModel.activeStrokes.toList(),
             scrollOffsetY = inkCanvas.scrollOffsetY,
-            lineTextCache = lineTextCache.toMap()
+            lineTextCache = lineTextCache.toMap(),
+            diagramAreas = documentModel.diagramAreas.toList()
         ))
     }
 
     private fun applySnapshot(snapshot: UndoManager.Snapshot) {
         documentModel.activeStrokes.clear()
         documentModel.activeStrokes.addAll(snapshot.strokes)
+        documentModel.diagramAreas.clear()
+        documentModel.diagramAreas.addAll(snapshot.diagramAreas)
+        inkCanvas.diagramAreas = snapshot.diagramAreas
         inkCanvas.loadStrokes(snapshot.strokes)
         inkCanvas.scrollOffsetY = snapshot.scrollOffsetY
         inkCanvas.drawToSurface()
@@ -624,7 +882,8 @@ class WritingCoordinator(
     private fun currentSnapshot() = UndoManager.Snapshot(
         strokes = documentModel.activeStrokes.toList(),
         scrollOffsetY = inkCanvas.scrollOffsetY,
-        lineTextCache = lineTextCache.toMap()
+        lineTextCache = lineTextCache.toMap(),
+        diagramAreas = documentModel.diagramAreas.toList()
     )
 
     fun undo() {
@@ -653,7 +912,8 @@ class WritingCoordinator(
             everHiddenLines = everHiddenLines.toSet(),
             highestLineIndex = highestLineIndex,
             currentLineIndex = currentLineIndex,
-            userRenamed = userRenamed
+            userRenamed = userRenamed,
+            diagramAreas = documentModel.diagramAreas.toList()
         )
     }
 
@@ -663,6 +923,9 @@ class WritingCoordinator(
         highestLineIndex = data.highestLineIndex
         currentLineIndex = data.currentLineIndex
         userRenamed = data.userRenamed
+        documentModel.diagramAreas.clear()
+        documentModel.diagramAreas.addAll(data.diagramAreas)
+        inkCanvas.diagramAreas = data.diagramAreas
         displayHiddenLines()
     }
 }
