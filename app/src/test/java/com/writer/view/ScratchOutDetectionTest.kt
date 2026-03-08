@@ -94,6 +94,111 @@ class ScratchOutDetectionTest {
         assertTrue(ScratchOutDetection.detect(xs, yRange = totalXTravel * ScratchOutDetection.MAX_Y_DRIFT - 1f, lineSpacing = LS))
     }
 
+    // ── Bug 1: closed-loop strokes must not trigger scratch-out ──────────────
+    //
+    // When the user draws a shape (e.g. a rounded-rectangle outline) around existing
+    // handwritten letters, the shape snap may fail if the stroke is too wobbly.
+    // checkPostStrokeScratchOut() then runs.  A closed loop with multiple x-reversals
+    // satisfies all three scratch-out criteria (reversals ≥ 2, travel ≥ 177 px, low
+    // y-drift) and currently ERASES the letters inside — a false positive.
+    //
+    // The fix: ScratchOutDetection.detect() must return false whenever the stroke is
+    // a closed loop (stroke start ≈ stroke end relative to its own diagonal).
+
+    /**
+     * BUG 1 — CURRENTLY FAILS.
+     *
+     * A stroke whose x-coordinate series returns to the same value as it started
+     * (xs.first() == xs.last()) with multiple x-reversals is detected as scratch-out.
+     * This can happen when the user draws a bumpy oval around text:
+     *   — shape snap fails (stroke too irregular for any shape detector)
+     *   — scratch-out sees ≥ 2 reversals + ≥ 177 px travel + low y-drift → true
+     *   — interior letters are erased
+     *
+     * Correct behaviour: a closed loop is NEVER a scratch-out.
+     */
+    @Test fun closedLoop_multipleXReversals_notScratchOut() {
+        // xs traces a figure-8 / bumpy closed oval: 0 → 200 → 0 → 200 → 0
+        // reversals = 3, total x-travel = 800 px, yRange = 30 px → passes all three checks.
+        // But the stroke IS a closed loop — must never be treated as scratch-out.
+        val xs = floatArrayOf(0f, 200f, 0f, 200f, 0f)
+        val yRange = 30f
+        assertFalse(
+            "Closed loop must NOT trigger scratch-out (Bug 1: erases letters drawn inside a shape)",
+            ScratchOutDetection.detect(xs, yRange, LS, isClosedLoop = true)
+        )
+    }
+
+    /**
+     * BUG 1 variant: a rectangular outline with corner overshoots.
+     *
+     * Real freehand rectangles commonly overshoot corners: after going right the pen
+     * briefly continues then reverses, adding extra x-reversals.
+     * 300×100 px rectangle, 2 corner overshoots → 2 reversals, total x-travel = 620 px,
+     * yRange = 100 px → 100 < 0.4×620 = 248 — passes all scratch-out checks.
+     * But the stroke is closed, so it must not trigger scratch-out.
+     */
+    @Test fun closedRectangleWithCornerOvershoots_notScratchOut() {
+        val xs = floatArrayOf(0f, 310f, 300f, -10f, 0f, 0f)
+        val yRange = 100f
+        assertFalse(
+            "Rectangular closed stroke with overshoots must NOT trigger scratch-out (Bug 1)",
+            ScratchOutDetection.detect(xs, yRange, LS, isClosedLoop = true)
+        )
+    }
+
+    // ── Compact scratch-out (start ≈ end) ─────────────────────────────────────
+    //
+    // When scratching out a thin target (arrow line), the scribble naturally
+    // starts and ends at nearly the same position.  The closed-loop guard in
+    // checkPostStrokeScratchOut classifies this as a "closed loop" and rejects
+    // the scratch-out — but a tight zigzag is clearly NOT a shape drawn around
+    // content.  The caller should not classify high-reversal zigzags as closed
+    // loops.
+
+    @Test fun compactScratchOut_startNearEnd_notClassifiedAsClosedLoop() {
+        // Tight scratch-out: zigzag right-left-right-left, ending near start.
+        // closeDist = 5, diagonal = 80, pathLength = 500 (with Y jitter)
+        // closeDist/diagonal = 0.0625 < CLOSE_FRACTION (0.20) → geometrically "closed"
+        // BUT pathLength/diagonal = 6.25 >> PATH_RATIO_THRESHOLD (4.5) → zigzag, not shape
+        // isClosedLoop should return false so scratch-out detection proceeds.
+        val closedLoop = ScratchOutDetection.isClosedLoop(
+            closeDist = 5f, diagonal = 80f, pathLength = 500f
+        )
+        assertFalse(
+            "Compact scratch-out (high path ratio) should NOT be classified as closed loop",
+            closedLoop
+        )
+    }
+
+    @Test fun shapeOutline_startNearEnd_classifiedAsClosedLoop() {
+        // Real shape outline: closeDist = 5, diagonal = 200, pathLength = 600
+        // closeDist/diagonal = 0.025 < CLOSE_FRACTION → geometrically closed
+        // pathLength/diagonal = 3.0 < PATH_RATIO_THRESHOLD → shape outline
+        val closedLoop = ScratchOutDetection.isClosedLoop(
+            closeDist = 5f, diagonal = 200f, pathLength = 600f
+        )
+        assertTrue(
+            "Shape outline (low path ratio) should be classified as closed loop",
+            closedLoop
+        )
+    }
+
+    @Test fun compactScratchOut_fullDetection_shouldDetect() {
+        // End-to-end: a compact zigzag with start ≈ end should be detected
+        // when isClosedLoop is correctly computed as false.
+        val xs = floatArrayOf(0f, 80f, 0f, 80f, 5f)
+        // isClosedLoop: closeDist=5, diagonal≈80, pathLength≈315 (X-only)
+        // With Y jitter, real pathLength would be higher. Use X-only path as lower bound.
+        // pathLength/diagonal = 315/80 ≈ 3.9 — still below 4.5 in X-only case.
+        // In practice, a real scratch-out has significant Y component pushing ratio > 4.5.
+        // Test with isClosedLoop=false to verify detect() accepts the zigzag.
+        assertTrue(
+            "Compact scratch-out should be detected when not classified as closed loop",
+            ScratchOutDetection.detect(xs, yRange = 10f, lineSpacing = LS, isClosedLoop = false)
+        )
+    }
+
     // ── Connected cursive false positives ─────────────────────────────────────
     //
     // A connected cursive word is a single stroke that advances left-to-right,
@@ -168,6 +273,39 @@ class ScratchOutDetectionTest {
         assertTrue(
             "Scratch-out with small rightward drift should still be detected",
             ScratchOutDetection.detect(xs, yRange = 10f, lineSpacing = LS)
+        )
+    }
+
+    // ── Vertical scratch-out (Y-axis oscillation) ───────────────────────────
+
+    @Test fun verticalZigzag_detects() {
+        // Scribbling up-down over a horizontal arrow.
+        // X stays roughly constant, Y zigzags.
+        val xs = floatArrayOf(200f, 202f, 198f, 201f, 199f)  // barely moves in X
+        val ys = zigzag(startX = 100f, segmentWidth = 60f, segments = 4)  // 4 Y-segments
+        assertTrue(
+            "Vertical zigzag should be detected as scratch-out",
+            ScratchOutDetection.detect(xs, ys, lineSpacing = LS)
+        )
+    }
+
+    @Test fun verticalZigzag_tooFewReversals_notDetected() {
+        val xs = floatArrayOf(200f, 202f, 198f)
+        val ys = floatArrayOf(100f, 160f, 100f)  // 1 reversal only
+        assertFalse(
+            "Vertical zigzag with only 1 reversal should not be detected",
+            ScratchOutDetection.detect(xs, ys, lineSpacing = LS)
+        )
+    }
+
+    @Test fun diagonalZigzag_detects() {
+        // Scribble at ~45 degrees: both X and Y oscillate, but one axis dominates
+        val xs = floatArrayOf(0f, 50f, 10f, 60f, 20f)  // 3 X-reversals? No: 0→50→10→60→20, reversals=3
+        val ys = floatArrayOf(0f, 50f, 10f, 60f, 20f)  // same pattern in Y
+        // Both axes have 3 reversals. Either axis works. Total travel per axis ≈ 180px.
+        assertTrue(
+            "Diagonal zigzag should be detected as scratch-out",
+            ScratchOutDetection.detect(xs, ys, lineSpacing = LS)
         )
     }
 

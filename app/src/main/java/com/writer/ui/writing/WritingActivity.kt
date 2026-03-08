@@ -119,7 +119,11 @@ class WritingActivity : AppCompatActivity() {
             getCoordinator = { coordinator },
             getPendingRestore = { pendingRestore },
             clearPendingRestore = { pendingRestore = null },
-            onClosed = { recognizedTextView.onLogoTap = { showMenu() } }
+            onClosed = {
+                recognizedTextView.onLogoTap = { showMenu() }
+                recognizedTextView.onUndoTap = { coordinator?.undo() }
+                recognizedTextView.onRedoTap = { coordinator?.redo() }
+            }
         )
 
         // Migrate old single-file storage if needed, then determine current document
@@ -136,8 +140,13 @@ class WritingActivity : AppCompatActivity() {
 
         // Tap "I" logo to open menu
         recognizedTextView.onLogoTap = { showMenu() }
+        recognizedTextView.onUndoTap = { coordinator?.undo() }
+        recognizedTextView.onRedoTap = { coordinator?.redo() }
 
-        // Pick the best available recognizer synchronously (initialized later in coroutine)
+        // Pick the best available recognizer synchronously (initialized later in coroutine).
+        // OnyxHwrTextRecognizer binds to a system service using applicationContext, so holding
+        // it in the activity is safe (no activity leak). GoogleMLKitTextRecognizer is stateless
+        // and does not retain a context reference.
         recognizer = TextRecognizerFactory.create(this)
 
         // Create coordinator early so cached text can be displayed before model loads
