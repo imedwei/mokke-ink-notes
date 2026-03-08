@@ -199,7 +199,10 @@ class WritingActivity : AppCompatActivity() {
 
     private fun setupTextGutter() {
         recognizedTextView.onGutterDrag = { delta ->
-            if (delta > 0f && splitOffset >= defaultCanvasHeight.toFloat()) {
+            val totalHeight = defaultTextHeight + defaultCanvasHeight
+            val minTextHeight = (totalHeight * 0.25f).toInt()
+            val maxOffset = (totalHeight - minTextHeight).toFloat()
+            if (delta > 0f && splitOffset >= maxOffset) {
                 // At max size, dragging down scrolls text content
                 val topPadding = 40f
                 val maxOverscroll = (recognizedTextView.totalTextHeight - recognizedTextView.height + topPadding).coerceAtLeast(0f)
@@ -210,7 +213,10 @@ class WritingActivity : AppCompatActivity() {
                 inkCanvas.textOverscroll = (inkCanvas.textOverscroll + delta).coerceAtLeast(0f)
                 coordinator?.onManualTextScroll()
             } else {
-                splitOffset = (splitOffset + delta).coerceIn(0f, defaultCanvasHeight.toFloat())
+                val totalHeight = defaultTextHeight + defaultCanvasHeight
+                val minTextHeight = (totalHeight * 0.25f).toInt()
+                val maxOffset = (totalHeight - minTextHeight).toFloat()
+                splitOffset = (splitOffset + delta).coerceIn(0f, maxOffset)
 
                 val newTextHeight = defaultTextHeight + splitOffset.toInt()
                 val newCanvasHeight = defaultCanvasHeight - splitOffset.toInt()
