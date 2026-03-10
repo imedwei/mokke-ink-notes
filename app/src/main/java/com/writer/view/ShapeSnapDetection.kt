@@ -97,10 +97,25 @@ object ShapeSnapDetection {
      */
     const val ROUNDED_CORNER_THRESHOLD = 0.03f
 
+    // ── Diamond constant ──────────────────────────────────────────────────────
+
+    /**
+     * Maximum distance from each detected corner to its nearest bounding-box edge midpoint,
+     * as a fraction of min(width, height). If all corners satisfy this threshold, the shape
+     * is classified as a diamond rather than a rectangle.
+     */
+    const val DIAMOND_CORNER_THRESHOLD = 0.20f
+
     // ── Result types ──────────────────────────────────────────────────────────
 
     sealed class SnapResult {
         data class Line(val x1: Float, val y1: Float, val x2: Float, val y2: Float) : SnapResult()
+        data class Arrow(
+            val x1: Float, val y1: Float,   // tail
+            val x2: Float, val y2: Float,   // head
+            val tailHead: Boolean = false,   // arrowhead at tail
+            val tipHead: Boolean = true      // arrowhead at tip
+        ) : SnapResult()
         data class Ellipse(val cx: Float, val cy: Float, val a: Float, val b: Float) : SnapResult()
         data class RoundedRectangle(
             val left: Float, val top: Float,
@@ -108,6 +123,10 @@ object ShapeSnapDetection {
             val cornerRadius: Float
         ) : SnapResult()
         data class Rectangle(
+            val left: Float, val top: Float,
+            val right: Float, val bottom: Float
+        ) : SnapResult()
+        data class Diamond(
             val left: Float, val top: Float,
             val right: Float, val bottom: Float
         ) : SnapResult()
@@ -143,25 +162,29 @@ object ShapeSnapDetection {
             val n = xs.size
             val window = maxOf(3, n / 12)
             if (n >= 2 * window + 1) {
-                // Rounded-rectangle check: if every bounding-box corner is far from all
-                // stroke points the corners are genuinely rounded — detect it before counting
-                // sharp corners. This also avoids false ≥4-corner counts when a short arc
-                // (< 2×window pts) is swallowed by the window and registers as a full 90° spike.
+                // Count corners first so we can route correctly before the rounded-corner check.
+                // Cyclic corner detection: treats the closed stroke as a ring so that a
+                // corner exactly at the start/end boundary is never missed.
+                val corners = findCornerIndicesCyclic(xs, ys, window)
+
+                // If every bounding-box corner is far from all stroke points, the stroke
+                // never reaches the bbox corners — typical of rounded rectangles AND diamonds.
+                // We check for diamond (corners near edge midpoints) before rounded rect.
                 if (hasRoundedBboxCorners(xs, ys, minX, maxX, minY, maxY, diagonal)) {
+                    if (corners.size >= 4) {
+                        detectDiamond(xs, ys, corners, minX, maxX, minY, maxY)?.let { return it }
+                    }
                     detectRoundedRectangle(xs, ys, minX, maxX, minY, maxY, diagonal)
                         ?.let { return it }
                 }
 
-                // Cyclic corner detection: treats the closed stroke as a ring so that a
-                // corner exactly at the start/end boundary is never missed.
-                val corners = findCornerIndicesCyclic(xs, ys, window)
                 when {
                     corners.size == 3 -> detectTriangle(xs, ys, corners)
                                              ?.let { return it }
-                    corners.size >= 4 -> detectRectangle(xs, ys, minX, maxX, minY, maxY, diagonal)
+                    corners.size >= 4 -> (detectDiamond(xs, ys, corners, minX, maxX, minY, maxY)
+                                             ?: detectRectangle(xs, ys, minX, maxX, minY, maxY, diagonal))
                                              ?.let { return it }
-                    // 0–2 sharp corners: no bounding-box corner proximity detected above,
-                    // but still check rounded-rectangle as a final fallback.
+                    // 0–2 sharp corners: check rounded-rectangle as a final fallback.
                     else              -> detectRoundedRectangle(xs, ys, minX, maxX, minY, maxY, diagonal)
                                              ?.let { return it }
                 }
@@ -185,8 +208,10 @@ object ShapeSnapDetection {
      *
      * Returns indices sorted ascending (stroke order), one per geometric corner.
      */
-    private fun findCornerIndices(xs: FloatArray, ys: FloatArray, window: Int): List<Int> {
-        val n = xs.size
+    private fun findCornerIndices(
+        xs: FloatArray, ys: FloatArray, window: Int, count: Int = xs.size
+    ): List<Int> {
+        val n = count
         val threshold = (CORNER_ANGLE_DEG * PI / 180).toFloat()
         val result = mutableListOf<Int>()
         var inCorner = false
@@ -224,28 +249,35 @@ object ShapeSnapDetection {
      * If the last point duplicates the first (the typical explicit-close convention),
      * it is trimmed before extending to avoid counting the start corner twice.
      */
+    // Reusable buffers for findCornerIndicesCyclic to avoid per-call allocations.
+    // ShapeSnapDetection is a singleton object, so these are effectively static.
+    private var cyclicBufXs = FloatArray(0)
+    private var cyclicBufYs = FloatArray(0)
+
     private fun findCornerIndicesCyclic(xs: FloatArray, ys: FloatArray, window: Int): List<Int> {
         // Strip the closing duplicate if present so the start/end corner is not detected twice.
         val lastDuplicatesFirst = dist(xs.last(), ys.last(), xs.first(), ys.first()) < 0.01f
         val n = if (lastDuplicatesFirst) xs.size - 1 else xs.size
 
         val ext = n + 2 * window
-        val extXs = FloatArray(ext) { i ->
-            when {
-                i < window      -> xs[n - window + i]
-                i < n + window  -> xs[i - window]
-                else            -> xs[i - n - window]
-            }
+        // Grow buffers only when needed; never shrink to avoid repeated allocation
+        // across similarly-sized strokes.
+        if (cyclicBufXs.size < ext) {
+            cyclicBufXs = FloatArray(ext)
+            cyclicBufYs = FloatArray(ext)
         }
-        val extYs = FloatArray(ext) { i ->
+        val extXs = cyclicBufXs
+        val extYs = cyclicBufYs
+        for (i in 0 until ext) {
             when {
-                i < window      -> ys[n - window + i]
-                i < n + window  -> ys[i - window]
-                else            -> ys[i - n - window]
+                i < window     -> { extXs[i] = xs[n - window + i]; extYs[i] = ys[n - window + i] }
+                i < n + window -> { extXs[i] = xs[i - window];     extYs[i] = ys[i - window] }
+                else           -> { extXs[i] = xs[i - n - window]; extYs[i] = ys[i - n - window] }
             }
         }
         // Extended loop covers extIdx ∈ [window, n+window-1] → origIdx = extIdx - window ∈ [0, n-1]
-        val translated = findCornerIndices(extXs, extYs, window)
+        // Note: findCornerIndices only reads indices [0, ext), which is within our buffer.
+        val translated = findCornerIndices(extXs, extYs, window, count = ext)
             .map { it - window }
             .distinct()
             .sorted()
@@ -337,6 +369,31 @@ object ShapeSnapDetection {
             xs[corners[1]], ys[corners[1]],
             xs[corners[2]], ys[corners[2]]
         )
+    }
+
+    /**
+     * Returns a Diamond if all detected corners are near the four bounding-box edge midpoints
+     * `(cx,minY)`, `(maxX,cy)`, `(cx,maxY)`, `(minX,cy)`, within [DIAMOND_CORNER_THRESHOLD]×min(w,h).
+     */
+    private fun detectDiamond(
+        xs: FloatArray, ys: FloatArray,
+        corners: List<Int>,
+        minX: Float, maxX: Float, minY: Float, maxY: Float
+    ): SnapResult.Diamond? {
+        val cx = (minX + maxX) / 2f
+        val cy = (minY + maxY) / 2f
+        val w = maxX - minX
+        val h = maxY - minY
+        val threshold = DIAMOND_CORNER_THRESHOLD * min(w, h)
+        val edgeMidpoints = arrayOf(
+            Pair(cx, minY), Pair(maxX, cy), Pair(cx, maxY), Pair(minX, cy)
+        )
+        for (ci in corners) {
+            val px = xs[ci]; val py = ys[ci]
+            val nearestDist = edgeMidpoints.minOf { (mx, my) -> dist(px, py, mx, my) }
+            if (nearestDist > threshold) return null
+        }
+        return SnapResult.Diamond(minX, minY, maxX, maxY)
     }
 
     private fun detectRectangle(

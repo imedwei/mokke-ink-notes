@@ -11,8 +11,15 @@ import kotlin.math.roundToInt
  */
 object LineDragDetection {
 
-    /** Minimum vertical span (in line spacings) to classify a stroke as a line-drag. */
-    const val MIN_SPANS = 1f
+    /**
+     * Minimum vertical span (in line spacings) to classify a stroke as a line-drag.
+     *
+     * Set to 2.0 so the gesture must span two full line spacings (≈ 15 mm at 300 PPI).
+     * This is far taller than any single handwritten letter (including capitals and
+     * ascenders) and eliminates the false positives that caused writing strokes near
+     * the right margin to be silently consumed after a diagram was drawn (Bug #6).
+     */
+    const val MIN_SPANS = 2f
 
     /**
      * Maximum allowed horizontal drift as a fraction of the stroke's vertical span.
@@ -48,5 +55,22 @@ object LineDragDetection {
      */
     fun isSnappableLine(xs: FloatArray, ys: FloatArray, lineSpacing: Float): Boolean {
         return ShapeSnapDetection.detect(xs, ys, lineSpacing) is ShapeSnapDetection.SnapResult.Line
+    }
+
+    /**
+     * Returns true if the stroke's leftmost X position is within the valid line-drag zone:
+     * the rightmost [gutterWidth] px of the writing area (i.e. the column immediately to
+     * the left of the scroll gutter).
+     *
+     * This guard prevents tall narrow writing strokes (ascender letters, digit '1', etc.)
+     * in the main text area from being falsely consumed as line-drag gestures.  Only
+     * deliberate gestures drawn right beside the gutter should trigger a drag.
+     *
+     * @param strokeMinX  leftmost X coordinate of the stroke (document space)
+     * @param canvasWidth full width of the writing canvas in px (before gutter is excluded)
+     * @param gutterWidth width of the scroll gutter in px
+     */
+    fun isInDragZone(strokeMinX: Float, canvasWidth: Float, gutterWidth: Float): Boolean {
+        return strokeMinX >= canvasWidth - gutterWidth * 2
     }
 }

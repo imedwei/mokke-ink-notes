@@ -26,6 +26,8 @@ fun InkStroke.shiftY(dy: Float): InkStroke {
     return InkStroke(
         strokeId = strokeId,
         points = shiftedPoints,
-        strokeWidth = strokeWidth
+        strokeWidth = strokeWidth,
+        isGeometric = isGeometric,
+        strokeType = strokeType
     )
 }

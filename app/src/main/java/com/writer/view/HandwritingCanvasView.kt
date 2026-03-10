@@ -7,7 +7,7 @@ import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.PointF
 import android.graphics.Rect
-import android.graphics.RectF
+
 import android.graphics.Typeface
 import android.util.AttributeSet
 import android.util.Log
@@ -21,7 +21,7 @@ import com.onyx.android.sdk.pen.RawInputCallback
 import com.onyx.android.sdk.pen.TouchHelper
 import com.onyx.android.sdk.pen.data.TouchPointList
 import com.writer.model.DiagramArea
-import com.writer.model.DiagramNode
+
 import com.writer.model.DocumentModel
 import com.writer.model.InkStroke
 import com.writer.model.StrokePoint
@@ -195,22 +195,6 @@ class HandwritingCanvasView @JvmOverloads constructor(
     //
     // Coordinates are in document space (y includes scrollOffsetY), matching
     // currentStrokePoints.  Reset at stroke start; updated by updateStrokeBounds().
-    private var strokeMinX = 0f
-    private var strokeMaxX = 0f
-    private var strokeMinY = 0f
-    private var strokeMaxY = 0f
-
-    // ── Running stroke bounding box ───────────────────────────────────────────
-    // checkGestures needs xRange and yRange of the stroke so far.  The naive
-    // approach scans currentStrokePoints on every incoming point: O(n) per
-    // point → O(n²) per stroke.  Instead we maintain a running bounding box
-    // that is updated in O(1) as each new point arrives, so the total cost
-    // across the whole stroke is O(n).
-    //
-    // Coordinates are in document space (y includes scrollOffsetY), matching
-    // currentStrokePoints, so checkGestures can read them directly.
-    //
-    // Reset at the start of each stroke; updated by updateStrokeBounds().
     private var strokeMinX = 0f
     private var strokeMaxX = 0f
     private var strokeMinY = 0f
@@ -822,71 +806,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
         dwellJob = null
     }
 
-    // ── Magnetic snap helpers ─────────────────────────────────────────────────
-
-    /** Distance from point ([px],[py]) to nearest point on [bounds] perimeter (0 if inside). */
-    private fun distToBbox(px: Float, py: Float, bounds: RectF): Float {
-        val cx = px.coerceIn(bounds.left, bounds.right)
-        val cy = py.coerceIn(bounds.top, bounds.bottom)
-        return hypot(px - cx, py - cy)
-    }
-
-    /** Nearest point on [node]'s perimeter to ([px],[py]). */
-    private fun nearestPerimeterPoint(px: Float, py: Float, node: DiagramNode): Pair<Float, Float> {
-        val b = node.bounds
-        if (node.shapeType == StrokeType.ELLIPSE) {
-            val cx = b.centerX(); val cy = b.centerY()
-            val ra = b.width() / 2f; val rb = b.height() / 2f
-            val dx = px - cx; val dy = py - cy
-            val len = hypot(dx, dy)
-            return if (len == 0f) Pair(cx + ra, cy)
-            else Pair(cx + ra * dx / len, cy + rb * dy / len)
-        }
-        val cx = px.coerceIn(b.left, b.right)
-        val cy = py.coerceIn(b.top, b.bottom)
-        if (cx != px || cy != py) return Pair(cx, cy)
-        val dLeft = px - b.left
-        val dRight = b.right - px
-        val dTop = py - b.top
-        val dBottom = b.bottom - py
-        val minD = minOf(dLeft, dRight, dTop, dBottom)
-        return when (minD) {
-            dLeft   -> Pair(b.left, py)
-            dRight  -> Pair(b.right, py)
-            dTop    -> Pair(px, b.top)
-            else    -> Pair(px, b.bottom)
-        }
-    }
-
     // ── Running stroke bounding box ───────────────────────────────────────────
-
-    /**
-     * Initialise the running stroke bounding box from the first point of a new stroke.
-     * Must be called once at stroke start (ACTION_DOWN / onBeginRawDrawing).
-     */
-    private fun initStrokeBounds(p: StrokePoint) {
-        strokeMinX = p.x; strokeMaxX = p.x
-        strokeMinY = p.y; strokeMaxY = p.y
-    }
-
-    /**
-     * Expand the running bounding box to include [p].
-     *
-     * Called in O(1) on every incoming point so that [checkGestures] can read
-     * xRange and yRange in O(1) rather than scanning [currentStrokePoints] each time.
-     *
-     * The naive approach called currentStrokePoints.maxOf/minOf on every point:
-     * O(n) per point → O(n²) per stroke. Profiling with STROKE_DIAG confirmed
-     * this cost: 136 ms for a 551-point stroke, 267 ms for a 781-point stroke.
-     * With running bounds the total cost across the whole stroke is O(n);
-     * the same strokes measured 3 ms and were not observed in the new session.
-     */
-    private fun updateStrokeBounds(p: StrokePoint) {
-        if (p.x < strokeMinX) strokeMinX = p.x
-        if (p.x > strokeMaxX) strokeMaxX = p.x
-        if (p.y < strokeMinY) strokeMinY = p.y
-        if (p.y > strokeMaxY) strokeMaxY = p.y
-    }
 
     /**
      * Initialise the running stroke bounding box from the first point of a new stroke.

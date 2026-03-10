@@ -46,6 +46,11 @@ class RecognizedTextView @JvmOverloads constructor(
         private const val BULLET_PREFIX   = "\u2022  "
         private val HEADING_SPACING_AFTER get() = ScreenMetrics.dp(6f)
         private val BOTTOM_PADDING        get() = ScreenMetrics.dp(5f)
+
+        // Gutter tap zone thresholds (multiples of GUTTER_WIDTH from top)
+        private const val GUTTER_LOGO_ZONE  = 1.2f
+        private const val GUTTER_UNDO_ZONE  = 2.4f
+        private const val GUTTER_REDO_ZONE  = 3.6f
     }
 
     private val textPaint = TextPaint().apply {
@@ -174,6 +179,12 @@ class RecognizedTextView @JvmOverloads constructor(
 
     /** Called when the user taps the "I" logo. */
     var onLogoTap: (() -> Unit)? = null
+
+    /** Called when the user taps the undo button in the gutter. */
+    var onUndoTap: (() -> Unit)? = null
+
+    /** Called when the user taps the redo button in the gutter. */
+    var onRedoTap: (() -> Unit)? = null
 
     /** Called when the user taps on a text segment. Passes the written lineIndex. */
     var onTextTap: ((Int) -> Unit)? = null
@@ -426,9 +437,14 @@ class RecognizedTextView @JvmOverloads constructor(
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 if (!isGutterDragging) return false
                 isGutterDragging = false
-                // Detect tap on the logo area (top of gutter, no significant drag)
-                if (!gutterDragMoved && gutterDragStartY < 130f) {
-                    onLogoTap?.invoke()
+                // Detect tap on gutter buttons (no significant drag)
+                if (!gutterDragMoved) {
+                    val y = gutterDragStartY
+                    when {
+                        y < GUTTER_WIDTH * GUTTER_LOGO_ZONE -> onLogoTap?.invoke()
+                        y < GUTTER_WIDTH * GUTTER_UNDO_ZONE -> onUndoTap?.invoke()
+                        y < GUTTER_WIDTH * GUTTER_REDO_ZONE -> onRedoTap?.invoke()
+                    }
                 }
                 return true
             }
