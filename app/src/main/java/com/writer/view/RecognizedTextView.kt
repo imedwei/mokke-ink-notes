@@ -36,20 +36,21 @@ class RecognizedTextView @JvmOverloads constructor(
 ) : View(context, attrs, defStyleAttr) {
 
     companion object {
-        private const val HORIZONTAL_PADDING = 40f
-        private const val PARAGRAPH_SPACING = 22f
-        private const val LIST_ITEM_SPACING = 6f
-        private const val FIRST_LINE_INDENT = 80
-        private const val LIST_BASE_INDENT = 60
-        private const val BULLET_HANG_INDENT = 100
-        private const val BULLET_PREFIX = "\u2022  "
-        private const val HEADING_SPACING_AFTER = 12f
-        private const val BOTTOM_PADDING = 10f
+        private val GUTTER_WIDTH          get() = ScreenMetrics.gutterWidth
+        private val HORIZONTAL_PADDING    get() = ScreenMetrics.dp(21f)
+        private val PARAGRAPH_SPACING     get() = ScreenMetrics.dp(12f)
+        private val LIST_ITEM_SPACING     get() = ScreenMetrics.dp(3f)
+        private val FIRST_LINE_INDENT     get() = ScreenMetrics.dp(43f).toInt()
+        private val LIST_BASE_INDENT      get() = ScreenMetrics.dp(32f).toInt()
+        private val BULLET_HANG_INDENT    get() = ScreenMetrics.dp(54f).toInt()
+        private const val BULLET_PREFIX   = "\u2022  "
+        private val HEADING_SPACING_AFTER get() = ScreenMetrics.dp(6f)
+        private val BOTTOM_PADDING        get() = ScreenMetrics.dp(5f)
     }
 
     private val textPaint = TextPaint().apply {
         color = Color.BLACK
-        textSize = 64f
+        textSize = ScreenMetrics.textBody
         isAntiAlias = false // e-ink
     }
 
@@ -60,7 +61,7 @@ class RecognizedTextView @JvmOverloads constructor(
 
     private val logoPaint = TextPaint().apply {
         color = Color.BLACK
-        textSize = 96f
+        textSize = ScreenMetrics.textLogo
         typeface = Typeface.create("cursive", Typeface.BOLD)
         isAntiAlias = true
         textAlign = Paint.Align.CENTER
@@ -68,7 +69,7 @@ class RecognizedTextView @JvmOverloads constructor(
 
     private val statusPaint = TextPaint().apply {
         color = Color.parseColor("#555555")
-        textSize = 48f
+        textSize = ScreenMetrics.textStatus
         isAntiAlias = true
         textAlign = Paint.Align.CENTER
     }
@@ -82,14 +83,14 @@ class RecognizedTextView @JvmOverloads constructor(
 
     private val statusSubtextPaint = TextPaint().apply {
         color = Color.parseColor("#666666")
-        textSize = 34f
+        textSize = ScreenMetrics.textSubtext
         isAntiAlias = true
         textAlign = Paint.Align.CENTER
     }
 
     private val closeButtonPaint = TextPaint().apply {
         color = Color.BLACK
-        textSize = 42f
+        textSize = ScreenMetrics.textCloseBtn
         typeface = Typeface.DEFAULT_BOLD
         isAntiAlias = true
         textAlign = Paint.Align.CENTER
@@ -111,7 +112,7 @@ class RecognizedTextView @JvmOverloads constructor(
 
     private val tutorialTextPaint = TextPaint().apply {
         color = Color.rgb(50, 50, 200)
-        textSize = 34f
+        textSize = ScreenMetrics.textTutorial
         typeface = Typeface.DEFAULT_BOLD
         isAntiAlias = true
     }
@@ -150,7 +151,7 @@ class RecognizedTextView @JvmOverloads constructor(
     /** Called when the "Close Tutorial" button is tapped. */
     var onCloseTutorialTap: (() -> Unit)? = null
 
-    private val closeButtonHeight = 110f
+    private val closeButtonHeight get() = ScreenMetrics.dp(60f)
 
     private var renderItems: List<RenderItem> = emptyList()
     var totalTextHeight = 0
@@ -213,7 +214,7 @@ class RecognizedTextView @JvmOverloads constructor(
     }
 
     private fun rebuildRenderItems(paragraphs: List<List<TextSegment>>, diagrams: List<DiagramDisplay>) {
-        val availableWidth = (width - HORIZONTAL_PADDING - HandwritingCanvasView.gutterWidth(width)).toInt()
+        val availableWidth = (width - HORIZONTAL_PADDING - HandwritingCanvasView.GUTTER_WIDTH).toInt()
         if (availableWidth <= 0) return
 
         data class Indexed(val lineIndex: Int, val item: RenderItem, val lineHeights: List<Pair<Int, Float>>)
@@ -315,7 +316,7 @@ class RecognizedTextView @JvmOverloads constructor(
 
         // Build diagram render items (full width, no text padding)
         val diagramItems = diagrams.map { diagram ->
-            val fullWidth = width - HandwritingCanvasView.gutterWidth(width)
+            val fullWidth = width - HandwritingCanvasView.GUTTER_WIDTH
             val scale = if (diagram.canvasWidth > 0f) fullWidth / diagram.canvasWidth else 1f
             val renderedHeight = diagram.heightPx * scale + PARAGRAPH_SPACING
             Indexed(
@@ -355,7 +356,7 @@ class RecognizedTextView @JvmOverloads constructor(
         }
 
         // Tutorial: close button tap at top of text area
-        if (tutorialMode && event.x < width - HandwritingCanvasView.gutterWidth(width) && event.y < closeButtonHeight) {
+        if (tutorialMode && event.x < width - HandwritingCanvasView.GUTTER_WIDTH && event.y < closeButtonHeight) {
             if (event.action == MotionEvent.ACTION_DOWN) {
                 return true
             }
@@ -366,7 +367,7 @@ class RecognizedTextView @JvmOverloads constructor(
         }
 
         // Stylus/mouse in gutter area → resize drag
-        if (event.x >= width - HandwritingCanvasView.gutterWidth(width)) {
+        if (event.x >= width - HandwritingCanvasView.GUTTER_WIDTH) {
             return handleGutterTouch(event)
         }
 
@@ -480,20 +481,20 @@ class RecognizedTextView @JvmOverloads constructor(
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
 
-        val gutterLeft = width - HandwritingCanvasView.gutterWidth(width)
-        val gutterCenterX = gutterLeft + HandwritingCanvasView.gutterWidth(width) / 2f
+        val gutterLeft = width - HandwritingCanvasView.GUTTER_WIDTH
+        val gutterCenterX = gutterLeft + HandwritingCanvasView.GUTTER_WIDTH / 2f
 
         // Draw text content or status/hint message
         if (statusMessage.isNotEmpty() && renderItems.isEmpty()) {
             // Draw status message centered in the content area
-            val contentCenterX = (width - HandwritingCanvasView.gutterWidth(width)) / 2f
+            val contentCenterX = (width - HandwritingCanvasView.GUTTER_WIDTH) / 2f
             val contentCenterY = height / 2f
             canvas.drawText(statusMessage, contentCenterX, contentCenterY, statusPaint)
             if (statusSubtext.isNotEmpty()) {
                 canvas.drawText(statusSubtext, contentCenterX, contentCenterY + 50f, statusSubtextPaint)
             }
         } else if (showScrollHint && renderItems.isEmpty() && !tutorialMode) {
-            val contentCenterX = (width - HandwritingCanvasView.gutterWidth(width)) / 2f
+            val contentCenterX = (width - HandwritingCanvasView.GUTTER_WIDTH) / 2f
             val contentCenterY = height / 2f
             canvas.drawText("Scroll to turn writing into text", contentCenterX, contentCenterY, scrollHintPaint)
         } else if (renderItems.isNotEmpty()) {
@@ -528,7 +529,7 @@ class RecognizedTextView @JvmOverloads constructor(
 
         if (tutorialMode) {
             // "Close Tutorial" button centered at top of text area
-            val contentCenterX = (width - HandwritingCanvasView.gutterWidth(width)) / 2f
+            val contentCenterX = (width - HandwritingCanvasView.GUTTER_WIDTH) / 2f
             val btnTextY = 52f
             canvas.drawText("Close Tutorial", contentCenterX, btnTextY, closeButtonPaint)
             val btnTextWidth = closeButtonPaint.measureText("Close Tutorial")

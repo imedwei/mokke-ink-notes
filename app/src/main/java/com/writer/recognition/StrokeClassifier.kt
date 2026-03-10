@@ -9,6 +9,7 @@ import com.writer.model.yRange
 import com.writer.model.pathLength
 import com.writer.model.diagonal
 import com.writer.view.HandwritingCanvasView
+import com.writer.view.ScreenMetrics
 
 /**
  * Classifies strokes as list markers (dash) or underlines (heading),
@@ -21,15 +22,15 @@ class StrokeClassifier(private val lineSegmenter: LineSegmenter) {
         // A line indented more than ~10% from the left starts a new paragraph
         const val INDENT_THRESHOLD = 0.105f
 
-        // List marker detection
-        private const val MARKER_MIN_WIDTH = 15f
-        private const val MARKER_MAX_WIDTH = 120f
+        // List marker detection (pixel values DPI-scaled via ScreenMetrics)
+        private val MARKER_MIN_WIDTH get() = ScreenMetrics.dp(8f)
+        private val MARKER_MAX_WIDTH get() = ScreenMetrics.dp(64f)
         private const val MARKER_MAX_HEIGHT_RATIO = 0.4f
-        private const val MARKER_MIN_GAP = 20f
+        private val MARKER_MIN_GAP get() = ScreenMetrics.dp(11f)
 
         // Underline detection
         private const val UNDERLINE_MAX_HEIGHT_RATIO = 0.3f
-        private const val UNDERLINE_MIN_WIDTH = 100f
+        private val UNDERLINE_MIN_WIDTH get() = ScreenMetrics.dp(54f)
         private const val UNDERLINE_TOP_FRACTION = 0.5f
         private const val UNDERLINE_MIN_TEXT_COVERAGE = 0.8f
 

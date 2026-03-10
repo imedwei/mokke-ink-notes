@@ -37,14 +37,14 @@ class HandwritingCanvasView @JvmOverloads constructor(
 
     companion object {
         private const val TAG = "HandwritingCanvas"
-        // Line spacing in pixels.
-        const val LINE_SPACING = 115f
+        // Line spacing, top margin and gutter width are DPI-scaled via ScreenMetrics.
+        val LINE_SPACING get() = ScreenMetrics.lineSpacing
         // Idle timeout before checking scroll condition (ms)
         private const val IDLE_TIMEOUT_MS = 2000L
         // Top margin before the first line
-        const val TOP_MARGIN = 40f
-        // Width of the scroll gutter: 7% of screen width
-        fun gutterWidth(viewWidth: Int): Float = viewWidth * 0.07f
+        val TOP_MARGIN get() = ScreenMetrics.topMargin
+        // Width of the scroll gutter on the right edge
+        val GUTTER_WIDTH get() = ScreenMetrics.gutterWidth
         // Line-drag gesture: vertical span to activate (either direction)
         private const val LINE_DRAG_MIN_SPANS = 1f
         // Line-drag gesture: max horizontal drift ratio during activation
@@ -55,8 +55,8 @@ class HandwritingCanvasView @JvmOverloads constructor(
         private const val UNDO_MAX_VERTICAL_DRIFT = 0.2f
         // Undo gesture: vertical span (in line spacings) to activate after horizontal stroke
         private const val UNDO_VERTICAL_ACTIVATION = 0.75f
-        // Undo scrub: vertical pixels per undo/redo step
-        private const val UNDO_STEP_SIZE = 20f
+        // Undo scrub: ~1.8 mm per undo/redo step, scaled to device DPI
+        private val UNDO_STEP_SIZE get() = ScreenMetrics.dp(11f)
         // Diagram insert: fraction of stroke to analyze for scribble detection
         private const val SCRIBBLE_SEGMENT_FRACTION = 0.4f
         // Diagram insert: path-length / displacement ratio threshold for scribble
@@ -263,7 +263,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
             try {
                 val limit = Rect()
                 getLocalVisibleRect(limit)
-                limit.right = (limit.right - gutterWidth(width)).toInt()
+                limit.right = (limit.right - GUTTER_WIDTH).toInt()
                 touchHelper?.setLimitRect(limit, emptyList())
             } catch (e: Exception) {
                 Log.w(TAG, "Error updating limit rect: ${e.message}")
@@ -288,7 +288,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
         try {
             val limit = Rect()
             getLocalVisibleRect(limit)
-            limit.right = (limit.right - gutterWidth(width)).toInt()
+            limit.right = (limit.right - GUTTER_WIDTH).toInt()
 
             touchHelper = TouchHelper.create(this, onyxCallback)
             touchHelper?.setStrokeWidth(CanvasTheme.DEFAULT_STROKE_WIDTH)
@@ -324,7 +324,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
         }
 
         // Stylus/mouse in gutter area → scroll drag
-        if (event.x >= width - gutterWidth(width)) {
+        if (event.x >= width - GUTTER_WIDTH) {
             return handleGutterTouch(event)
         }
 
@@ -506,7 +506,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
         try {
             val limit = Rect()
             limit.left = 0
-            limit.right = (width - gutterWidth(width)).toInt()
+            limit.right = (width - GUTTER_WIDTH).toInt()
             limit.top = (topY - scrollOffsetY).toInt().coerceAtLeast(0)
             limit.bottom = (bottomY - scrollOffsetY).toInt().coerceAtMost(height)
             touchHelper?.setLimitRect(limit, emptyList())
@@ -522,7 +522,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
         try {
             val limit = Rect()
             getLocalVisibleRect(limit)
-            limit.right = (limit.right - gutterWidth(width)).toInt()
+            limit.right = (limit.right - GUTTER_WIDTH).toInt()
             touchHelper?.setLimitRect(limit, emptyList())
             diagramLimitActive = false
         } catch (e: Exception) {
@@ -861,7 +861,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
         // Clear background
         canvas.drawColor(Color.WHITE)
 
-        val gutterLeft = width - gutterWidth(width)
+        val gutterLeft = width - GUTTER_WIDTH
 
         // Apply scroll offset
         canvas.save()

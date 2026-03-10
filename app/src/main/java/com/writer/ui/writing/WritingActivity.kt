@@ -466,7 +466,7 @@ class WritingActivity : AppCompatActivity() {
         }
 
         // Position to the left of the gutter, at the top of the text view
-        val gutterWidth = HandwritingCanvasView.gutterWidth(recognizedTextView.width).toInt()
+        val gutterWidth = HandwritingCanvasView.GUTTER_WIDTH.toInt()
         val loc = IntArray(2)
         recognizedTextView.getLocationOnScreen(loc)
         val x = loc[0] + recognizedTextView.width - gutterWidth - popupWidth

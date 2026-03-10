@@ -14,6 +14,7 @@ import com.writer.model.pathLength
 import com.writer.model.diagonal
 import com.writer.recognition.LineSegmenter
 import com.writer.view.HandwritingCanvasView
+import com.writer.view.ScreenMetrics
 
 /**
  * Detects and handles ink gestures: strikethrough (delete words),
@@ -32,8 +33,8 @@ class GestureHandler(
     companion object {
         private const val TAG = "GestureHandler"
 
-        // Strikethrough: minimum horizontal span to count as a strikethrough
-        private const val STRIKETHROUGH_MIN_WIDTH = 100f
+        // Strikethrough: minimum horizontal span (~8.5 mm, DPI-scaled)
+        private val STRIKETHROUGH_MIN_WIDTH get() = ScreenMetrics.dp(54f)
         // Strikethrough: max height-to-width ratio (must be very flat)
         private const val STRIKETHROUGH_MAX_HEIGHT_RATIO = 0.3f
         // Strikethrough: max path-to-diagonal ratio (must be a straight line)
