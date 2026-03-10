@@ -17,6 +17,10 @@ android {
     }
 
     buildTypes {
+        debug {
+            applicationIdSuffix = ".dev"
+            resValue("string", "app_name", "InkUp Dev")
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(
