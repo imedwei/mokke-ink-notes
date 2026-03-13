@@ -5,7 +5,7 @@ import com.writer.model.DiagramArea
 import com.writer.model.DocumentModel
 import com.writer.model.InkStroke
 import com.writer.model.shiftY
-import com.writer.recognition.HandwritingRecognizer
+import com.writer.recognition.TextRecognizer
 import com.writer.recognition.LineSegmenter
 import com.writer.recognition.StrokeClassifier
 import com.writer.model.DocumentData
@@ -21,7 +21,7 @@ import kotlinx.coroutines.withContext
 
 class WritingCoordinator(
     private val documentModel: DocumentModel,
-    private val recognizer: HandwritingRecognizer,
+    private val recognizer: TextRecognizer,
     private val inkCanvas: HandwritingCanvasView,
     private val textView: RecognizedTextView,
     private val scope: CoroutineScope,
@@ -427,27 +427,14 @@ class WritingCoordinator(
         updateTextView(notYetVisible)
         updateTextScrollOffset()
 
-        val uncached = everHiddenLines.filter { !lineTextCache.containsKey(it) && !isDiagramLine(it) }
+        val uncached = everHiddenLines.filter { !lineTextCache.containsKey(it) && !isDiagramLine(it) && !recognizingLines.contains(it) }
         if (uncached.isNotEmpty()) {
+            for (lineIdx in uncached) {
+                recognizingLines.add(lineIdx)
+            }
             scope.launch {
                 for (lineIdx in uncached) {
-                    if (lineTextCache.containsKey(lineIdx)) continue
-                    if (isDiagramLine(lineIdx)) continue
-                    try {
-                        val allStrokes = strokesByLine[lineIdx] ?: continue
-                        val strokes = strokeClassifier.filterMarkerStrokes(allStrokes, inkCanvas.width - GUTTER_WIDTH)
-                        if (strokes.isEmpty()) continue
-                        val line = lineSegmenter.buildInkLine(strokes, lineIdx)
-                        val preContext = buildPreContext(lineIdx)
-                        val text = withContext(Dispatchers.IO) {
-                            recognizer.recognizeLine(line, preContext)
-                        }
-                        lineTextCache[lineIdx] = text.trim()
-                        Log.d(TAG, "On-scroll recognized line $lineIdx: \"${text.trim()}\"")
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Recognition failed for line $lineIdx", e)
-                        lineTextCache[lineIdx] = "[?]"
-                    }
+                    doRecognizeLine(lineIdx)
                 }
                 val stillNotVisible = strokesByLine.keys.filter { lineIdx ->
                     val lineMid = lineSegmenter.getLineY(lineIdx) + HandwritingCanvasView.LINE_SPACING / 2f
