@@ -64,6 +64,40 @@ android {
     }
 }
 
+tasks.register("captureFixture") {
+    description = "Capture handwriting fixture from device: -PfixtureName=hello -PexpectedText=\"hello\""
+    dependsOn("installDebug", "installDebugAndroidTest")
+    doLast {
+        val name = project.property("fixtureName") as String
+        val text = project.property("expectedText") as String
+        val lang = project.findProperty("language") as? String ?: "en-US"
+        val line = project.findProperty("lineIndex") as? String ?: "0"
+        val adb = android.adbExecutable.absolutePath
+        val appId = "com.writer.dev"
+
+        exec {
+            commandLine(adb, "shell", "am", "instrument", "-w",
+                "-e", "class", "com.writer.recognition.StrokeFixtureCapture",
+                "-e", "fixtureName", name,
+                "-e", "expectedText", text,
+                "-e", "language", lang,
+                "-e", "lineIndex", line,
+                "$appId.test/androidx.test.runner.AndroidJUnitRunner")
+        }
+
+        exec {
+            commandLine(adb, "pull",
+                "/sdcard/Download/inkup-fixtures/$name.json",
+                "app/src/androidTest/assets/fixtures/$name.json")
+        }
+
+        exec {
+            commandLine(adb, "shell", "rm",
+                "/sdcard/Download/inkup-fixtures/$name.json")
+        }
+    }
+}
+
 configurations.all {
     // Onyx SDK pulls in old pre-AndroidX support libraries that clash with AndroidX
     exclude(group = "com.android.support", module = "support-compat")
