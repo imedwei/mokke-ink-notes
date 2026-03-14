@@ -23,7 +23,7 @@ import org.junit.runner.RunWith
  * Skipped on non-Boox devices where KHwrService is unavailable.
  */
 @RunWith(AndroidJUnit4::class)
-class TextRecognitionTest {
+class OnyxHwrTextRecognizerTest {
 
     private lateinit var recognizer: OnyxHwrTextRecognizer
     private var hwrAvailable = false
