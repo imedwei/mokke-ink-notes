@@ -204,7 +204,7 @@ class OnyxHwrTextRecognizer(private val context: Context) : TextRecognizer {
         }
     }
 
-    private fun createSharedMemoryPfd(data: ByteArray): Pair<SharedMemory, ParcelFileDescriptor>? {
+    internal fun createSharedMemoryPfd(data: ByteArray): Pair<SharedMemory, ParcelFileDescriptor>? {
         return try {
             val shm = SharedMemory.create("hwr_input", data.size)
             val buf = shm.mapReadWrite()
