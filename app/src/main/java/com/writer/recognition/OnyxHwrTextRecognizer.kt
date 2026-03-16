@@ -6,7 +6,6 @@ import android.content.Intent
 import android.content.ServiceConnection
 import android.os.IBinder
 import android.os.ParcelFileDescriptor
-import android.os.SharedMemory
 import android.util.Log
 import com.onyx.android.sdk.hwr.service.HWRInputArgs
 import com.onyx.android.sdk.hwr.service.HWROutputArgs
@@ -19,8 +18,8 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
-import java.io.FileDescriptor
 import java.io.FileInputStream
+import java.io.FileOutputStream
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
@@ -143,7 +142,7 @@ class OnyxHwrTextRecognizer(private val context: Context) : TextRecognizer {
 
         val protoBytes = HwrProtobuf.buildProtobuf(line, viewWidth, viewHeight, currentLang)
 
-        val (shm, pfd) = createSharedMemoryPfd(protoBytes) ?: return ""
+        val pfd = createPipePfd(protoBytes) ?: return ""
 
         return try {
             val result = withTimeoutOrNull(RECOGNIZE_TIMEOUT_MS) {
@@ -179,7 +178,6 @@ class OnyxHwrTextRecognizer(private val context: Context) : TextRecognizer {
             result ?: ""
         } finally {
             pfd.close()
-            shm.close()
         }
     }
 
@@ -204,19 +202,14 @@ class OnyxHwrTextRecognizer(private val context: Context) : TextRecognizer {
         }
     }
 
-    internal fun createSharedMemoryPfd(data: ByteArray): Pair<SharedMemory, ParcelFileDescriptor>? {
+    internal fun createPipePfd(data: ByteArray): ParcelFileDescriptor? {
         return try {
-            val shm = SharedMemory.create("hwr_input", data.size)
-            val buf = shm.mapReadWrite()
-            buf.put(data)
-            SharedMemory.unmap(buf)
-            val fdField = SharedMemory::class.java.getDeclaredField("mFileDescriptor")
-            fdField.isAccessible = true
-            val fd = fdField.get(shm) as FileDescriptor
-            val pfd = ParcelFileDescriptor.dup(fd)
-            Pair(shm, pfd)
+            val pipe = ParcelFileDescriptor.createPipe()
+            FileOutputStream(pipe[1].fileDescriptor).use { it.write(data) }
+            pipe[1].close()
+            pipe[0]  // read end for the service
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to create SharedMemory PFD: ${e.message}")
+            Log.e(TAG, "Failed to create pipe PFD: ${e.message}")
             null
         }
     }
