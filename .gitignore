@@ -23,3 +23,4 @@ local.properties
 
 # Local environment config (not committed — copy and adapt per machine)
 .envrc
+.claude/
