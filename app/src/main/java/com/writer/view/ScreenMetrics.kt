@@ -1,17 +1,18 @@
 package com.writer.view
 
+import android.util.TypedValue
 import kotlin.math.roundToInt
 
 /**
  * Converts dp/sp design constants to device pixels using Android's standard
- * density system ([DisplayMetrics.density] and [DisplayMetrics.scaledDensity]).
+ * density system ([DisplayMetrics.density] and [TypedValue.applyDimension]).
  *
  * This is the Android platform best practice:
  *  - **dp** (density-independent pixels) for all spatial measurements.
  *    1 dp = 1 px at 160 ppi; scaled by [DisplayMetrics.density].
  *  - **sp** (scale-independent pixels) for text sizes.
  *    Same as dp but additionally respects the user's system font-size preference
- *    via [DisplayMetrics.scaledDensity].
+ *    via [TypedValue.applyDimension] with [TypedValue.COMPLEX_UNIT_SP].
  *
  * The compact/standard breakpoint uses [Configuration.smallestScreenWidthDp] —
  * the same mechanism Android resource qualifiers (e.g. `values-sw600dp/`) use —
@@ -55,9 +56,13 @@ object ScreenMetrics {
 
     // ── Computed pixel values (set by init) ───────────────────────────────────
     var density:       Float   = 1f;    private set
-    var scaledDensity: Float   = 1f;    private set
     /** True when the device's smallestScreenWidthDp is below [COMPACT_SW_DP]. */
     var isCompact:     Boolean = false; private set
+
+    // DisplayMetrics reference for proper SP conversion (null in tests)
+    private var displayMetrics: android.util.DisplayMetrics? = null
+    // Font scale for test init (1.0 = no scaling)
+    private var fontScale: Float = 1f
 
     var lineSpacing:   Float = 100f; private set
     var topMargin:     Float =  30f; private set
@@ -83,34 +88,42 @@ object ScreenMetrics {
         displayMetrics: android.util.DisplayMetrics,
         configuration: android.content.res.Configuration
     ) {
+        this.displayMetrics = displayMetrics
         init(
-            density           = displayMetrics.density,
-            scaledDensity     = displayMetrics.scaledDensity,
-            smallestWidthDp   = configuration.smallestScreenWidthDp,
-            widthPixels       = displayMetrics.widthPixels,
-            heightPixels      = displayMetrics.heightPixels
+            density         = displayMetrics.density,
+            fontScale       = 1f, // Ignored; production uses TypedValue.applyDimension
+            smallestWidthDp = configuration.smallestScreenWidthDp,
+            widthPixels     = displayMetrics.widthPixels,
+            heightPixels    = displayMetrics.heightPixels
         )
+        // Use TypedValue.applyDimension for proper adaptive font scaling on API 34+
+        textBody     = spToPx(TEXT_BODY_SP)
+        textLogo     = spToPx(TEXT_LOGO_SP)
+        textStatus   = spToPx(TEXT_STATUS_SP)
+        textSubtext  = spToPx(TEXT_SUBTEXT_SP)
+        textCloseBtn = spToPx(TEXT_CLOSE_BTN_SP)
+        textTutorial = spToPx(TEXT_TUTORIAL_SP)
     }
 
     /**
      * Plain-value overload for unit tests — no Android framework dependency.
      *
      * @param density         [DisplayMetrics.density] (= densityDpi / 160)
-     * @param scaledDensity   [DisplayMetrics.scaledDensity] (density × fontScale)
+     * @param fontScale       User font scale preference (1.0 = default, >1.0 = larger text)
      * @param smallestWidthDp [Configuration.smallestScreenWidthDp]
      * @param widthPixels     screen width in pixels (used for gutter cap)
      * @param heightPixels    screen height in pixels
      */
     fun init(
         density: Float,
-        scaledDensity: Float,
+        fontScale: Float = 1f,
         smallestWidthDp: Int,
         widthPixels: Int,
         heightPixels: Int
     ) {
-        this.density       = density.coerceAtLeast(0.5f)
-        this.scaledDensity = scaledDensity.coerceAtLeast(0.5f)
-        isCompact          = smallestWidthDp < COMPACT_SW_DP
+        this.density   = density.coerceAtLeast(0.5f)
+        this.fontScale = fontScale.coerceAtLeast(0.5f)
+        isCompact      = smallestWidthDp < COMPACT_SW_DP
 
         val lineSpacingDp  = if (isCompact) LINE_SPACING_COMPACT_DP  else LINE_SPACING_DP
         val gutterTargetDp = if (isCompact) GUTTER_TARGET_COMPACT_DP else GUTTER_TARGET_DP
@@ -126,12 +139,14 @@ object ScreenMetrics {
             .coerceAtLeast(gutterMinDp         * this.density)
             .roundToInt().toFloat()
 
-        textBody     = TEXT_BODY_SP      * this.scaledDensity
-        textLogo     = TEXT_LOGO_SP      * this.scaledDensity
-        textStatus   = TEXT_STATUS_SP    * this.scaledDensity
-        textSubtext  = TEXT_SUBTEXT_SP   * this.scaledDensity
-        textCloseBtn = TEXT_CLOSE_BTN_SP * this.scaledDensity
-        textTutorial = TEXT_TUTORIAL_SP  * this.scaledDensity
+        // SP = dp * fontScale, so text pixels = SP * density * fontScale
+        val spMultiplier = this.density * this.fontScale
+        textBody     = TEXT_BODY_SP      * spMultiplier
+        textLogo     = TEXT_LOGO_SP      * spMultiplier
+        textStatus   = TEXT_STATUS_SP    * spMultiplier
+        textSubtext  = TEXT_SUBTEXT_SP   * spMultiplier
+        textCloseBtn = TEXT_CLOSE_BTN_SP * spMultiplier
+        textTutorial = TEXT_TUTORIAL_SP  * spMultiplier
     }
 
     // ── Conversion helpers ────────────────────────────────────────────────────
@@ -139,8 +154,24 @@ object ScreenMetrics {
     /** Convert dp to pixels at the current display density. */
     fun dp(value: Float): Float = value * density
 
-    /** Convert sp to pixels, respecting the user's font-size preference. */
-    fun sp(value: Float): Float = value * scaledDensity
+    /**
+     * Convert sp to pixels, respecting the user's font-size preference.
+     * Uses [TypedValue.applyDimension] for proper adaptive font scaling on API 34+.
+     */
+    fun sp(value: Float): Float = spToPx(value)
+
+    /**
+     * Internal SP to pixel conversion using [TypedValue.applyDimension] when available.
+     * Falls back to manual calculation for tests without Android framework.
+     */
+    private fun spToPx(value: Float): Float {
+        val dm = displayMetrics
+        return if (dm != null) {
+            TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, value, dm)
+        } else {
+            value * density * fontScale
+        }
+    }
 
     // ── Layout helpers ────────────────────────────────────────────────────────
 
