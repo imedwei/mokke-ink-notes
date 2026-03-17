@@ -10,17 +10,21 @@ import com.google.mlkit.vision.digitalink.recognition.WritingArea
 import com.writer.model.InkLine
 import kotlinx.coroutines.tasks.await
 
-class HandwritingRecognizer {
+/**
+ * Google ML Kit Digital Ink recognition engine.
+ * Works on all Android devices. Downloads language models on first use.
+ */
+class GoogleMLKitTextRecognizer : TextRecognizer {
 
     companion object {
-        private const val TAG = "HandwritingRecognizer"
+        private const val TAG = "GoogleMLKitTextRecognizer"
         private const val PRE_CONTEXT_LENGTH = 20
     }
 
     private var recognizer: DigitalInkRecognizer? = null
     private val modelManager = ModelManager()
 
-    suspend fun initialize(languageTag: String) {
+    override suspend fun initialize(languageTag: String) {
         val model = modelManager.ensureModelDownloaded(languageTag)
         recognizer = DigitalInkRecognition.getClient(
             DigitalInkRecognizerOptions.builder(model).build()
@@ -28,7 +32,7 @@ class HandwritingRecognizer {
         Log.i(TAG, "Recognizer initialized for $languageTag")
     }
 
-    suspend fun recognizeLine(line: InkLine, preContext: String = ""): String {
+    override suspend fun recognizeLine(line: InkLine, preContext: String): String {
         val rec = recognizer ?: throw IllegalStateException("Recognizer not initialized")
 
         val inkBuilder = Ink.builder()
@@ -54,7 +58,7 @@ class HandwritingRecognizer {
         return text
     }
 
-    fun close() {
+    override fun close() {
         recognizer?.close()
         recognizer = null
     }
