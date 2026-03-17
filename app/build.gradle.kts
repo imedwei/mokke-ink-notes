@@ -86,4 +86,34 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
     implementation("androidx.recyclerview:recyclerview:1.3.2")
     implementation("com.google.android.material:material:1.12.0")
+
+    // Testing
+    testImplementation("junit:junit:4.13.2")
+}
+
+tasks.withType<Test> {
+    testLogging {
+        events(org.gradle.api.tasks.testing.logging.TestLogEvent.FAILED)
+        showStandardStreams = false
+    }
+    addTestListener(object : TestListener {
+        override fun beforeSuite(suite: TestDescriptor) {}
+        override fun afterSuite(suite: TestDescriptor, result: TestResult) {
+            if (suite.parent == null) {
+                println("${result.resultType}: ${result.successfulTestCount} passed, ${result.failedTestCount} failed, ${result.skippedTestCount} skipped")
+            }
+        }
+        override fun beforeTest(testDescriptor: TestDescriptor) {}
+        override fun afterTest(testDescriptor: TestDescriptor, result: TestResult) {}
+    })
+}
+
+tasks.register("allTests") {
+    description = "Runs all tests: unit tests and instrumented tests on connected device"
+    group = "verification"
+    dependsOn("testDebugUnitTest", "connectedDebugAndroidTest")
+}
+// Run unit tests first — fail fast before slower device tests
+tasks.matching { it.name == "connectedDebugAndroidTest" }.configureEach {
+    mustRunAfter("testDebugUnitTest")
 }
