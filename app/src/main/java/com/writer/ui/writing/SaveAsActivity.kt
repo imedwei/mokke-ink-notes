@@ -1,7 +1,6 @@
 package com.writer.ui.writing
 
 import android.content.Intent
-import android.graphics.RectF
 import android.os.Bundle
 import android.util.Log
 import android.widget.TextView
@@ -13,7 +12,7 @@ import com.writer.model.InkLine
 import com.writer.model.InkStroke
 import com.writer.model.minX
 import com.writer.model.maxX
-import com.writer.recognition.HandwritingRecognizer
+import com.writer.recognition.TextRecognizerFactory
 import com.writer.view.HandwritingNameInput
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -30,14 +29,25 @@ class SaveAsActivity : AppCompatActivity() {
     private lateinit var nameDisplay: TextView
     private lateinit var handwritingInput: HandwritingNameInput
 
-    private val recognizer = HandwritingRecognizer()
-    private var recognizerReady = false
+    private var recognizer: com.writer.recognition.TextRecognizer? = null
     private val allStrokes = mutableListOf<InkStroke>()
     private var currentName = ""
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_save_as)
+
+        lifecycleScope.launch {
+            val rec = TextRecognizerFactory.create(this@SaveAsActivity)
+            try {
+                rec.initialize("en-US")
+                recognizer = rec
+            } catch (e: Exception) {
+                rec.close()
+                Log.w(TAG, "Recognizer init failed", e)
+                Toast.makeText(this@SaveAsActivity, "Handwriting recognition unavailable", Toast.LENGTH_SHORT).show()
+            }
+        }
 
         nameDisplay = findViewById(R.id.nameDisplay)
         handwritingInput = findViewById(R.id.handwritingInput)
@@ -46,17 +56,6 @@ class SaveAsActivity : AppCompatActivity() {
         currentName = intent.getStringExtra(EXTRA_CURRENT_NAME) ?: ""
         nameDisplay.text = currentName
         handwritingInput.placeholderText = currentName
-
-        // Initialize recognizer
-        lifecycleScope.launch {
-            try {
-                recognizer.initialize("en-US")
-                recognizerReady = true
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to init recognizer", e)
-                Toast.makeText(this@SaveAsActivity, "Recognition unavailable", Toast.LENGTH_SHORT).show()
-            }
-        }
 
         // Handle stroke completion
         handwritingInput.onStrokeCompleted = { stroke ->
@@ -122,7 +121,7 @@ class SaveAsActivity : AppCompatActivity() {
     }
 
     private fun recognizeAll() {
-        if (!recognizerReady) return
+        val rec = recognizer ?: return
         if (allStrokes.isEmpty()) {
             currentName = intent.getStringExtra(EXTRA_CURRENT_NAME) ?: ""
             nameDisplay.text = currentName
@@ -136,7 +135,7 @@ class SaveAsActivity : AppCompatActivity() {
         lifecycleScope.launch {
             try {
                 val text = withContext(Dispatchers.IO) {
-                    recognizer.recognizeLine(line)
+                    rec.recognizeLine(line)
                 }
                 currentName = text.trim()
                 nameDisplay.text = currentName
@@ -148,6 +147,6 @@ class SaveAsActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        recognizer.close()
+        recognizer?.close()
     }
 }
