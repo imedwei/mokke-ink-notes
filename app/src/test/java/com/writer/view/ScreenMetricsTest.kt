@@ -49,13 +49,13 @@ class ScreenMetricsTest {
 
     // Re-initialise before each test so state from previous tests doesn't leak.
     @Before fun resetToDefault() {
-        ScreenMetrics.init(DENSITY, DENSITY, SW_GO_7, W_GO_7, H_GO_7)
+        ScreenMetrics.init(DENSITY, smallestWidthDp = SW_GO_7, widthPixels = W_GO_7, heightPixels = H_GO_7)
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
     private fun init(sw: Int, w: Int, h: Int) =
-        ScreenMetrics.init(DENSITY, DENSITY, sw, w, h)
+        ScreenMetrics.init(DENSITY, smallestWidthDp = sw, widthPixels = w, heightPixels = h)
 
     /** Convert pixels back to mm at 300 PPI. */
     private fun toMm(px: Float) = px / (DENSITY * 160f) * 25.4f
@@ -264,9 +264,16 @@ class ScreenMetricsTest {
 
     @Test fun extremelyLowDensity_doesNotCrash() {
         // Clamps to minimum 0.5 internally
-        ScreenMetrics.init(0.3f, 0.3f, 400, 800, 600)
+        ScreenMetrics.init(0.3f, fontScale = 0.3f, smallestWidthDp = 400, widthPixels = 800, heightPixels = 600)
         assertTrue(ScreenMetrics.lineSpacing > 0f)
         assertTrue(ScreenMetrics.gutterWidth > 0f)
+    }
+
+    @Test fun fontScale_2x_doublesTextSizes() {
+        ScreenMetrics.init(DENSITY, fontScale = 1f, smallestWidthDp = SW_GO_7, widthPixels = W_GO_7, heightPixels = H_GO_7)
+        val baseTextBody = ScreenMetrics.textBody
+        ScreenMetrics.init(DENSITY, fontScale = 2f, smallestWidthDp = SW_GO_7, widthPixels = W_GO_7, heightPixels = H_GO_7)
+        assertEquals("textBody at fontScale=2 should be ~2x default", baseTextBody * 2f, ScreenMetrics.textBody, 0.1f)
     }
 
     // ── compact-mode classification ───────────────────────────────────────────
