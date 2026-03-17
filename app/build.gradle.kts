@@ -14,6 +14,8 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "0.1.0"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        testInstrumentationRunnerArguments["notAnnotation"] = "com.writer.recognition.DevTool"
     }
 
     buildTypes {
@@ -39,13 +41,60 @@ android {
         jvmTarget = "17"
     }
 
+    testOptions {
+        unitTests {
+            isReturnDefaultValues = true
+            isIncludeAndroidResources = true
+            all {
+                it.jvmArgs(
+                    "--add-opens", "java.base/jdk.internal.access=ALL-UNNAMED",
+                )
+            }
+        }
+    }
+
     buildFeatures {
         viewBinding = true
+        aidl = true
     }
 
     packaging {
         jniLibs {
             pickFirsts += "**/libc++_shared.so"
+        }
+    }
+}
+
+tasks.register("captureFixture") {
+    description = "Capture handwriting fixture from device: -PfixtureName=hello -PexpectedText=\"hello\""
+    dependsOn("installDebug", "installDebugAndroidTest")
+    doLast {
+        val name = project.property("fixtureName") as String
+        val text = project.property("expectedText") as String
+        val lang = project.findProperty("language") as? String ?: "en-US"
+        val line = project.findProperty("lineIndex") as? String ?: "0"
+        val adb = android.adbExecutable.absolutePath
+        val appId = "com.writer.dev"
+
+        exec {
+            commandLine(adb, "shell", "am", "instrument", "-w",
+                "-e", "class", "com.writer.recognition.StrokeFixtureCapture",
+                "-e", "fixtureName", name,
+                "-e", "expectedText", text,
+                "-e", "language", lang,
+                "-e", "lineIndex", line,
+                "$appId.test/androidx.test.runner.AndroidJUnitRunner")
+        }
+
+        exec {
+            commandLine(adb, "pull",
+                "/sdcard/Download/inkup-fixtures/$name.json",
+                "app/src/androidTest/assets/fixtures/$name.json")
+        }
+
+        exec {
+            commandLine(adb, "shell", "rm",
+                "/sdcard/Download/inkup-fixtures/$name.json")
         }
     }
 }
@@ -89,6 +138,13 @@ dependencies {
 
     // Testing
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20231013")
+    testImplementation("org.robolectric:robolectric:4.14.1")
+
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test:rules:1.6.1")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
 }
 
 tasks.withType<Test> {

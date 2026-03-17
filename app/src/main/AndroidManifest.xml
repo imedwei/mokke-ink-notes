@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <queries>
+        <package android:name="com.onyx.android.ksync" />
+    </queries>
+
     <application
         android:name=".WriterApplication"
         android:allowBackup="true"
@@ -28,8 +32,6 @@
             android:theme="@style/Theme.Writer.Dialog"
             android:configChanges="orientation|screenSize|screenLayout"
             android:windowSoftInputMode="stateHidden" />
-
-        <activity android:name=".ui.settings.SettingsActivity" />
     </application>
 
 </manifest>
