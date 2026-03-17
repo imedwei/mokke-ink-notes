@@ -91,6 +91,18 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
 }
 
+tasks.withType<Test> {
+    testLogging {
+        events("failed")
+        showStandardStreams = false
+        afterSuite(KotlinClosure2<TestDescriptor, TestResult, Unit>({ desc, result ->
+            if (desc.parent == null) {
+                println("${result.resultType}: ${result.successfulTestCount} passed, ${result.failedTestCount} failed, ${result.skippedTestCount} skipped")
+            }
+        }))
+    }
+}
+
 tasks.register("allTests") {
     description = "Runs all tests: unit tests and instrumented tests on connected device"
     group = "verification"
