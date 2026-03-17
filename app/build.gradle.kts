@@ -90,3 +90,9 @@ dependencies {
     // Testing
     testImplementation("junit:junit:4.13.2")
 }
+
+tasks.register("allTests") {
+    description = "Runs all tests: unit tests and instrumented tests on connected device"
+    group = "verification"
+    dependsOn("testDebugUnitTest", "connectedDebugAndroidTest")
+}
