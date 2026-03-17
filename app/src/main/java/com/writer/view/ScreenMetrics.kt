@@ -18,7 +18,9 @@ import kotlin.math.roundToInt
  * the same mechanism Android resource qualifiers (e.g. `values-sw600dp/`) use —
  * rather than computing a physical diagonal.
  *
- * Call [init] once in Application.onCreate() before any view is inflated.
+ * Call [init] once in `Application.onCreate()` before any view is inflated,
+ * and re-call it in `onConfigurationChanged` if the user changes font scale
+ * or display density at runtime.
  * Tests use the plain-value overload to avoid an Android framework dependency.
  */
 object ScreenMetrics {
@@ -89,20 +91,13 @@ object ScreenMetrics {
         configuration: android.content.res.Configuration
     ) {
         this.displayMetrics = displayMetrics
-        init(
+        initLayout(
             density         = displayMetrics.density,
-            fontScale       = 1f, // Ignored; production uses TypedValue.applyDimension
             smallestWidthDp = configuration.smallestScreenWidthDp,
             widthPixels     = displayMetrics.widthPixels,
             heightPixels    = displayMetrics.heightPixels
         )
-        // Use TypedValue.applyDimension for proper adaptive font scaling on API 34+
-        textBody     = spToPx(TEXT_BODY_SP)
-        textLogo     = spToPx(TEXT_LOGO_SP)
-        textStatus   = spToPx(TEXT_STATUS_SP)
-        textSubtext  = spToPx(TEXT_SUBTEXT_SP)
-        textCloseBtn = spToPx(TEXT_CLOSE_BTN_SP)
-        textTutorial = spToPx(TEXT_TUTORIAL_SP)
+        computeTextSizes()
     }
 
     /**
@@ -121,8 +116,19 @@ object ScreenMetrics {
         widthPixels: Int,
         heightPixels: Int
     ) {
-        this.density   = density.coerceAtLeast(0.5f)
+        this.displayMetrics = null
         this.fontScale = fontScale.coerceAtLeast(0.5f)
+        initLayout(density, smallestWidthDp, widthPixels, heightPixels)
+        computeTextSizes()
+    }
+
+    private fun initLayout(
+        density: Float,
+        smallestWidthDp: Int,
+        widthPixels: Int,
+        heightPixels: Int
+    ) {
+        this.density   = density.coerceAtLeast(0.5f)
         isCompact      = smallestWidthDp < COMPACT_SW_DP
 
         val lineSpacingDp  = if (isCompact) LINE_SPACING_COMPACT_DP  else LINE_SPACING_DP
@@ -138,15 +144,15 @@ object ScreenMetrics {
             .coerceAtMost(widthPixels          * gutterMaxFrac)
             .coerceAtLeast(gutterMinDp         * this.density)
             .roundToInt().toFloat()
+    }
 
-        // SP = dp * fontScale, so text pixels = SP * density * fontScale
-        val spMultiplier = this.density * this.fontScale
-        textBody     = TEXT_BODY_SP      * spMultiplier
-        textLogo     = TEXT_LOGO_SP      * spMultiplier
-        textStatus   = TEXT_STATUS_SP    * spMultiplier
-        textSubtext  = TEXT_SUBTEXT_SP   * spMultiplier
-        textCloseBtn = TEXT_CLOSE_BTN_SP * spMultiplier
-        textTutorial = TEXT_TUTORIAL_SP  * spMultiplier
+    private fun computeTextSizes() {
+        textBody     = spToPx(TEXT_BODY_SP)
+        textLogo     = spToPx(TEXT_LOGO_SP)
+        textStatus   = spToPx(TEXT_STATUS_SP)
+        textSubtext  = spToPx(TEXT_SUBTEXT_SP)
+        textCloseBtn = spToPx(TEXT_CLOSE_BTN_SP)
+        textTutorial = spToPx(TEXT_TUTORIAL_SP)
     }
 
     // ── Conversion helpers ────────────────────────────────────────────────────

@@ -108,3 +108,7 @@ tasks.register("allTests") {
     group = "verification"
     dependsOn("testDebugUnitTest", "connectedDebugAndroidTest")
 }
+// Run unit tests first — fail fast before slower device tests
+tasks.matching { it.name == "connectedDebugAndroidTest" }.configureEach {
+    mustRunAfter("testDebugUnitTest")
+}

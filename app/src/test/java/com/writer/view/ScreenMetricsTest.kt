@@ -269,6 +269,13 @@ class ScreenMetricsTest {
         assertTrue(ScreenMetrics.gutterWidth > 0f)
     }
 
+    @Test fun fontScale_2x_doublesTextSizes() {
+        ScreenMetrics.init(DENSITY, fontScale = 1f, smallestWidthDp = SW_GO_7, widthPixels = W_GO_7, heightPixels = H_GO_7)
+        val baseTextBody = ScreenMetrics.textBody
+        ScreenMetrics.init(DENSITY, fontScale = 2f, smallestWidthDp = SW_GO_7, widthPixels = W_GO_7, heightPixels = H_GO_7)
+        assertEquals("textBody at fontScale=2 should be ~2x default", baseTextBody * 2f, ScreenMetrics.textBody, 0.1f)
+    }
+
     // ── compact-mode classification ───────────────────────────────────────────
 
     @Test fun isCompact_palma2Pro_isTrue() {
