@@ -230,4 +230,82 @@ class DiagramEraseTest {
         assertTrue("Rectangle should be found under scratch-out",
             overlapping.any { it.strokeId == "rect1" })
     }
+
+    // ── Scratch-out in non-diagram (text) areas ─────────────────────────────
+
+    @Test fun scratchOut_overFreehandTextStrokes_detectsAndFindsOverlap() {
+        // Freehand handwriting strokes in a text area (not a diagram).
+        // Scratch-out should erase these just like diagram strokes.
+        val stroke1 = InkStroke(
+            strokeId = "text1",
+            points = listOf(
+                StrokePoint(100f, 200f, 0.5f, 0L),
+                StrokePoint(120f, 210f, 0.5f, 10L),
+                StrokePoint(140f, 195f, 0.5f, 20L),
+                StrokePoint(160f, 205f, 0.5f, 30L),
+                StrokePoint(180f, 200f, 0.5f, 40L)
+            ),
+            isGeometric = false,
+            strokeType = StrokeType.FREEHAND
+        )
+        val stroke2 = InkStroke(
+            strokeId = "text2",
+            points = listOf(
+                StrokePoint(200f, 200f, 0.5f, 0L),
+                StrokePoint(220f, 215f, 0.5f, 10L),
+                StrokePoint(240f, 190f, 0.5f, 20L),
+                StrokePoint(260f, 200f, 0.5f, 30L)
+            ),
+            isGeometric = false,
+            strokeType = StrokeType.FREEHAND
+        )
+
+        // Scratch-out zigzag over both strokes
+        val scratchXs = floatArrayOf(80f, 280f, 80f, 280f, 80f)
+        val scratchYRange = 20f
+        val lineSpacing = 118f
+
+        assertTrue("Zigzag over text strokes should be detected as scratch-out",
+            ScratchOutDetection.detect(scratchXs, scratchYRange, lineSpacing))
+
+        val left = 80f; val top = 185f; val right = 280f; val bottom = 220f
+        val overlapping = findOverlappingStrokes(
+            listOf(stroke1, stroke2), left, top, right, bottom
+        )
+        assertTrue("First text stroke should be found",
+            overlapping.any { it.strokeId == "text1" })
+        assertTrue("Second text stroke should be found",
+            overlapping.any { it.strokeId == "text2" })
+    }
+
+    @Test fun scratchOut_overTextStroke_doesNotAffectDistantStrokes() {
+        // Scratch-out over one text stroke should not catch strokes on other lines.
+        val targetStroke = InkStroke(
+            strokeId = "target",
+            points = listOf(
+                StrokePoint(100f, 200f, 0.5f, 0L),
+                StrokePoint(200f, 205f, 0.5f, 10L)
+            ),
+            isGeometric = false,
+            strokeType = StrokeType.FREEHAND
+        )
+        val distantStroke = InkStroke(
+            strokeId = "distant",
+            points = listOf(
+                StrokePoint(100f, 500f, 0.5f, 0L),
+                StrokePoint(200f, 505f, 0.5f, 10L)
+            ),
+            isGeometric = false,
+            strokeType = StrokeType.FREEHAND
+        )
+
+        val left = 80f; val top = 190f; val right = 220f; val bottom = 215f
+        val overlapping = findOverlappingStrokes(
+            listOf(targetStroke, distantStroke), left, top, right, bottom
+        )
+        assertTrue("Target stroke should be found",
+            overlapping.any { it.strokeId == "target" })
+        assertFalse("Distant stroke should NOT be found",
+            overlapping.any { it.strokeId == "distant" })
+    }
 }

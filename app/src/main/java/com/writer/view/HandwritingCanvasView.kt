@@ -555,7 +555,9 @@ class HandwritingCanvasView @JvmOverloads constructor(
                 resumeRawDrawing()
             }
         } else {
-            // OUTSIDE DIAGRAM AREA: master's original behavior
+            // OUTSIDE DIAGRAM AREA
+            if (checkPostStrokeScratchOut()) return
+
             val stroke = InkStroke(points = currentStrokePoints.toList())
             completedStrokes.add(stroke)
             onStrokeCompleted?.invoke(stroke)
