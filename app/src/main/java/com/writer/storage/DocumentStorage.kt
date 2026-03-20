@@ -8,6 +8,7 @@ import com.writer.model.DiagramArea
 import com.writer.model.DocumentData
 import com.writer.model.InkStroke
 import com.writer.model.StrokePoint
+import com.writer.model.StrokeType
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -176,7 +177,7 @@ object DocumentStorage {
 
     // --- Serialization ---
 
-    private fun serializeToJson(data: DocumentData): JSONObject {
+    internal fun serializeToJson(data: DocumentData): JSONObject {
         val json = JSONObject()
 
         json.put("scrollOffsetY", data.scrollOffsetY.toDouble())
@@ -212,6 +213,12 @@ object DocumentStorage {
                 pointsArr.put(ptObj)
             }
             strokeObj.put("points", pointsArr)
+            if (stroke.strokeType != StrokeType.FREEHAND) {
+                strokeObj.put("strokeType", stroke.strokeType.name)
+            }
+            if (stroke.isGeometric) {
+                strokeObj.put("isGeometric", true)
+            }
             strokesArr.put(strokeObj)
         }
         json.put("strokes", strokesArr)
@@ -229,7 +236,7 @@ object DocumentStorage {
         return json
     }
 
-    private fun deserializeFromJson(text: String): DocumentData {
+    internal fun deserializeFromJson(text: String): DocumentData {
         val json = JSONObject(text)
 
         val scrollOffsetY = json.optDouble("scrollOffsetY", 0.0).toFloat()
@@ -275,11 +282,19 @@ object DocumentStorage {
                     )
                 }
 
+                val strokeTypeName = strokeObj.optString("strokeType", "")
+                val strokeType = try {
+                    if (strokeTypeName.isNotEmpty()) StrokeType.valueOf(strokeTypeName)
+                    else StrokeType.FREEHAND
+                } catch (_: IllegalArgumentException) { StrokeType.FREEHAND }
+
                 strokes.add(
                     InkStroke(
                         strokeId = strokeId,
                         points = points,
-                        strokeWidth = strokeWidth
+                        strokeWidth = strokeWidth,
+                        strokeType = strokeType,
+                        isGeometric = strokeObj.optBoolean("isGeometric", false)
                     )
                 )
             }
