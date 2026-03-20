@@ -21,8 +21,6 @@ import com.onyx.android.sdk.pen.RawInputCallback
 import com.onyx.android.sdk.pen.TouchHelper
 import com.onyx.android.sdk.pen.data.TouchPointList
 import com.writer.model.DiagramArea
-
-import com.writer.model.DocumentModel
 import com.writer.model.InkStroke
 import com.writer.model.StrokePoint
 import com.writer.model.StrokeType
@@ -74,8 +72,6 @@ class HandwritingCanvasView @JvmOverloads constructor(
         // Arrow dwell detection: radius and time for start/end dwell
         private const val ARROW_DWELL_RADIUS_PX = 15f   // ~8 dp
         private const val ARROW_DWELL_MS = 300L
-        // Magnetic snap: max distance in line-spacings to snap arrow to node
-        private const val MAGNET_THRESHOLD_SPANS = 1.5f
     }
 
     private val completedStrokes = mutableListOf<InkStroke>()
@@ -104,13 +100,6 @@ class HandwritingCanvasView @JvmOverloads constructor(
 
     /** Diagram areas in the current document. */
     var diagramAreas: List<DiagramArea> = emptyList()
-
-    /** Document model reference for magnetic snap access. */
-    var documentModel: DocumentModel? = null
-
-    /** Arrow endpoint snap results for WritingCoordinator to read. */
-    var lastSnapFromNodeId: String? = null
-    var lastSnapToNodeId: String? = null
 
     // Dwell indicator state (arrow start-dwell inside diagram areas)
     private var dwellJob: Runnable? = null
@@ -625,12 +614,10 @@ class HandwritingCanvasView @JvmOverloads constructor(
 
     // ── Diagram-area post-stroke detection ──────────────────────────────────
 
-    /** Result of shape snap: strokeType + isGeometric flag + optional magnetic connection IDs. */
+    /** Result of shape snap: strokeType + isGeometric flag. */
     private data class SnapData(
         val strokeType: StrokeType,
-        val isGeometric: Boolean,
-        val fromNodeId: String? = null,
-        val toNodeId: String? = null
+        val isGeometric: Boolean
     )
 
     /**
@@ -656,9 +643,6 @@ class HandwritingCanvasView @JvmOverloads constructor(
         val t = currentStrokePoints.first().timestamp
         var strokeType = StrokeType.FREEHAND
         var isGeometric = false
-        var fromNodeId: String? = null
-        var toNodeId: String? = null
-
         val snappedPoints: List<StrokePoint> = when (result) {
             is ShapeSnapDetection.SnapResult.Line -> {
                 val tipDwell = ArrowDwellDetection.hasDwellAtEnd(
@@ -667,19 +651,9 @@ class HandwritingCanvasView @JvmOverloads constructor(
                 strokeType = ArrowDwellDetection.classifyArrow(tipDwell, tailDwell)
                 isGeometric = true
 
-                var x1 = result.x1; var y1 = result.y1
-                var x2 = result.x2; var y2 = result.y2
-                if (strokeType != StrokeType.LINE) {
-                    val threshold = MAGNET_THRESHOLD_SPANS * LINE_SPACING
-                    val nodes = documentModel?.diagram?.nodes ?: emptyMap()
-                    val (snappedFrom, snappedTo, nodeIds) =
-                        DiagramNodeSnap.snapArrowEndpoints(x1, y1, x2, y2, nodes, threshold)
-                    x1 = snappedFrom.first; y1 = snappedFrom.second; fromNodeId = nodeIds.first
-                    x2 = snappedTo.first;   y2 = snappedTo.second;   toNodeId   = nodeIds.second
-                }
                 listOf(
-                    StrokePoint(x1, y1, 0f, t),
-                    StrokePoint(x2, y2, 0f, t)
+                    StrokePoint(result.x1, result.y1, 0f, t),
+                    StrokePoint(result.x2, result.y2, 0f, t)
                 )
             }
             is ShapeSnapDetection.SnapResult.Arrow -> return null
@@ -756,9 +730,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
         currentStrokePoints.addAll(snappedPoints)
         Log.i(TAG, "Shape snap: $result → $strokeType")
 
-        lastSnapFromNodeId = fromNodeId
-        lastSnapToNodeId = toNodeId
-        return SnapData(strokeType, isGeometric, fromNodeId, toNodeId)
+        return SnapData(strokeType, isGeometric)
     }
 
     /** Check if the completed stroke is a scratch-out erase gesture (inside diagram area). */

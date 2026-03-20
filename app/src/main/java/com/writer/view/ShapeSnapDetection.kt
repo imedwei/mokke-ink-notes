@@ -354,7 +354,7 @@ object ShapeSnapDetection {
         // test (generous corner radii) still has four flat sides with straight fraction
         // > 0.20. Reject the ellipse classification if the stroke has too many straight
         // points — the caller will then fall through to rounded-rectangle detection.
-        if (straightFraction(xs, ys) > STRAIGHT_FRACTION_MIN) return null
+        if (straightFraction(xs, ys, minX, maxX, minY, maxY) > STRAIGHT_FRACTION_MIN) return null
 
         return SnapResult.Ellipse(cx, cy, a, b)
     }
@@ -498,13 +498,15 @@ object ShapeSnapDetection {
      * misclassified as rounded rectangles, while still detecting the flat sides
      * of rounded rectangles at any aspect ratio.
      */
-    internal fun straightFraction(xs: FloatArray, ys: FloatArray): Float {
+    internal fun straightFraction(
+        xs: FloatArray, ys: FloatArray,
+        minX: Float = xs.min(), maxX: Float = xs.max(),
+        minY: Float = ys.min(), maxY: Float = ys.max()
+    ): Float {
         val n = xs.size
         val window = maxOf(3, n / 14)
         if (n < 2 * window + 1) return 0f
 
-        val minX = xs.min(); val maxX = xs.max()
-        val minY = ys.min(); val maxY = ys.max()
         val w = maxX - minX; val h = maxY - minY
         val a = w / 2f; val b = h / 2f
         if (a == 0f || b == 0f) return 0f

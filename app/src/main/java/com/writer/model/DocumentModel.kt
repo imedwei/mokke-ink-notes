@@ -5,5 +5,4 @@ class DocumentModel(
 ) {
     val activeStrokes: MutableList<InkStroke> = mutableListOf()
     val diagramAreas: MutableList<DiagramArea> = mutableListOf()
-    val diagram: DiagramModel = DiagramModel()
 }
