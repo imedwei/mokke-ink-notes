@@ -1,6 +1,8 @@
 package com.writer.view
 
+import com.writer.model.StrokePoint
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -958,5 +960,75 @@ class ShapeSnapDetectionTest {
         assertNotNull("Sloppy rectangle (jitter < maxPointDev) should snap", result)
         assertTrue("Sloppy rectangle snaps to Rectangle, got $result",
             result is ShapeSnapDetection.SnapResult.Rectangle)
+    }
+
+    // ── Dwell-gated shape snapping ────────────────────────────────────────────
+    //
+    // Shape snapping requires the user to hold the pen still at the end of the
+    // stroke. These tests verify the combined dwell + detection pipeline:
+    // hasDwellAtEnd gates whether ShapeSnapDetection.detect is consulted.
+
+    private val DWELL_RADIUS = 15f
+    private val DWELL_MS = 300L
+
+    /** Build StrokePoints for a rectangle with timestamps. If [dwellAtEnd], the
+     *  last few points cluster at the close point for >= DWELL_MS. */
+    private fun makeTimedRectangle(dwellAtEnd: Boolean): List<StrokePoint> {
+        val pts = mutableListOf<StrokePoint>()
+        var t = 0L
+        val step = 15L // 15ms between points — fast drawing
+
+        // Top edge: (0,0) → (200,0)
+        for (i in 0..9) { pts += StrokePoint(i * 20f, 0f, 1f, t); t += step }
+        // Right edge: (200,0) → (200,150)
+        for (i in 1..7) { pts += StrokePoint(200f, i * 150f / 7, 1f, t); t += step }
+        // Bottom edge: (200,150) → (0,150)
+        for (i in 1..9) { pts += StrokePoint(200f - i * 20f, 150f, 1f, t); t += step }
+        // Left edge: (0,150) → (0,0)
+        for (i in 1..7) { pts += StrokePoint(0f, 150f - i * 150f / 7, 1f, t); t += step }
+        // Close point
+        pts += StrokePoint(1f, 1f, 1f, t); t += step
+
+        if (dwellAtEnd) {
+            // Add dwell: 5 points clustered at (1,1) spanning 350ms (> DWELL_MS)
+            for (i in 1..5) {
+                pts += StrokePoint(1f + i * 0.5f, 1f + i * 0.3f, 1f, t)
+                t += 70L
+            }
+        }
+
+        return pts
+    }
+
+    @Test fun rectangle_withEndDwell_snapsToShape() {
+        val pts = makeTimedRectangle(dwellAtEnd = true)
+        val last = pts.last()
+        val hasDwell = ArrowDwellDetection.hasDwellAtEnd(pts, last.x, last.y, DWELL_RADIUS, DWELL_MS)
+        assertTrue("Should detect end dwell", hasDwell)
+
+        // Since dwell is present, shape detection should proceed
+        val xs = FloatArray(pts.size) { pts[it].x }
+        val ys = FloatArray(pts.size) { pts[it].y }
+        val result = ShapeSnapDetection.detect(xs, ys, LS)
+        assertNotNull("Rectangle with dwell should snap", result)
+        assertTrue("Should snap to Rectangle, got $result",
+            result is ShapeSnapDetection.SnapResult.Rectangle)
+    }
+
+    @Test fun rectangle_withoutEndDwell_doesNotSnap() {
+        val pts = makeTimedRectangle(dwellAtEnd = false)
+        val last = pts.last()
+        val hasDwell = ArrowDwellDetection.hasDwellAtEnd(pts, last.x, last.y, DWELL_RADIUS, DWELL_MS)
+        assertFalse("Should NOT detect end dwell", hasDwell)
+
+        // The shape IS a valid rectangle geometrically...
+        val xs = FloatArray(pts.size) { pts[it].x }
+        val ys = FloatArray(pts.size) { pts[it].y }
+        val shapeResult = ShapeSnapDetection.detect(xs, ys, LS)
+        assertNotNull("Shape IS a rectangle geometrically", shapeResult)
+
+        // ...but the dwell gate blocks snapping
+        val gatedResult = if (hasDwell) shapeResult else null
+        assertNull("Without dwell, shape snapping should not activate", gatedResult)
     }
 }

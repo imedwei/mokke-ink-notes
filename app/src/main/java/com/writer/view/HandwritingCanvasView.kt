@@ -639,6 +639,16 @@ class HandwritingCanvasView @JvmOverloads constructor(
      */
     private fun checkShapeSnap(tailDwell: Boolean = false): SnapData? {
         if (currentStrokePoints.size < 2) return null
+
+        // Shape snapping requires a dwell at the end of the stroke — the user
+        // holds the pen still briefly to signal "snap this to a shape".
+        // Without the dwell, the stroke is treated as freehand.
+        val last = currentStrokePoints.last()
+        val hasEndDwell = ArrowDwellDetection.hasDwellAtEnd(
+            currentStrokePoints, last.x, last.y, ARROW_DWELL_RADIUS_PX, ARROW_DWELL_MS
+        )
+        if (!hasEndDwell) return null
+
         val xs = FloatArray(currentStrokePoints.size) { currentStrokePoints[it].x }
         val ys = FloatArray(currentStrokePoints.size) { currentStrokePoints[it].y }
         val result = ShapeSnapDetection.detect(xs, ys, LINE_SPACING) ?: return null
