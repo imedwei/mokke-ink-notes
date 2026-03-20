@@ -7,17 +7,16 @@ import com.writer.model.DiagramNode
 import com.writer.model.InkStroke
 import com.writer.model.StrokePoint
 import com.writer.model.StrokeType
-import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Tests that erasing a diagram shape removes it from the [DiagramModel].
+ * Tests that erasing a diagram shape removes it from the Mermaid output.
  *
  * Erase is modelled as removing node/edge entries from [DiagramModel] —
  * exactly what [WritingCoordinator.onScratchOut] does after finding overlapping strokes.
+ * [DiagramMarkdown.buildMermaidBlock] is then used to verify the output changes.
  */
 class DiagramEraseTest {
 
@@ -25,15 +24,18 @@ class DiagramEraseTest {
 
     // ── Nodes ─────────────────────────────────────────────────────────────────
 
-    @Test fun erasingNode_removesItFromModel() {
+    @Test fun erasingNode_removesItFromMermaid() {
         val diagram = DiagramModel()
         diagram.nodes["s1"] = DiagramNode("s1", StrokeType.RECTANGLE, rect(), "Process")
 
-        assertTrue("node should exist before erase", diagram.nodes.containsKey("s1"))
+        val before = DiagramMarkdown.buildMermaidBlock(diagram)
+        assertTrue("node should appear before erase", before.contains("Process"))
 
+        // Simulate erase
         diagram.nodes.remove("s1")
 
-        assertTrue("nodes should be empty after erasing sole node", diagram.nodes.isEmpty())
+        val after = DiagramMarkdown.buildMermaidBlock(diagram)
+        assertTrue("mermaid should be empty after erasing sole node", after.isEmpty())
     }
 
     @Test fun erasingOneOfTwoNodes_keepsOtherNode() {
@@ -41,36 +43,45 @@ class DiagramEraseTest {
         diagram.nodes["s1"] = DiagramNode("s1", StrokeType.RECTANGLE, rect(), "Start")
         diagram.nodes["s2"] = DiagramNode("s2", StrokeType.ELLIPSE, rect(), "End")
 
+        // Erase "Start"
         diagram.nodes.remove("s1")
 
-        assertFalse("erased node should be gone", diagram.nodes.containsKey("s1"))
-        assertTrue("surviving node should remain", diagram.nodes.containsKey("s2"))
-        assertEquals("End", diagram.nodes["s2"]!!.label)
+        val mermaid = DiagramMarkdown.buildMermaidBlock(diagram)
+        assertFalse("erased node label should not appear", mermaid.contains("Start"))
+        assertTrue("surviving node label should still appear", mermaid.contains("End"))
     }
 
-    @Test fun erasingNode_preservesShapeType() {
+    @Test fun erasingNode_mermaidUsesCorrectShapeSyntax() {
         val diagram = DiagramModel()
         diagram.nodes["s1"] = DiagramNode("s1", StrokeType.DIAMOND, rect(), "Valid?")
-        diagram.nodes["s2"] = DiagramNode("s2", StrokeType.ELLIPSE, rect(), "Done")
+
+        assertTrue(DiagramMarkdown.buildMermaidBlock(diagram).contains("{Valid?}"))
 
         diagram.nodes.remove("s1")
 
-        assertNull("erased node should be null", diagram.nodes["s1"])
-        assertEquals(StrokeType.ELLIPSE, diagram.nodes["s2"]!!.shapeType)
+        assertFalse(DiagramMarkdown.buildMermaidBlock(diagram).contains("Valid?"))
     }
 
     // ── Edges ─────────────────────────────────────────────────────────────────
 
-    @Test fun erasingEdge_removesItFromModel() {
+    @Test fun erasingEdge_removesItFromMermaid() {
         val diagram = DiagramModel()
         diagram.nodes["s1"] = DiagramNode("s1", StrokeType.RECTANGLE, rect(), "A")
         diagram.nodes["s2"] = DiagramNode("s2", StrokeType.RECTANGLE, rect(), "B")
         diagram.edges["e1"] = DiagramEdge("e1", "s1", "s2")
 
+        val edgeTypes = mapOf("e1" to StrokeType.ARROW_HEAD)
+        val before = DiagramMarkdown.buildMermaidBlock(diagram, edgeTypes)
+        assertTrue("edge connector should appear before erase", before.contains("-->"))
+
+        // Erase the arrow stroke
         diagram.edges.remove("e1")
 
-        assertTrue("edges should be empty after erase", diagram.edges.isEmpty())
-        assertEquals(2, diagram.nodes.size)
+        val after = DiagramMarkdown.buildMermaidBlock(diagram, emptyMap())
+        // Nodes become orphans — they still appear, but no connector line
+        assertFalse("edge connector should not appear after erase", after.contains("-->"))
+        assertTrue("node A should remain", after.contains("A"))
+        assertTrue("node B should remain", after.contains("B"))
     }
 
     @Test fun erasingConnectedNode_removesEdgeToo() {
@@ -83,9 +94,10 @@ class DiagramEraseTest {
         diagram.nodes.remove("s1")
         diagram.edges.remove("e1")
 
-        assertFalse("erased node should be gone", diagram.nodes.containsKey("s1"))
-        assertTrue("surviving node should remain", diagram.nodes.containsKey("s2"))
-        assertTrue("edges should be empty", diagram.edges.isEmpty())
+        val mermaid = DiagramMarkdown.buildMermaidBlock(diagram, emptyMap())
+        assertFalse("erased node label absent", mermaid.contains("Alpha"))
+        assertFalse("edge connector absent", mermaid.contains("-->"))
+        assertTrue("surviving node still present", mermaid.contains("Beta"))
     }
 
     // ── Scratch-out overlap detection ─────────────────────────────────────────
@@ -369,7 +381,7 @@ class DiagramEraseTest {
 
         // Step 1: detection
         val detected = ScratchOutDetection.detect(scratchXs, scratchYRange, lineSpacing)
-        assertTrue("Zigzag should be detected as scratch-out",
+        assertTrue("Zigzag should be detected as scratch-out (xs=${scratchXs.toList()}, yRange=$scratchYRange, ls=$lineSpacing)",
             detected)
 
         // Step 2: overlap (bounding box of scratch gesture)
@@ -383,13 +395,13 @@ class DiagramEraseTest {
 
     // ── Empty diagram ──────────────────────────────────────────────────────────
 
-    @Test fun eraseAllNodes_producesEmptyModel() {
+    @Test fun eraseAllNodes_produceEmptyMermaid() {
         val diagram = DiagramModel()
         diagram.nodes["s1"] = DiagramNode("s1", StrokeType.RECTANGLE, rect(), "Only")
 
         diagram.nodes.remove("s1")
 
-        assertTrue("diagram should have no nodes", diagram.nodes.isEmpty())
-        assertTrue("diagram should have no edges", diagram.edges.isEmpty())
+        assertTrue("empty diagram → empty string",
+            DiagramMarkdown.buildMermaidBlock(diagram).isEmpty())
     }
 }
