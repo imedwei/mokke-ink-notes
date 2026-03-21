@@ -80,12 +80,34 @@ discover_branches() {
   git branch --format='%(refname:short)' | grep -E "^(feature|fix|dev)/"
 }
 
-# ── Analyze where a new branch fits among known branches ──────────────
-# Returns the index (0-based) where the new branch should be inserted.
-# Heuristics (checked in order):
-#   1. Ancestry: if a known branch is a descendant of new, insert before it
-#   2. File overlap: insert before the known branch with highest overlap
-#   3. Default: append at end
+# ── Sort branches by merge-base age then file count ───────────────────
+# Produces a sorted list of branches for cold-start (no integrate history).
+# Primary sort: merge-base commit timestamp (older fork point → merge first)
+# Secondary sort: file count ascending (simpler branches first)
+sort_branches_by_analysis() {
+  local branches=("$@")
+  local -a sort_keys=()  # "timestamp:filecount:branch" for each
+
+  for b in "${branches[@]}"; do
+    # Merge-base timestamp with BASE (epoch seconds)
+    local mb_ts
+    mb_ts=$(git log -1 --format='%ct' "$(git merge-base "$BASE" "$b")" 2>/dev/null || echo "0")
+
+    # File count changed vs BASE
+    local fcount
+    fcount=$(git diff "$BASE"..."$b" --name-only 2>/dev/null | wc -l)
+
+    sort_keys+=("${mb_ts}:$(printf '%05d' "$fcount"):${b}")
+  done
+
+  # Sort: by timestamp ascending (older first), then filecount ascending
+  printf '%s\n' "${sort_keys[@]}" | sort -t: -k1,1n -k2,2n | while IFS=: read -r _ts _fc branch; do
+    echo "$branch"
+  done
+}
+
+# ── Find insertion point for a new branch among known branches ────────
+# Uses merge-base age and file count to find the right position.
 analyze_insertion_point() {
   local new_branch="$1"
   shift
@@ -96,45 +118,30 @@ analyze_insertion_point() {
     return
   fi
 
-  # Get files changed by the new branch relative to BASE
-  local new_files
-  new_files=$(git diff "$BASE"..."$new_branch" --name-only 2>/dev/null || true)
-  if [[ -z "$new_files" ]]; then
-    echo "${#known[@]}"
-    return
-  fi
-
-  local best_idx=${#known[@]}
-  local best_score=0
+  local new_mb_ts
+  new_mb_ts=$(git log -1 --format='%ct' "$(git merge-base "$BASE" "$new_branch")" 2>/dev/null || echo "0")
+  local new_fcount
+  new_fcount=$(git diff "$BASE"..."$new_branch" --name-only 2>/dev/null | wc -l)
 
   for i in "${!known[@]}"; do
     local kb="${known[$i]}"
+    local kb_mb_ts
+    kb_mb_ts=$(git log -1 --format='%ct' "$(git merge-base "$BASE" "$kb")" 2>/dev/null || echo "0")
+    local kb_fcount
+    kb_fcount=$(git diff "$BASE"..."$kb" --name-only 2>/dev/null | wc -l)
 
-    # Ancestry: if known branch descends from new branch, insert before it
-    if git merge-base --is-ancestor "$new_branch" "$kb" 2>/dev/null; then
+    # Insert before the first known branch that has a newer merge-base,
+    # or same merge-base but more files
+    if [[ $new_mb_ts -lt $kb_mb_ts ]]; then
+      echo "$i"
+      return
+    elif [[ $new_mb_ts -eq $kb_mb_ts && $new_fcount -lt $kb_fcount ]]; then
       echo "$i"
       return
     fi
-
-    # File overlap score
-    local kb_files
-    kb_files=$(git diff "$BASE"..."$kb" --name-only 2>/dev/null || true)
-    if [[ -n "$kb_files" ]]; then
-      local overlap
-      overlap=$(comm -12 <(echo "$new_files" | sort) <(echo "$kb_files" | sort) | wc -l)
-      if [[ $overlap -gt $best_score ]]; then
-        best_score=$overlap
-        best_idx=$i
-      fi
-    fi
   done
 
-  # If we found overlap, insert before that branch
-  if [[ $best_score -gt 0 ]]; then
-    echo "$best_idx"
-  else
-    echo "${#known[@]}"
-  fi
+  echo "${#known[@]}"
 }
 
 # ── Compute final merge order ─────────────────────────────────────────
@@ -196,24 +203,31 @@ compute_merge_order() {
   # Start with known order
   local -a result=("${filtered_known[@]+"${filtered_known[@]}"}")
 
-  # Insert new branches at analyzed positions
-  for nb in "${new_branches[@]+"${new_branches[@]}"}"; do
-    local idx
-    idx=$(analyze_insertion_point "$nb" "${result[@]+"${result[@]}"}")
-    echo "  New branch: $nb → inserting at position $((idx + 1))"
-    # Insert at index
-    local -a tmp=()
-    for ((i = 0; i < ${#result[@]}; i++)); do
-      [[ $i -eq $idx ]] && tmp+=("$nb")
-      tmp+=("${result[$i]}")
-    done
-    [[ $idx -ge ${#result[@]} ]] && tmp+=("$nb")
-    result=("${tmp[@]}")
-  done
-
-  # If no integrate history existed, note we're in analysis-only mode
-  if [[ ${#known_order[@]} -eq 0 && ${#result[@]} -gt 0 ]]; then
-    echo "  Note: no integrate history found, using analysis-only ordering"
+  if [[ ${#new_branches[@]} -gt 0 ]]; then
+    if [[ ${#known_order[@]} -eq 0 ]]; then
+      # Cold start: no integrate history — sort all branches by analysis
+      echo "  Note: no integrate history found, sorting by merge-base age + file count"
+      local -a sorted=()
+      while IFS= read -r b; do
+        [[ -n "$b" ]] && sorted+=("$b")
+      done < <(sort_branches_by_analysis "${new_branches[@]}")
+      result=("${sorted[@]}")
+    else
+      # Insert new branches into existing known order
+      for nb in "${new_branches[@]}"; do
+        local idx
+        idx=$(analyze_insertion_point "$nb" "${result[@]+"${result[@]}"}")
+        echo "  New branch: $nb → inserting at position $((idx + 1))"
+        # Insert at index
+        local -a tmp=()
+        for ((i = 0; i < ${#result[@]}; i++)); do
+          [[ $i -eq $idx ]] && tmp+=("$nb")
+          tmp+=("${result[$i]}")
+        done
+        [[ $idx -ge ${#result[@]} ]] && tmp+=("$nb")
+        result=("${tmp[@]}")
+      done
+    fi
   fi
 
   printf '%s\n' "${result[@]}"
