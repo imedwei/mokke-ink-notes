@@ -25,6 +25,7 @@ import com.writer.model.DocumentData
 import com.writer.storage.DocumentStorage
 import com.writer.view.HandwritingCanvasView
 import com.writer.view.RecognizedTextView
+import com.writer.view.TouchFilter
 import kotlinx.coroutines.launch
 
 class WritingActivity : AppCompatActivity() {
@@ -108,6 +109,10 @@ class WritingActivity : AppCompatActivity() {
 
         inkCanvas = findViewById(R.id.inkCanvas)
         recognizedTextView = findViewById(R.id.recognizedTextView)
+
+        val touchFilter = TouchFilter()
+        inkCanvas.touchFilter = touchFilter
+        recognizedTextView.touchFilter = touchFilter
 
         documentModel = DocumentModel()
 
