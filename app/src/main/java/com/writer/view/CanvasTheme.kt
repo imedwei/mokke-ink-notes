@@ -13,7 +13,6 @@ import com.writer.model.InkStroke
 object CanvasTheme {
     const val DEFAULT_STROKE_WIDTH = 5f
     val LINE_COLOR: Int = Color.parseColor("#AAAAAA")
-    val GUTTER_FILL_COLOR: Int = Color.parseColor("#DDDDDD")
 
     fun newStrokePaint() = Paint().apply {
         color = Color.BLACK
@@ -27,17 +26,6 @@ object CanvasTheme {
     fun newLinePaint() = Paint().apply {
         color = LINE_COLOR
         strokeWidth = 2f
-        style = Paint.Style.STROKE
-    }
-
-    fun newGutterFillPaint() = Paint().apply {
-        color = GUTTER_FILL_COLOR
-        style = Paint.Style.FILL
-    }
-
-    fun newGutterLinePaint() = Paint().apply {
-        color = LINE_COLOR
-        strokeWidth = 1f
         style = Paint.Style.STROKE
     }
 

@@ -7,6 +7,7 @@ import android.util.Log
 import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.app.Activity
+import android.view.View
 import android.widget.LinearLayout
 import android.view.Gravity
 import android.view.LayoutInflater
@@ -109,6 +110,7 @@ class WritingActivity : AppCompatActivity() {
 
         inkCanvas = findViewById(R.id.inkCanvas)
         recognizedTextView = findViewById(R.id.recognizedTextView)
+        val splitDivider = findViewById<View>(R.id.splitDivider)
 
         val touchFilter = TouchFilter()
         inkCanvas.touchFilter = touchFilter
@@ -138,6 +140,25 @@ class WritingActivity : AppCompatActivity() {
         pendingRestore = DocumentStorage.load(this, currentDocumentName)
         restoreDocumentVisuals()
 
+        // Wire pen state from canvas to text view (for floating icon auto-hide)
+        inkCanvas.onPenStateChanged = { active ->
+            recognizedTextView.onPenStateChanged(active)
+        }
+
+        // Text view scroll drives canvas scroll (complementary views)
+        recognizedTextView.onScroll = { dy ->
+            // dy > 0 = finger dragged down = see earlier content = scroll canvas up
+            val raw = inkCanvas.scrollOffsetY - dy
+            inkCanvas.scrollOffsetY = raw.coerceAtLeast(0f)
+            inkCanvas.drawToSurface()
+            inkCanvas.onManualScroll?.invoke()
+        }
+        recognizedTextView.onScrollEnd = {
+            inkCanvas.scrollOffsetY = inkCanvas.snapToLine(inkCanvas.scrollOffsetY)
+            inkCanvas.drawToSurface()
+            inkCanvas.onManualScroll?.invoke()
+        }
+
         // Tap "I" logo to open menu
         recognizedTextView.onLogoTap = { showMenu() }
 
@@ -147,11 +168,11 @@ class WritingActivity : AppCompatActivity() {
         // Create coordinator early so cached text can be displayed before model loads
         startCoordinator()
 
-        // Capture default heights after initial layout, then wire up the gutter
+        // Capture default heights after initial layout, then wire up the divider drag
         recognizedTextView.post {
             defaultTextHeight = recognizedTextView.height
             defaultCanvasHeight = inkCanvas.height
-            setupTextGutter()
+            setupDividerDrag(splitDivider)
 
             // Restore cached text and scroll position immediately (no recognizer needed)
             restoreCoordinatorState()
@@ -206,39 +227,55 @@ class WritingActivity : AppCompatActivity() {
         coordinator?.restoreState(data)
     }
 
-    private fun setupTextGutter() {
-        recognizedTextView.onGutterDrag = { delta ->
-            val totalHeight = defaultTextHeight + defaultCanvasHeight
-            val minTextHeight = (totalHeight * 0.25f).toInt()
-            val maxOffset = (totalHeight - minTextHeight).toFloat()
-            if (delta > 0f && splitOffset >= maxOffset) {
-                // At max size, dragging down scrolls text content
-                val topPadding = 40f
-                val maxOverscroll = (recognizedTextView.totalTextHeight - recognizedTextView.height + topPadding).coerceAtLeast(0f)
-                inkCanvas.textOverscroll = (inkCanvas.textOverscroll + delta).coerceIn(0f, maxOverscroll)
-                coordinator?.onManualTextScroll()
-            } else if (delta < 0f && inkCanvas.textOverscroll > 0f) {
-                // Dragging back up — reduce overscroll first
-                inkCanvas.textOverscroll = (inkCanvas.textOverscroll + delta).coerceAtLeast(0f)
-                coordinator?.onManualTextScroll()
-            } else {
-                val totalHeight = defaultTextHeight + defaultCanvasHeight
-                val minTextHeight = (totalHeight * 0.25f).toInt()
-                val maxOffset = (totalHeight - minTextHeight).toFloat()
-                splitOffset = (splitOffset + delta).coerceIn(0f, maxOffset)
+    @android.annotation.SuppressLint("ClickableViewAccessibility")
+    private fun setupDividerDrag(divider: View) {
+        // Expand touch target via TouchDelegate on the parent
+        (divider.parent as? android.view.ViewGroup)?.post {
+            val touchPad = (com.writer.view.ScreenMetrics.dp(12f)).toInt()
+            val rect = android.graphics.Rect()
+            divider.getHitRect(rect)
+            rect.top -= touchPad
+            rect.bottom += touchPad
+            (divider.parent as android.view.ViewGroup).touchDelegate =
+                android.view.TouchDelegate(rect, divider)
+        }
 
-                val newTextHeight = defaultTextHeight + splitOffset.toInt()
-                val newCanvasHeight = defaultCanvasHeight - splitOffset.toInt()
+        var dragLastY = 0f
+        divider.setOnTouchListener { _, event ->
+            when (event.action) {
+                android.view.MotionEvent.ACTION_DOWN -> {
+                    dragLastY = event.rawY
+                    inkCanvas.pauseRawDrawing()
+                    true
+                }
+                android.view.MotionEvent.ACTION_MOVE -> {
+                    val delta = event.rawY - dragLastY
+                    dragLastY = event.rawY
 
-                val textParams = recognizedTextView.layoutParams as LinearLayout.LayoutParams
-                textParams.height = newTextHeight
-                textParams.weight = 0f
-                recognizedTextView.layoutParams = textParams
+                    val totalHeight = defaultTextHeight + defaultCanvasHeight
+                    val minTextHeight = (totalHeight * 0.25f).toInt()
+                    val maxOffset = (totalHeight - minTextHeight).toFloat()
+                    splitOffset = (splitOffset + delta).coerceIn(0f, maxOffset)
 
-                val canvasParams = inkCanvas.layoutParams as LinearLayout.LayoutParams
-                canvasParams.height = newCanvasHeight.coerceAtLeast(0)
-                canvasParams.weight = 0f
-                inkCanvas.layoutParams = canvasParams
+                    val newTextHeight = defaultTextHeight + splitOffset.toInt()
+                    val newCanvasHeight = defaultCanvasHeight - splitOffset.toInt()
+
+                    val textParams = recognizedTextView.layoutParams as LinearLayout.LayoutParams
+                    textParams.height = newTextHeight
+                    textParams.weight = 0f
+                    recognizedTextView.layoutParams = textParams
+
+                    val canvasParams = inkCanvas.layoutParams as LinearLayout.LayoutParams
+                    canvasParams.height = newCanvasHeight.coerceAtLeast(0)
+                    canvasParams.weight = 0f
+                    inkCanvas.layoutParams = canvasParams
+                    true
+                }
+                android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> {
+                    inkCanvas.resumeRawDrawing()
+                    true
+                }
+                else -> false
             }
         }
     }
@@ -474,11 +511,10 @@ class WritingActivity : AppCompatActivity() {
             Toast.makeText(this, "Tutorial reset — will show on next launch", Toast.LENGTH_SHORT).show()
         }
 
-        // Position to the left of the gutter, at the top of the text view
-        val gutterWidth = HandwritingCanvasView.GUTTER_WIDTH.toInt()
+        // Position to the left of the floating icon, at the top of the text view
         val loc = IntArray(2)
         recognizedTextView.getLocationOnScreen(loc)
-        val x = loc[0] + recognizedTextView.width - gutterWidth - popupWidth
+        val x = loc[0] + recognizedTextView.width - popupWidth
         val y = loc[1]
         popup.showAtLocation(recognizedTextView, Gravity.NO_GRAVITY, x, y)
     }

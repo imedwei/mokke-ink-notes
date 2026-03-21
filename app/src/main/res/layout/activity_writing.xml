@@ -14,8 +14,9 @@
         android:layout_weight="1"
         android:background="@color/white" />
 
-    <!-- Divider between text and canvas -->
+    <!-- Divider between text and canvas (drag handle for split resize) -->
     <View
+        android:id="@+id/splitDivider"
         android:layout_width="match_parent"
         android:layout_height="1dp"
         android:background="#AAAAAA" />
