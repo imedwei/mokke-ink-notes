@@ -1,5 +1,7 @@
 package com.writer.view
 
+import com.writer.model.InkStroke
+import com.writer.model.StrokePoint
 import kotlin.math.abs
 
 /**
@@ -181,6 +183,21 @@ object ScratchOutDetection {
     }
 
     /**
+     * Check whether any existing stroke overlaps the scratch-out bounding box.
+     * A scratch-out should only erase when there is pre-existing content underneath;
+     * otherwise new cursive words with many reversals (e.g. "difficulty") are
+     * consumed as scratch-outs and disappear.
+     */
+    fun hasTargetStrokes(
+        existingStrokes: List<InkStroke>,
+        left: Float, top: Float, right: Float, bottom: Float
+    ): Boolean = existingStrokes.any { stroke ->
+        stroke.points.any { pt -> pt.x in left..right && pt.y in top..bottom }
+            || stroke.strokeType.isConnector
+                && strokeIntersectsRect(stroke.points, left, top, right, bottom)
+    }
+
+    /**
      * Test whether any line segment between consecutive stroke points intersects
      * the axis-aligned rectangle [left, top, right, bottom].
      *
@@ -189,7 +206,7 @@ object ScratchOutDetection {
      * Uses Cohen–Sutherland-style segment clipping.
      */
     fun strokeIntersectsRect(
-        points: List<com.writer.model.StrokePoint>,
+        points: List<StrokePoint>,
         left: Float, top: Float, right: Float, bottom: Float
     ): Boolean {
         for (i in 0 until points.size - 1) {

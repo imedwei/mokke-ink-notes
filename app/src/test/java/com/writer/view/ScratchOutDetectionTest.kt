@@ -1,5 +1,8 @@
 package com.writer.view
 
+import com.writer.model.InkStroke
+import com.writer.model.StrokePoint
+import com.writer.model.StrokeType
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -306,6 +309,99 @@ class ScratchOutDetectionTest {
         assertTrue(
             "Diagonal zigzag should be detected as scratch-out",
             ScratchOutDetection.detect(xs, ys, lineSpacing = LS)
+        )
+    }
+
+    // ── Device-captured false positives ─────────────────────────────────────
+    //
+    // Real strokes captured from the device that were incorrectly detected as
+    // scratch-outs.  These are downsampled (every 20th point) but preserve the
+    // reversal structure and advance ratio of the originals.
+
+    /**
+     * Device-captured: word "difficulty" written in cursive on Palma 2 Pro (ls=77).
+     * 23 reversals from tight letter forms (ffi, lt), advance_ratio=0.37.
+     *
+     * This stroke DOES pass the detection heuristic (advance_ratio < 0.4).
+     * The actual false-positive was fixed in [HandwritingCanvasView.checkPostStrokeScratchOut]
+     * by requiring existing strokes under the scratch-out region — a new word written
+     * onto blank canvas has nothing to erase, so the scratch-out is rejected.
+     *
+     * This test documents that the detection heuristic alone matches this pattern
+     * (so future threshold changes don't unknowingly regress).
+     */
+    @Test fun cursive_difficulty_matchesDetectionHeuristic() {
+        val ls = 77f
+        val xs = floatArrayOf(113.9f,113.9f,102.0f,92.7f,90.7f,103.8f,116.1f,122.0f,124.6f,124.6f,112.9f,112.7f,125.2f,134.7f,135.1f,135.1f,143.0f,157.3f,169.2f,177.1f,176.7f,158.3f,157.9f,167.0f,175.5f,184.3f,188.2f,188.2f,182.5f,165.2f,167.2f,174.9f,172.4f,172.4f,179.5f,193.8f,203.5f,203.5f,207.2f,215.2f,205.7f,185.0f,188.0f,201.7f,202.7f,201.1f,201.1f,200.5f,199.9f,198.5f,196.9f,197.3f,207.0f,209.4f,222.1f,233.0f,235.4f,241.3f,243.3f,241.7f,240.3f,252.4f,263.3f,264.3f,265.1f,273.4f,273.8f,284.9f,294.8f,301.7f,296.0f,287.1f,294.0f,307.5f,311.1f,311.8f,311.8f,316.0f,319.2f,315.6f,302.5f,312.2f,329.3f,330.3f,331.1f,329.3f,342.4f,350.7f,335.6f,317.8f,328.3f,344.7f,345.1f)
+        val yRange = 87.8f  // 676.0 - 588.2
+        assertTrue(
+            "Cursive 'difficulty' matches scratch-out heuristic (advance_ratio=0.37 < 0.4)",
+            ScratchOutDetection.detect(xs, yRange, ls)
+        )
+    }
+
+    // ── Target-stroke gating ────────────────────────────────────────────────
+    //
+    // Scratch-out must only erase when there are pre-existing strokes under
+    // the scratch region. Without this, new cursive words with many reversals
+    // (e.g. "difficulty") pass the detection heuristic and disappear.
+
+    private fun makeStroke(vararg pairs: Pair<Float, Float>, type: StrokeType = StrokeType.FREEHAND) =
+        InkStroke(
+            points = pairs.map { (x, y) -> StrokePoint(x, y, 0.5f, 0L) },
+            strokeType = type
+        )
+
+    @Test fun hasTargetStrokes_withOverlappingStroke_returnsTrue() {
+        val existing = listOf(makeStroke(50f to 50f, 60f to 60f))
+        assertTrue(
+            "Scratch-out over existing stroke should find target",
+            ScratchOutDetection.hasTargetStrokes(existing, 40f, 40f, 70f, 70f)
+        )
+    }
+
+    @Test fun hasTargetStrokes_noStrokes_returnsFalse() {
+        assertFalse(
+            "Scratch-out on blank canvas must not find target",
+            ScratchOutDetection.hasTargetStrokes(emptyList(), 0f, 0f, 100f, 100f)
+        )
+    }
+
+    @Test fun hasTargetStrokes_strokeOutsideRegion_returnsFalse() {
+        val existing = listOf(makeStroke(200f to 200f, 210f to 210f))
+        assertFalse(
+            "Scratch-out should not match strokes outside its region",
+            ScratchOutDetection.hasTargetStrokes(existing, 0f, 0f, 100f, 100f)
+        )
+    }
+
+    @Test fun hasTargetStrokes_connectorCrossingRegion_returnsTrue() {
+        // A geometric line whose segment crosses the region even though
+        // neither endpoint is inside it.
+        val connector = makeStroke(0f to 50f, 200f to 50f, type = StrokeType.LINE)
+        assertTrue(
+            "Connector line crossing scratch region should be found",
+            ScratchOutDetection.hasTargetStrokes(listOf(connector), 80f, 40f, 120f, 60f)
+        )
+    }
+
+    @Test fun cursive_difficulty_noTarget_notErased() {
+        // End-to-end: "difficulty" matches the detection heuristic but has no
+        // strokes underneath. The hasTargetStrokes guard prevents erasure.
+        val ls = 77f
+        val xs = floatArrayOf(113.9f,113.9f,102.0f,92.7f,90.7f,103.8f,116.1f,122.0f,124.6f,124.6f,112.9f,112.7f,125.2f,134.7f,135.1f,135.1f,143.0f,157.3f,169.2f,177.1f,176.7f,158.3f,157.9f,167.0f,175.5f,184.3f,188.2f,188.2f,182.5f,165.2f,167.2f,174.9f,172.4f,172.4f,179.5f,193.8f,203.5f,203.5f,207.2f,215.2f,205.7f,185.0f,188.0f,201.7f,202.7f,201.1f,201.1f,200.5f,199.9f,198.5f,196.9f,197.3f,207.0f,209.4f,222.1f,233.0f,235.4f,241.3f,243.3f,241.7f,240.3f,252.4f,263.3f,264.3f,265.1f,273.4f,273.8f,284.9f,294.8f,301.7f,296.0f,287.1f,294.0f,307.5f,311.1f,311.8f,311.8f,316.0f,319.2f,315.6f,302.5f,312.2f,329.3f,330.3f,331.1f,329.3f,342.4f,350.7f,335.6f,317.8f,328.3f,344.7f,345.1f)
+        val yRange = 87.8f
+
+        // Step 1: detection heuristic fires
+        assertTrue("Heuristic should match", ScratchOutDetection.detect(xs, yRange, ls))
+
+        // Step 2: but no existing strokes → scratch-out is rejected
+        assertFalse(
+            "Cursive 'difficulty' on blank canvas must NOT be erased",
+            ScratchOutDetection.hasTargetStrokes(
+                emptyList(),
+                xs.min(), 588.2f, xs.max(), 676.0f
+            )
         )
     }
 
