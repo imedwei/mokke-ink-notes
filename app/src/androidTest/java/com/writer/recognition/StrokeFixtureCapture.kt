@@ -1,5 +1,6 @@
 package com.writer.recognition
 
+import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.writer.model.StrokePoint
@@ -34,6 +35,9 @@ class StrokeFixtureCapture {
         assumeTrue("Skipped — run via captureFixture Gradle task", fixtureName != null && expectedText != null)
         fixtureName!!
         expectedText!!
+        require(!fixtureName.contains("..") && !fixtureName.contains('/') && !fixtureName.contains('\\')) {
+            "fixtureName must not contain path separators or '..': $fixtureName"
+        }
         val language = args.getString("language") ?: "en-US"
         val lineIndex = args.getString("lineIndex")?.toIntOrNull() ?: 0
         val documentName = args.getString("documentName")
@@ -85,7 +89,9 @@ class StrokeFixtureCapture {
 
         // Write to /sdcard/Download/inkup-fixtures/
         val outDir = File("/sdcard/Download/inkup-fixtures")
-        outDir.mkdirs()
+        if (!outDir.mkdirs() && !outDir.isDirectory) {
+            Log.w("StrokeFixtureCapture", "Failed to create fixture output dir: $outDir")
+        }
         val outFile = File(outDir, "$fixtureName.json")
         outFile.writeText(json.toString(2))
     }

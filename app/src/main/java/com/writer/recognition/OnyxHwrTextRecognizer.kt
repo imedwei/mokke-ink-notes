@@ -15,6 +15,8 @@ import com.writer.model.InkLine
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
@@ -50,6 +52,7 @@ class OnyxHwrTextRecognizer(private val context: Context) : TextRecognizer {
     private var connectDeferred = CompletableDeferred<Unit>()
     private val initMutex = Mutex()
     private var currentLang = "en_US"
+    private val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
@@ -153,7 +156,7 @@ class OnyxHwrTextRecognizer(private val context: Context) : TextRecognizer {
 
         // Write pipe data concurrently so the service can drain while we write.
         // This prevents deadlock when protoBytes exceeds the kernel pipe buffer (~64KB).
-        val writeJob = CoroutineScope(Dispatchers.IO).launch {
+        val writeJob = ioScope.launch {
             try {
                 FileOutputStream(writePfd.fileDescriptor).use { it.write(protoBytes) }
             } catch (e: Exception) {
@@ -203,6 +206,7 @@ class OnyxHwrTextRecognizer(private val context: Context) : TextRecognizer {
     }
 
     override fun close() {
+        ioScope.cancel()
         if (!bound) return
         try {
             // closeRecognizer() is oneway (fire-and-forget); unbindService follows immediately
