@@ -140,6 +140,9 @@ class HandwritingCanvasView @JvmOverloads constructor(
     // Scratch-out callback (inside diagram areas: erase overlapping strokes)
     var onScratchOut: ((left: Float, top: Float, right: Float, bottom: Float) -> Unit)? = null
 
+    // Stroke-replaced callback (shape snap: raw freehand → snapped geometric)
+    var onStrokeReplaced: ((oldStrokeId: String, newStroke: InkStroke) -> Unit)? = null
+
     /** Scroll offset in document-space pixels. Increase to scroll content up. */
     var scrollOffsetY: Float = 0f
 
@@ -528,6 +531,9 @@ class HandwritingCanvasView @JvmOverloads constructor(
             dwellDotCenter = null
             dwellIndicatorShown = false
 
+            // Save raw points before checkShapeSnap overwrites currentStrokePoints
+            val rawPoints = currentStrokePoints.toList()
+
             // Shape snap before scratch-out: rectangles have X-reversals that
             // would otherwise be consumed as scratch-out.
             val snapData = checkShapeSnap(tailDwell)
@@ -538,13 +544,33 @@ class HandwritingCanvasView @JvmOverloads constructor(
                 return
             }
 
-            val stroke = InkStroke(
-                points = currentStrokePoints.toList(),
-                isGeometric = snapData?.isGeometric ?: false,
-                strokeType = snapData?.strokeType ?: StrokeType.FREEHAND
-            )
-            completedStrokes.add(stroke)
-            onStrokeCompleted?.invoke(stroke)
+            if (snapData != null) {
+                // Two-phase commit: emit raw stroke first, then replace with snapped
+                val rawStroke = InkStroke(
+                    points = rawPoints,
+                    isGeometric = false,
+                    strokeType = StrokeType.FREEHAND
+                )
+                completedStrokes.add(rawStroke)
+                onStrokeCompleted?.invoke(rawStroke)  // → saves snapshot N, adds raw stroke → state N+1
+
+                val snappedStroke = InkStroke(
+                    points = currentStrokePoints.toList(),
+                    isGeometric = snapData.isGeometric,
+                    strokeType = snapData.strokeType
+                )
+                completedStrokes.remove(rawStroke)
+                completedStrokes.add(snappedStroke)
+                onStrokeReplaced?.invoke(rawStroke.strokeId, snappedStroke)  // → saves snapshot N+1, replaces → state N+2
+            } else {
+                val stroke = InkStroke(
+                    points = currentStrokePoints.toList(),
+                    isGeometric = false,
+                    strokeType = StrokeType.FREEHAND
+                )
+                completedStrokes.add(stroke)
+                onStrokeCompleted?.invoke(stroke)
+            }
             currentStrokePoints.clear()
             currentPath.reset()
             currentDiagramBounds = null

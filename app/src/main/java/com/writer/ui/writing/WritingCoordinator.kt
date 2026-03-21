@@ -127,6 +127,9 @@ class WritingCoordinator(
         inkCanvas.onScratchOut = { left, top, right, bottom ->
             onScratchOut(left, top, right, bottom)
         }
+        inkCanvas.onStrokeReplaced = { oldStrokeId, newStroke ->
+            onStrokeReplaced(oldStrokeId, newStroke)
+        }
     }
 
     fun stop() {
@@ -146,6 +149,7 @@ class WritingCoordinator(
         inkCanvas.onUndoGestureStep = null
         inkCanvas.onUndoGestureEnd = null
         inkCanvas.onScratchOut = null
+        inkCanvas.onStrokeReplaced = null
     }
 
     fun reset() {
@@ -200,6 +204,13 @@ class WritingCoordinator(
         if (lineIdx > highestLineIndex) {
             highestLineIndex = lineIdx
         }
+    }
+
+    private fun onStrokeReplaced(oldStrokeId: String, newStroke: InkStroke) {
+        saveUndoSnapshot()  // captures state with raw stroke (state N+1)
+        documentModel.activeStrokes.removeAll { it.strokeId == oldStrokeId }
+        documentModel.activeStrokes.add(newStroke)
+        Log.i(TAG, "Stroke replaced: $oldStrokeId → ${newStroke.strokeId} (${newStroke.strokeType})")
     }
 
     private fun onScratchOut(left: Float, top: Float, right: Float, bottom: Float) {
