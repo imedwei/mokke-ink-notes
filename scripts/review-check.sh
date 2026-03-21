@@ -1,26 +1,31 @@
 #!/usr/bin/env bash
 # Check which review items have been addressed by subsequent changes.
-# Usage: ./scripts/review-check.sh [--post] [--no-post] [--local] <review-file> [pr-number]
+# Usage: ./scripts/review-check.sh [--post] [--no-post] [--local] [--base <branch>] <review-file> [pr-number]
 #
 # Options:
-#   --local    Compare against local diff (no PR needed)
-#   --post     Post update to PR without prompting (non-interactive)
-#   --no-post  Save update locally without posting (non-interactive)
-#   (default)  Prompt whether to post
+#   --base <branch>  Base branch to diff against (default: master)
+#   --local          Compare against local diff (no PR needed)
+#   --post           Post update to PR without prompting (non-interactive)
+#   --no-post        Save update locally without posting (non-interactive)
+#   (default)        Prompt whether to post
 
 set -euo pipefail
 
 POST_MODE=""
 LOCAL_MODE=""
+BASE_BRANCH="master"
 POSITIONAL=()
 
-for arg in "$@"; do
-  case "$arg" in
+while [ $# -gt 0 ]; do
+  case "$1" in
     --post)    POST_MODE="yes" ;;
     --no-post) POST_MODE="no" ;;
     --local)   LOCAL_MODE="yes" ;;
-    *)         POSITIONAL+=("$arg") ;;
+    --base)    BASE_BRANCH="${2:?--base requires a branch name}"; shift ;;
+    --base=*)  BASE_BRANCH="${1#--base=}" ;;
+    *)         POSITIONAL+=("$1") ;;
   esac
+  shift
 done
 
 REVIEW_FILE="${POSITIONAL[0]:?Usage: review-check.sh [options] <review-file> [pr-number]}"
@@ -30,8 +35,6 @@ if [ ! -f "$REVIEW_FILE" ]; then
   echo "Error: review file not found: ${REVIEW_FILE}" >&2
   exit 1
 fi
-
-BASE_BRANCH="master"
 
 # Determine if we're working locally or with a PR
 if [ "$LOCAL_MODE" = "yes" ]; then
