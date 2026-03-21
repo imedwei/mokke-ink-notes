@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Run Claude Code review on the current branch's changes.
-# Usage: ./scripts/review-pr.sh [--post] [--no-post] [--local] [pr-number]
+# Usage: ./scripts/review-pr.sh [--post] [--no-post] [--local] [--base <branch>] [pr-number]
 #
 # Options:
-#   --local    Review local diff against master (no PR or remote needed)
-#   --post     Post review to PR without prompting (non-interactive)
-#   --no-post  Save review locally without posting (non-interactive)
-#   (default)  --local if no PR exists, prompts to post if PR exists
+#   --base <branch>  Base branch to diff against (default: master)
+#   --local          Review local diff against base branch (no PR or remote needed)
+#   --post           Post review to PR without prompting (non-interactive)
+#   --no-post        Save review locally without posting (non-interactive)
+#   (default)        --local if no PR exists, prompts to post if PR exists
 #
 # Review output is saved to .claude/reviews/<branch>-<timestamp>.md
 # Prints the review file path as the last line of stdout.
@@ -15,19 +16,22 @@ set -euo pipefail
 
 POST_MODE=""
 LOCAL_MODE=""
+BASE_BRANCH="master"
 PR=""
 
-for arg in "$@"; do
-  case "$arg" in
+while [ $# -gt 0 ]; do
+  case "$1" in
     --post)    POST_MODE="yes" ;;
     --no-post) POST_MODE="no" ;;
     --local)   LOCAL_MODE="yes" ;;
-    *)         PR="$arg" ;;
+    --base)    BASE_BRANCH="${2:?--base requires a branch name}"; shift ;;
+    --base=*)  BASE_BRANCH="${1#--base=}" ;;
+    *)         PR="$1" ;;
   esac
+  shift
 done
 
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
-BASE_BRANCH="master"
 
 # Determine if we're working locally or with a PR
 if [ "$LOCAL_MODE" = "yes" ]; then
