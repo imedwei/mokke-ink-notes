@@ -22,13 +22,16 @@ Run Claude Code reviews locally using your already-authenticated `claude` CLI, t
 
 ## Non-interactive / agent use
 
-Both scripts accept `--local`, `--post`, and `--no-post` flags:
+Both scripts accept `--local`, `--post`, `--no-post`, and `--base <branch>` flags:
 
 ```bash
 # Review local branch diff, no remote needed
 REVIEW=$(./scripts/review-pr.sh --local --no-post)
 
-# After fixing issues, verify locally
+# Review against a different base branch
+REVIEW=$(./scripts/review-pr.sh --local --no-post --base develop)
+
+# After fixing issues, verify locally (use same --base if non-default)
 ./scripts/review-check.sh --local --no-post "$REVIEW"
 
 # Once ready, create PR and post results

@@ -31,7 +31,7 @@ JAVA_HOME="/c/Program Files/Android/Android Studio/jbr" ./gradlew assembleDebug
 
 Before creating a PR, run the self-review cycle locally:
 
-1. **Review local changes**: `REVIEW=$(./scripts/review-pr.sh --local --no-post)` — reviews the branch diff against master, saves to `.claude/reviews/`.
+1. **Review local changes**: `REVIEW=$(./scripts/review-pr.sh --local --no-post)` — reviews the branch diff against master (use `--base <branch>` to diff against a different branch), saves to `.claude/reviews/`.
 2. **Read the review file** (`cat "$REVIEW"`) and address every actionable item by editing the code and committing.
 3. **Verify fixes**: `./scripts/review-check.sh --local --no-post "$REVIEW"` — confirm all items are addressed.
 4. If any items remain open, go back to step 2.
