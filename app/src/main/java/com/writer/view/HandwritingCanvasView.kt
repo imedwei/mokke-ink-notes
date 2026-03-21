@@ -821,7 +821,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
         return SnapData(strokeType, isGeometric)
     }
 
-    /** Check if the completed stroke is a scratch-out erase gesture (inside diagram area). */
+    /** Check if the completed stroke is a scratch-out erase gesture. */
     private fun checkPostStrokeScratchOut(): Boolean {
         val diagonal = hypot(strokeMaxX - strokeMinX, strokeMaxY - strokeMinY)
         val first = currentStrokePoints.first()
@@ -835,6 +835,11 @@ class HandwritingCanvasView @JvmOverloads constructor(
 
         val left = strokeMinX; val top = strokeMinY
         val right = strokeMaxX; val bottom = strokeMaxY
+
+        // Only treat as scratch-out if there are existing strokes under the region.
+        // Without this, new cursive words with many reversals (e.g. "difficulty")
+        // are consumed as scratch-outs and disappear.
+        if (!ScratchOutDetection.hasTargetStrokes(completedStrokes, left, top, right, bottom)) return false
 
         currentStrokePoints.clear()
         currentPath.reset()
