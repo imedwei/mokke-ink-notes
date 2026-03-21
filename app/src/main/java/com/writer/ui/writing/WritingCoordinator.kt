@@ -4,13 +4,16 @@ import android.util.Log
 import com.writer.model.DiagramArea
 import com.writer.model.DocumentModel
 import com.writer.model.InkStroke
+import com.writer.model.maxY
 import com.writer.model.shiftY
 import com.writer.recognition.TextRecognizer
 import com.writer.recognition.LineSegmenter
 import com.writer.recognition.StrokeClassifier
 import com.writer.model.DocumentData
 import com.writer.storage.SvgExporter
+import com.writer.view.CanvasTheme
 import com.writer.view.HandwritingCanvasView
+import com.writer.view.PreviewLayoutCalculator
 import com.writer.view.RecognizedTextView
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -32,7 +35,6 @@ class WritingCoordinator(
         // Scroll when writing passes this fraction of canvas height from top
         // 25% of canvas ≈ 50% of full screen (since canvas is 75% of screen)
         private const val SCROLL_THRESHOLD = 0.25f
-        private val GUTTER_WIDTH get() = HandwritingCanvasView.GUTTER_WIDTH
         // Delay before refreshing e-ink display after text view updates
         private const val TEXT_REFRESH_DELAY_MS = 500L
     }
@@ -269,7 +271,7 @@ class WritingCoordinator(
                 recognizingLines.remove(lineIndex)
                 return null
             }
-            val strokes = strokeClassifier.filterMarkerStrokes(allStrokes, inkCanvas.width - GUTTER_WIDTH)
+            val strokes = strokeClassifier.filterMarkerStrokes(allStrokes, inkCanvas.width.toFloat())
             if (strokes.isEmpty()) {
                 recognizingLines.remove(lineIndex)
                 return null
@@ -411,15 +413,15 @@ class WritingCoordinator(
     private fun displayHiddenLines() {
         val strokesByLine = lineSegmenter.groupByLine(documentModel.activeStrokes)
 
-        val currentlyHidden = strokesByLine.keys.filter { lineIdx ->
-            val lineBottom = lineSegmenter.getLineY(lineIdx) + HandwritingCanvasView.LINE_SPACING
-            lineBottom <= inkCanvas.scrollOffsetY
-        }.toSet()
+        val currentlyHidden = PreviewLayoutCalculator.currentlyHiddenLines(
+            strokesByLine.keys, inkCanvas.scrollOffsetY,
+            HandwritingCanvasView.TOP_MARGIN, HandwritingCanvasView.LINE_SPACING
+        )
 
-        val notYetVisible = strokesByLine.keys.filter { lineIdx ->
-            val lineMid = lineSegmenter.getLineY(lineIdx) + HandwritingCanvasView.LINE_SPACING / 2f
-            lineMid <= inkCanvas.scrollOffsetY
-        }.toSet()
+        val notYetVisible = PreviewLayoutCalculator.notYetVisibleLines(
+            strokesByLine.keys, inkCanvas.scrollOffsetY,
+            HandwritingCanvasView.TOP_MARGIN, HandwritingCanvasView.LINE_SPACING
+        )
 
         everHiddenLines.addAll(currentlyHidden)
         everHiddenLines.retainAll(strokesByLine.keys)
@@ -436,10 +438,10 @@ class WritingCoordinator(
                 for (lineIdx in uncached) {
                     doRecognizeLine(lineIdx)
                 }
-                val stillNotVisible = strokesByLine.keys.filter { lineIdx ->
-                    val lineMid = lineSegmenter.getLineY(lineIdx) + HandwritingCanvasView.LINE_SPACING / 2f
-                    lineMid <= inkCanvas.scrollOffsetY
-                }.toSet()
+                val stillNotVisible = PreviewLayoutCalculator.notYetVisibleLines(
+                    strokesByLine.keys, inkCanvas.scrollOffsetY,
+                    HandwritingCanvasView.TOP_MARGIN, HandwritingCanvasView.LINE_SPACING
+                )
                 updateTextView(stillNotVisible)
             }
         }
@@ -454,14 +456,16 @@ class WritingCoordinator(
         val strokes: List<InkStroke>,
         val canvasWidth: Float,
         val heightPx: Float,
-        val offsetY: Float
+        val offsetY: Float,
+        /** How much of the diagram's height is scrolled off the canvas (for partial rendering). */
+        val visibleHeightPx: Float = heightPx
     )
 
     private fun updateTextView(currentlyHidden: Set<Int>) {
         val strokesByLine = lineSegmenter.groupByLine(documentModel.activeStrokes)
-        val writingWidth = inkCanvas.width - GUTTER_WIDTH
+        val writingWidth = inkCanvas.width.toFloat()
 
-        val classifiedLines = everHiddenLines.sorted().filter { !isDiagramLine(it) }.mapNotNull { lineIdx ->
+        val classifiedLines = currentlyHidden.sorted().filter { !isDiagramLine(it) }.mapNotNull { lineIdx ->
             paragraphBuilder.classifyLine(lineIdx, lineTextCache[lineIdx], strokesByLine[lineIdx], writingWidth)
         }
 
@@ -479,72 +483,53 @@ class WritingCoordinator(
             }
         }
 
-        // Build diagram displays for fully-hidden diagram areas
-        val diagrams = documentModel.diagramAreas.filter { area ->
-            val areaBottom = lineSegmenter.getLineY(area.endLineIndex + 1)
-            areaBottom <= inkCanvas.scrollOffsetY
-        }.map { area ->
+        // Build diagram displays — include as soon as any part scrolls off the canvas
+        val strokeMaxYByArea = documentModel.diagramAreas.associate { area ->
             val areaStrokes = documentModel.activeStrokes.filter { stroke ->
-                val strokeLine = lineSegmenter.getStrokeLineIndex(stroke)
-                area.containsLine(strokeLine)
+                area.containsLine(lineSegmenter.getStrokeLineIndex(stroke))
             }
+            area.startLineIndex to (if (areaStrokes.isNotEmpty()) areaStrokes.maxOf { it.maxY } else null)
+        }.filterValues { it != null }.mapValues { it.value!! }
+
+        val visibilities = PreviewLayoutCalculator.diagramVisibilities(
+            areas = documentModel.diagramAreas,
+            scrollOffsetY = inkCanvas.scrollOffsetY,
+            topMargin = HandwritingCanvasView.TOP_MARGIN,
+            lineSpacing = HandwritingCanvasView.LINE_SPACING,
+            strokeMaxYByArea = strokeMaxYByArea,
+            strokeWidthPadding = CanvasTheme.DEFAULT_STROKE_WIDTH
+        )
+
+        val areaByStartLine = documentModel.diagramAreas.associateBy { it.startLineIndex }
+        val diagrams = visibilities.map { vis ->
+            val area = areaByStartLine[vis.startLineIndex]
+            val areaStrokes = if (area != null) {
+                documentModel.activeStrokes.filter { stroke ->
+                    area.containsLine(lineSegmenter.getStrokeLineIndex(stroke))
+                }
+            } else emptyList()
             DiagramDisplay(
-                startLineIndex = area.startLineIndex,
+                startLineIndex = vis.startLineIndex,
                 strokes = areaStrokes,
                 canvasWidth = writingWidth,
-                heightPx = area.heightInLines * HandwritingCanvasView.LINE_SPACING,
-                offsetY = lineSegmenter.getLineY(area.startLineIndex)
+                heightPx = vis.fullHeight,
+                offsetY = vis.areaTop,
+                visibleHeightPx = vis.visibleHeight
             )
         }
 
         textView.setContent(paragraphs, diagrams)
     }
 
-    /** Called when the text view is scrolled via its gutter overscroll. */
+    /** Called when the text view is scrolled via overscroll. */
     fun onManualTextScroll() {
         textView.textContentScroll = inkCanvas.textOverscroll
         textView.invalidate()
     }
 
     private fun updateTextScrollOffset() {
-        val lineHeights = textView.writtenLineHeights
-        if (lineHeights.isEmpty()) {
-            textView.textScrollOffset = 0f
-            return
-        }
-
-        var offset = 0f
-
-        for (i in lineHeights.indices.reversed()) {
-            val (lineIdx, textHeight) = lineHeights[i]
-
-            if (textHeight <= 0f) continue
-
-            val lineTop = lineSegmenter.getLineY(lineIdx)
-            if (lineTop < inkCanvas.scrollOffsetY) {
-                break
-            }
-
-            val drivingLine = lineIdx - 1
-            if (drivingLine < 0) {
-                offset += textHeight
-                continue
-            }
-
-            val drivingLineBottom = lineSegmenter.getLineY(drivingLine) + HandwritingCanvasView.LINE_SPACING
-            val fraction = ((drivingLineBottom - inkCanvas.scrollOffsetY) / HandwritingCanvasView.LINE_SPACING)
-                .coerceIn(0f, 1f)
-
-            if (fraction >= 1f) {
-                offset += textHeight
-                continue
-            }
-
-            offset += fraction * textHeight
-            break
-        }
-
-        textView.textScrollOffset = offset
+        // Content is flush with the divider — preview and canvas are complementary
+        textView.textScrollOffset = 0f
     }
 
     // --- Markdown export ---
@@ -553,7 +538,7 @@ class WritingCoordinator(
         if (lineTextCache.isEmpty() && documentModel.diagramAreas.isEmpty()) return ""
 
         val strokesByLine = lineSegmenter.groupByLine(documentModel.activeStrokes)
-        val writingWidth = inkCanvas.width - GUTTER_WIDTH
+        val writingWidth = inkCanvas.width.toFloat()
 
         val classifiedLines = lineTextCache.keys.sorted().filter { !isDiagramLine(it) }.mapNotNull { lineIdx ->
             paragraphBuilder.classifyLine(lineIdx, lineTextCache[lineIdx], strokesByLine[lineIdx], writingWidth)
