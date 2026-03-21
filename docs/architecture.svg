@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 540" width="680">
+  <style>
+    text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+    .label { font-size: 15px; font-weight: 700; fill: #000; }
+    .sublabel { font-size: 13px; font-weight: 500; fill: #333; }
+    .box-text { font-size: 14px; font-weight: 700; text-anchor: middle; }
+    .box-sub { font-size: 12px; font-weight: 500; text-anchor: middle; }
+    .note-title { font-size: 15px; font-weight: 700; text-anchor: middle; }
+    .note-sub { font-size: 12px; font-weight: 500; text-anchor: middle; }
+    .surface-text { font-size: 13px; font-weight: 600; fill: #000; text-anchor: middle; }
+    .arr { stroke: #000; stroke-width: 2; }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M2 1L8 5L2 9" fill="none" stroke="#000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+  </defs>
+
+  <!-- Layer 1: Capture -->
+  <text x="40" y="36" class="label">Capture</text>
+  <text x="114" y="36" class="sublabel">Stylus + finger on e-ink canvas</text>
+
+  <rect x="40" y="52" width="130" height="56" rx="8" fill="#C6F0D8" stroke="#0A7A3E" stroke-width="2"/>
+  <text x="105" y="74" class="box-text" fill="#0A5C2E">Handwriting</text>
+  <text x="105" y="92" class="box-sub" fill="#0A5C2E">Text strokes</text>
+
+  <rect x="185" y="52" width="130" height="56" rx="8" fill="#C6F0D8" stroke="#0A7A3E" stroke-width="2"/>
+  <text x="250" y="74" class="box-text" fill="#0A5C2E">Sketches</text>
+  <text x="250" y="92" class="box-sub" fill="#0A5C2E">Diagrams, shapes</text>
+
+  <rect x="330" y="52" width="160" height="56" rx="8" fill="#C6F0D8" stroke="#0A7A3E" stroke-width="2"/>
+  <text x="410" y="74" class="box-text" fill="#0A5C2E">Embedded media</text>
+  <text x="410" y="92" class="box-sub" fill="#0A5C2E">Slide clips, photos</text>
+
+  <rect x="505" y="52" width="130" height="56" rx="8" fill="#C6F0D8" stroke="#0A7A3E" stroke-width="2"/>
+  <text x="570" y="74" class="box-text" fill="#0A5C2E">Annotations</text>
+  <text x="570" y="92" class="box-sub" fill="#0A5C2E">Stars, emphasis</text>
+
+  <!-- Arrow: Capture → Note -->
+  <line x1="335" y1="112" x2="335" y2="155" class="arr" marker-end="url(#arrow)"/>
+
+  <!-- Layer 2: Note Object -->
+  <text x="40" y="178" class="label">The note object</text>
+  <text x="196" y="178" class="sublabel">Spatial, semantic, persistent</text>
+
+  <rect x="40" y="192" width="595" height="60" rx="10" fill="#DDD4F2" stroke="#4A2D99" stroke-width="2"/>
+  <text x="337" y="216" class="note-title" fill="#2E1A66">Unified canvas</text>
+  <text x="337" y="236" class="note-sub" fill="#2E1A66">Stroke data · Spatial layout · Semantic classification · Version history</text>
+
+  <!-- Arrows: Note → Composition -->
+  <line x1="200" y1="256" x2="200" y2="300" class="arr" marker-end="url(#arrow)"/>
+  <line x1="470" y1="256" x2="470" y2="300" class="arr" marker-end="url(#arrow)"/>
+
+  <!-- Layer 3: Composition -->
+  <text x="40" y="322" class="label">Composition</text>
+
+  <rect x="40" y="338" width="138" height="56" rx="8" fill="#FADDC8" stroke="#B34400" stroke-width="2"/>
+  <text x="109" y="360" class="box-text" fill="#7A2E00">Reflow engine</text>
+  <text x="109" y="378" class="box-sub" fill="#7A2E00">Adapt to surface</text>
+
+  <rect x="193" y="338" width="120" height="56" rx="8" fill="#FADDC8" stroke="#B34400" stroke-width="2"/>
+  <text x="253" y="360" class="box-text" fill="#7A2E00">Prettify</text>
+  <text x="253" y="378" class="box-sub" fill="#7A2E00">OCR + layout match</text>
+
+  <rect x="328" y="338" width="120" height="56" rx="8" fill="#FFF0C2" stroke="#997000" stroke-width="2"/>
+  <text x="388" y="360" class="box-text" fill="#5C4300">Archive</text>
+  <text x="388" y="378" class="box-sub" fill="#5C4300">Index, search, link</text>
+
+  <rect x="463" y="338" width="120" height="56" rx="8" fill="#FFF0C2" stroke="#997000" stroke-width="2"/>
+  <text x="523" y="360" class="box-text" fill="#5C4300">Export</text>
+  <text x="523" y="378" class="box-sub" fill="#5C4300">NotebookLM, etc.</text>
+
+  <!-- Arrow: Reflow → Surfaces -->
+  <line x1="109" y1="398" x2="109" y2="438" class="arr" marker-end="url(#arrow)"/>
+
+  <!-- Layer 4: Output Surfaces -->
+  <text x="40" y="458" class="label">Output surfaces</text>
+
+  <rect x="40" y="472" width="108" height="38" rx="6" fill="#F0F0F0" stroke="#555" stroke-width="2"/>
+  <text x="94" y="496" class="surface-text">E-ink tablet</text>
+
+  <rect x="163" y="472" width="115" height="38" rx="6" fill="#F0F0F0" stroke="#555" stroke-width="2"/>
+  <text x="220" y="496" class="surface-text">Large display</text>
+
+  <rect x="293" y="472" width="80" height="38" rx="6" fill="#F0F0F0" stroke="#555" stroke-width="2"/>
+  <text x="333" y="496" class="surface-text">Phone</text>
+
+  <rect x="388" y="472" width="80" height="38" rx="6" fill="#F0F0F0" stroke="#555" stroke-width="2"/>
+  <text x="428" y="496" class="surface-text">Print</text>
+</svg>

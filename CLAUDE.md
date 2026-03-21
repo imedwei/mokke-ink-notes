@@ -29,6 +29,8 @@ JAVA_HOME="/c/Program Files/Android/Android Studio/jbr" ./gradlew assembleDebug
 
 ## Development Workflow
 
+Before starting any implementation, review [`docs/VISION.md`](docs/VISION.md) to ensure the new feature or UX aligns with the overall product vision and design principles.
+
 Break implementation tasks into small, independently testable pieces. For each piece, follow this cycle:
 
 1. **Write tests first**: Create unit tests that define the expected behavior before writing any implementation code. Run them to confirm they fail for the right reasons.
