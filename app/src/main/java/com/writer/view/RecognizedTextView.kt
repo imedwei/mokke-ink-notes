@@ -27,7 +27,7 @@ import com.writer.ui.writing.WritingCoordinator.TextSegment
  * Individual line segments within a paragraph can be dimmed independently
  * using colored spans.
  *
- * Includes a right-side gutter with a "I" logo and resize drag handling.
+ * Includes a floating "I" logo icon that auto-hides during writing.
  */
 class RecognizedTextView @JvmOverloads constructor(
     context: Context,
@@ -36,7 +36,6 @@ class RecognizedTextView @JvmOverloads constructor(
 ) : View(context, attrs, defStyleAttr) {
 
     companion object {
-        private val GUTTER_WIDTH          get() = ScreenMetrics.gutterWidth
         private val HORIZONTAL_PADDING    get() = ScreenMetrics.dp(21f)
         private val PARAGRAPH_SPACING     get() = ScreenMetrics.dp(12f)
         private val LIST_ITEM_SPACING     get() = ScreenMetrics.dp(3f)
@@ -45,7 +44,6 @@ class RecognizedTextView @JvmOverloads constructor(
         private val BULLET_HANG_INDENT    get() = ScreenMetrics.dp(54f).toInt()
         private const val BULLET_PREFIX   = "\u2022  "
         private val HEADING_SPACING_AFTER get() = ScreenMetrics.dp(6f)
-        private val BOTTOM_PADDING        get() = ScreenMetrics.dp(5f)
     }
 
     private val textPaint = TextPaint().apply {
@@ -55,9 +53,6 @@ class RecognizedTextView @JvmOverloads constructor(
     }
 
     private val dimmedColor = CanvasTheme.LINE_COLOR
-
-    private val gutterPaint = CanvasTheme.newGutterFillPaint()
-    private val gutterLinePaint = CanvasTheme.newGutterLinePaint()
 
     private val logoPaint = TextPaint().apply {
         color = Color.BLACK
@@ -137,6 +132,7 @@ class RecognizedTextView @JvmOverloads constructor(
         val strokes: List<InkStroke>,
         val scale: Float,
         val offsetY: Float,
+        val fullHeightPx: Float,
         override val heightPx: Float,
         val lineIndex: Int
     ) : RenderItem()
@@ -169,8 +165,11 @@ class RecognizedTextView @JvmOverloads constructor(
     /** Pixel offset to scroll text content upward (for viewing earlier text). */
     var textContentScroll: Float = 0f
 
-    /** Called when the user drags the gutter. Delta is positive = drag down. */
-    var onGutterDrag: ((Float) -> Unit)? = null
+    /** Called when the user scrolls the text view. Delta is in pixels (positive = finger drag down). */
+    var onScroll: ((Float) -> Unit)? = null
+
+    /** Called when a scroll gesture ends (finger lifted). */
+    var onScrollEnd: (() -> Unit)? = null
 
     /** Called when the user taps the "I" logo. */
     var onLogoTap: (() -> Unit)? = null
@@ -192,11 +191,13 @@ class RecognizedTextView @JvmOverloads constructor(
             invalidate()
         }
 
-    // Gutter drag state
-    private var isGutterDragging = false
-    private var gutterDragLastY = 0f
-    private var gutterDragStartY = 0f
-    private var gutterDragMoved = false
+    // Floating icon visibility (auto-hides during writing)
+    private var iconVisible = true
+    private val iconSize get() = ScreenMetrics.dp(56f)
+    private val iconShowRunnable = Runnable {
+        iconVisible = true
+        invalidate()
+    }
 
     // Text tap tracking
     private var textTapDownX = 0f
@@ -210,6 +211,19 @@ class RecognizedTextView @JvmOverloads constructor(
     private var fingerScrollActive = false
     private var fingerScrollLastY = 0f
 
+    /** Called by WritingActivity when pen state changes on the canvas. */
+    fun onPenStateChanged(active: Boolean) {
+        handler.removeCallbacks(iconShowRunnable)
+        if (active) {
+            if (iconVisible) {
+                iconVisible = false
+                invalidate()
+            }
+        } else {
+            handler.postDelayed(iconShowRunnable, 300L)
+        }
+    }
+
     fun setParagraphs(paragraphs: List<List<TextSegment>>) {
         setContent(paragraphs, emptyList())
     }
@@ -221,7 +235,7 @@ class RecognizedTextView @JvmOverloads constructor(
     }
 
     private fun rebuildRenderItems(paragraphs: List<List<TextSegment>>, diagrams: List<DiagramDisplay>) {
-        val availableWidth = (width - HORIZONTAL_PADDING - HandwritingCanvasView.GUTTER_WIDTH).toInt()
+        val availableWidth = (width - 2 * HORIZONTAL_PADDING).toInt()
         if (availableWidth <= 0) return
 
         data class Indexed(val lineIndex: Int, val item: RenderItem, val lineHeights: List<Pair<Int, Float>>)
@@ -323,20 +337,46 @@ class RecognizedTextView @JvmOverloads constructor(
 
         // Build diagram render items (full width, no text padding)
         val diagramItems = diagrams.map { diagram ->
-            val fullWidth = width - HandwritingCanvasView.GUTTER_WIDTH
-            val scale = if (diagram.canvasWidth > 0f) fullWidth / diagram.canvasWidth else 1f
-            val renderedHeight = diagram.heightPx * scale + PARAGRAPH_SPACING
+            val metrics = PreviewLayoutCalculator.diagramRenderMetrics(
+                visibleHeight = diagram.visibleHeightPx,
+                fullHeight = diagram.heightPx,
+                canvasWidth = diagram.canvasWidth,
+                textViewWidth = width.toFloat(),
+                paragraphSpacing = PARAGRAPH_SPACING
+            )
             Indexed(
                 lineIndex = diagram.startLineIndex,
-                item = DiagramRenderItem(diagram.strokes, scale, diagram.offsetY, renderedHeight, diagram.startLineIndex),
-                lineHeights = listOf(Pair(diagram.startLineIndex, renderedHeight))
+                item = DiagramRenderItem(diagram.strokes, metrics.scale, diagram.offsetY, metrics.fullRenderedHeight, metrics.renderedHeight, diagram.startLineIndex),
+                lineHeights = listOf(Pair(diagram.startLineIndex, metrics.renderedHeight))
             )
         }
 
         // Merge and sort by line index
         val allItems = (textItems + diagramItems).sortedBy { it.lineIndex }
 
-        renderItems = allItems.map { it.item }
+        // Strip trailing spacing from the last item so content is flush with the divider
+        val items = allItems.map { it.item }.toMutableList()
+        if (items.isNotEmpty()) {
+            val last = items.last()
+            when (last) {
+                is TextRenderItem -> {
+                    val trimmedHeight = PreviewLayoutCalculator.trimLastItemHeight(
+                        last.heightPx, last.heightPx, PARAGRAPH_SPACING,
+                        isText = true, textLayoutHeight = last.layout.height.toFloat()
+                    )
+                    items[items.lastIndex] = last.copy(heightPx = trimmedHeight)
+                }
+                is DiagramRenderItem -> {
+                    val trimmedHeight = PreviewLayoutCalculator.trimLastItemHeight(
+                        last.heightPx, last.fullHeightPx, PARAGRAPH_SPACING,
+                        isText = false
+                    )
+                    items[items.lastIndex] = last.copy(heightPx = trimmedHeight)
+                }
+            }
+        }
+
+        renderItems = items
         paragraphHeights = renderItems.map { it.heightPx }
         writtenLineHeights = allItems.flatMap { it.lineHeights }
         totalTextHeight = paragraphHeights.sum().toInt()
@@ -345,6 +385,11 @@ class RecognizedTextView @JvmOverloads constructor(
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
         // Can't rebuild without paragraph data; next setParagraphs call will handle it
+    }
+
+    override fun onDetachedFromWindow() {
+        super.onDetachedFromWindow()
+        handler.removeCallbacks(iconShowRunnable)
     }
 
     // --- Touch handling ---
@@ -357,13 +402,8 @@ class RecognizedTextView @JvmOverloads constructor(
             return handleFingerTouch(event)
         }
 
-        // If already in a gutter drag, keep handling even if pen leaves gutter area
-        if (isGutterDragging) {
-            return handleGutterTouch(event)
-        }
-
         // Tutorial: close button tap at top of text area
-        if (tutorialMode && event.x < width - HandwritingCanvasView.GUTTER_WIDTH && event.y < closeButtonHeight) {
+        if (tutorialMode && event.y < closeButtonHeight) {
             if (event.action == MotionEvent.ACTION_DOWN) {
                 return true
             }
@@ -373,9 +413,13 @@ class RecognizedTextView @JvmOverloads constructor(
             }
         }
 
-        // Stylus/mouse in gutter area → resize drag
-        if (event.x >= width - HandwritingCanvasView.GUTTER_WIDTH) {
-            return handleGutterTouch(event)
+        // Floating icon tap detection
+        if (iconVisible && event.action == MotionEvent.ACTION_DOWN && isInIconArea(event.x, event.y)) {
+            return true
+        }
+        if (iconVisible && event.action == MotionEvent.ACTION_UP && isInIconArea(event.x, event.y)) {
+            onLogoTap?.invoke()
+            return true
         }
 
         // Stylus/mouse in text area → detect taps to scroll canvas to that line
@@ -415,7 +459,7 @@ class RecognizedTextView @JvmOverloads constructor(
 
     /**
      * Handle filtered finger touches on the text view.
-     * Allows: logo tap, text tap, gutter drag, text body scroll.
+     * Allows: logo tap, text tap, text body scroll.
      */
     private fun handleFingerTouch(event: MotionEvent): Boolean {
         val tf = touchFilter ?: return false
@@ -439,21 +483,16 @@ class RecognizedTextView @JvmOverloads constructor(
                     }
                     val dy = event.y - fingerScrollLastY
                     fingerScrollLastY = event.y
-                    textContentScroll += dy
-                    invalidate()
+                    onScroll?.invoke(dy)
                     return true
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     fingerScrollActive = false
+                    onScrollEnd?.invoke()
                     return true
                 }
             }
             return true
-        }
-
-        // If already in a gutter drag, keep handling
-        if (isGutterDragging) {
-            return handleGutterTouch(event)
         }
 
         when (event.action) {
@@ -469,13 +508,13 @@ class RecognizedTextView @JvmOverloads constructor(
                     return false
                 }
 
-                // Gutter area → resize drag
-                if (event.x >= width - HandwritingCanvasView.GUTTER_WIDTH) {
-                    return handleGutterTouch(event)
+                // Floating icon tap
+                if (iconVisible && isInIconArea(event.x, event.y)) {
+                    return true
                 }
 
                 // Tutorial close button
-                if (tutorialMode && event.x < width - HandwritingCanvasView.GUTTER_WIDTH && event.y < closeButtonHeight) {
+                if (tutorialMode && event.y < closeButtonHeight) {
                     return true
                 }
 
@@ -515,13 +554,16 @@ class RecognizedTextView @JvmOverloads constructor(
                 if (fingerScrollActive) {
                     val dy = event.y - fingerScrollLastY
                     fingerScrollLastY = event.y
-                    textContentScroll += dy
-                    invalidate()
+                    onScroll?.invoke(dy)
                 }
                 return true
             }
             MotionEvent.ACTION_UP -> {
-                if (tutorialMode && event.x < width - HandwritingCanvasView.GUTTER_WIDTH && event.y < closeButtonHeight) {
+                if (iconVisible && isInIconArea(event.x, event.y)) {
+                    onLogoTap?.invoke()
+                    return true
+                }
+                if (tutorialMode && event.y < closeButtonHeight) {
                     onCloseTutorialTap?.invoke()
                     return true
                 }
@@ -542,34 +584,9 @@ class RecognizedTextView @JvmOverloads constructor(
         return false
     }
 
-    private fun handleGutterTouch(event: MotionEvent): Boolean {
-        when (event.action) {
-            MotionEvent.ACTION_DOWN -> {
-                isGutterDragging = true
-                gutterDragLastY = event.y
-                gutterDragStartY = event.y
-                gutterDragMoved = false
-                return true
-            }
-            MotionEvent.ACTION_MOVE -> {
-                if (!isGutterDragging) return false
-                val dy = event.y - gutterDragLastY  // drag down = positive
-                gutterDragLastY = event.y
-                if (Math.abs(event.y - gutterDragStartY) > 20f) gutterDragMoved = true
-                onGutterDrag?.invoke(dy)
-                return true
-            }
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                if (!isGutterDragging) return false
-                isGutterDragging = false
-                // Detect tap on the logo area (top of gutter, no significant drag)
-                if (!gutterDragMoved && gutterDragStartY < 130f) {
-                    onLogoTap?.invoke()
-                }
-                return true
-            }
-        }
-        return false
+    /** Check if touch coordinates are within the floating icon tap target. */
+    private fun isInIconArea(x: Float, y: Float): Boolean {
+        return x >= width - iconSize && y <= iconSize
     }
 
     /** Resolve a tap at screen coordinates (x, y) to a written lineIndex. */
@@ -577,7 +594,7 @@ class RecognizedTextView @JvmOverloads constructor(
         if (renderItems.isEmpty()) return
         val callback = onTextTap ?: return
 
-        val baseY = height - totalTextHeight - BOTTOM_PADDING
+        val baseY = (height - totalTextHeight).toFloat()
         val startY = baseY + textScrollOffset + textContentScroll
         val localX = x - HORIZONTAL_PADDING
 
@@ -617,27 +634,24 @@ class RecognizedTextView @JvmOverloads constructor(
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
 
-        val gutterLeft = width - HandwritingCanvasView.GUTTER_WIDTH
-        val gutterCenterX = gutterLeft + HandwritingCanvasView.GUTTER_WIDTH / 2f
-
         // Draw text content or status/hint message
         if (statusMessage.isNotEmpty() && renderItems.isEmpty()) {
             // Draw status message centered in the content area
-            val contentCenterX = (width - HandwritingCanvasView.GUTTER_WIDTH) / 2f
+            val contentCenterX = width / 2f
             val contentCenterY = height / 2f
             canvas.drawText(statusMessage, contentCenterX, contentCenterY, statusPaint)
             if (statusSubtext.isNotEmpty()) {
                 canvas.drawText(statusSubtext, contentCenterX, contentCenterY + 50f, statusSubtextPaint)
             }
         } else if (showScrollHint && renderItems.isEmpty() && !tutorialMode) {
-            val contentCenterX = (width - HandwritingCanvasView.GUTTER_WIDTH) / 2f
+            val contentCenterX = width / 2f
             val contentCenterY = height / 2f
             canvas.drawText("Scroll to turn writing into text", contentCenterX, contentCenterY, scrollHintPaint)
         } else if (renderItems.isNotEmpty()) {
             val baseY = if (tutorialMode) {
                 closeButtonHeight + 5f  // top-align below close button
             } else {
-                height - totalTextHeight - BOTTOM_PADDING
+                (height - totalTextHeight).toFloat()
             }
             val startY = baseY + textScrollOffset + textContentScroll
 
@@ -655,17 +669,16 @@ class RecognizedTextView @JvmOverloads constructor(
             canvas.restore()
         }
 
-        // Draw gutter background
-        canvas.drawRect(gutterLeft, 0f, width.toFloat(), height.toFloat(), gutterPaint)
-        canvas.drawLine(gutterLeft, 0f, gutterLeft, height.toFloat(), gutterLinePaint)
-
-        // Draw "I" logo in the top of the gutter
-        val logoY = 100f
-        canvas.drawText("I", gutterCenterX, logoY, logoPaint)
+        // Draw floating "I" icon in top-right corner
+        if (iconVisible) {
+            val iconCenterX = width - iconSize / 2f
+            val logoY = iconSize * 0.7f
+            canvas.drawText("I", iconCenterX, logoY, logoPaint)
+        }
 
         if (tutorialMode) {
             // "Close Tutorial" button centered at top of text area
-            val contentCenterX = (width - HandwritingCanvasView.GUTTER_WIDTH) / 2f
+            val contentCenterX = width / 2f
             val btnTextY = 52f
             canvas.drawText("Close Tutorial", contentCenterX, btnTextY, closeButtonPaint)
             val btnTextWidth = closeButtonPaint.measureText("Close Tutorial")
@@ -680,29 +693,30 @@ class RecognizedTextView @JvmOverloads constructor(
                 closeButtonBorderPaint
             )
 
-            // Arrow pointing at "I" logo saying "Menu"
-            val menuArrowY = logoY - 20f
-            val menuArrowRight = gutterLeft - 10f
-            val menuArrowLeft = gutterLeft - 180f
+            // Arrow pointing at floating "I" icon saying "Menu"
+            val iconCenterX = width - iconSize / 2f
+            val menuArrowY = iconSize * 0.5f
+            val menuArrowRight = iconCenterX - iconSize / 2f - 10f
+            val menuArrowLeft = menuArrowRight - 170f
             canvas.drawLine(menuArrowLeft, menuArrowY, menuArrowRight, menuArrowY, tutorialAnnotationPaint)
             canvas.drawLine(menuArrowRight - 20f, menuArrowY - 12f, menuArrowRight, menuArrowY, tutorialAnnotationPaint)
             canvas.drawLine(menuArrowRight - 20f, menuArrowY + 12f, menuArrowRight, menuArrowY, tutorialAnnotationPaint)
             canvas.drawText("Menu", menuArrowLeft - 110f, menuArrowY + 12f, tutorialTextPaint)
 
-            // "Drag gutter to resize" with arrow pointing right toward gutter
+            // "Drag divider to resize" annotation at bottom
             val resizeY = height - 60f
-            val resizeLeft = gutterLeft - 370f
-            val resizeRight = gutterLeft - 20f
-            canvas.drawLine(resizeLeft, resizeY, resizeRight, resizeY, tutorialAnnotationPaint)
-            canvas.drawLine(resizeRight - 20f, resizeY - 12f, resizeRight, resizeY, tutorialAnnotationPaint)
-            canvas.drawLine(resizeRight - 20f, resizeY + 12f, resizeRight, resizeY, tutorialAnnotationPaint)
-            canvas.drawText("Drag this gutter to resize", resizeLeft - 10f, resizeY - 21f, tutorialTextPaint)
+            canvas.drawText("Drag divider to resize", width / 2f, resizeY, tutorialTextPaint)
         }
     }
 
     private fun drawDiagramItem(canvas: Canvas, item: DiagramRenderItem) {
         if (item.strokes.isEmpty()) return
         canvas.save()
+        // Always clip diagram to its allocated height so strokes don't overflow into adjacent items
+        canvas.clipRect(
+            -HORIZONTAL_PADDING, 0f,
+            width.toFloat(), item.heightPx
+        )
         // Undo the HORIZONTAL_PADDING translation so diagram uses full page width
         canvas.translate(-HORIZONTAL_PADDING, 0f)
         canvas.scale(item.scale, item.scale)

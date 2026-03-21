@@ -31,16 +31,10 @@ object ScreenMetrics {
 
     // ── Standard dp constants (Go 7, Note 5C, Tab X C) ───────────────────────
     private const val LINE_SPACING_DP        = 63f   // ≈ 10.0 mm
-    private const val GUTTER_TARGET_DP       = 69f   // ≈ 11.0 mm
-    private const val GUTTER_MIN_DP          = 57f   // ≈  9.0 mm  (hard floor)
-    private const val GUTTER_MAX_FRACTION    = 0.12f // ≤ 12 % of screen width
     private const val CANVAS_FRACTION        = 0.70f // 70 % of screen height for canvas
 
     // ── Compact dp constants (Palma 2 Pro) ───────────────────────────────────
     private const val LINE_SPACING_COMPACT_DP    = 41f   // ≈  6.5 mm
-    private const val GUTTER_TARGET_COMPACT_DP   = 47f   // ≈  7.5 mm
-    private const val GUTTER_MIN_COMPACT_DP      = 38f   // ≈  6.0 mm  (stylus floor)
-    private const val GUTTER_MAX_FRACTION_COMPACT = 0.09f // ≤  9 % of screen width
     private const val CANVAS_FRACTION_COMPACT    = 0.82f // 82 % of screen height for canvas
 
     // ── Shared dp constants ───────────────────────────────────────────────────
@@ -68,7 +62,6 @@ object ScreenMetrics {
 
     var lineSpacing:   Float = 100f; private set
     var topMargin:     Float =  30f; private set
-    var gutterWidth:   Float = 110f; private set
     var strokeWidth:   Float =   4f; private set
     var textBody:      Float =  52f; private set
     var textLogo:      Float =  96f; private set
@@ -106,7 +99,7 @@ object ScreenMetrics {
      * @param density         [DisplayMetrics.density] (= densityDpi / 160)
      * @param fontScale       User font scale preference (1.0 = default, >1.0 = larger text)
      * @param smallestWidthDp [Configuration.smallestScreenWidthDp]
-     * @param widthPixels     screen width in pixels (used for gutter cap)
+     * @param widthPixels     screen width in pixels
      * @param heightPixels    screen height in pixels
      */
     fun init(
@@ -132,18 +125,11 @@ object ScreenMetrics {
         isCompact      = smallestWidthDp < COMPACT_SW_DP
 
         val lineSpacingDp  = if (isCompact) LINE_SPACING_COMPACT_DP  else LINE_SPACING_DP
-        val gutterTargetDp = if (isCompact) GUTTER_TARGET_COMPACT_DP else GUTTER_TARGET_DP
-        val gutterMinDp    = if (isCompact) GUTTER_MIN_COMPACT_DP    else GUTTER_MIN_DP
-        val gutterMaxFrac  = if (isCompact) GUTTER_MAX_FRACTION_COMPACT else GUTTER_MAX_FRACTION
         canvasFraction     = if (isCompact) CANVAS_FRACTION_COMPACT  else CANVAS_FRACTION
 
         lineSpacing  = (lineSpacingDp         * this.density).roundToInt().toFloat()
         topMargin    = (TOP_MARGIN_DP          * this.density).roundToInt().toFloat()
         strokeWidth  =  STROKE_WIDTH_DP        * this.density
-        gutterWidth  = (gutterTargetDp         * this.density)
-            .coerceAtMost(widthPixels          * gutterMaxFrac)
-            .coerceAtLeast(gutterMinDp         * this.density)
-            .roundToInt().toFloat()
     }
 
     private fun computeTextSizes() {
