@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout
+<com.writer.view.SplitLayout
     xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/splitLayout"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
@@ -14,8 +15,9 @@
         android:layout_weight="1"
         android:background="@color/white" />
 
-    <!-- Divider between text and canvas -->
+    <!-- Divider between text and canvas (visual only, drag handled by SplitLayout) -->
     <View
+        android:id="@+id/splitDivider"
         android:layout_width="match_parent"
         android:layout_height="1dp"
         android:background="#AAAAAA" />
@@ -27,4 +29,4 @@
         android:layout_height="0dp"
         android:layout_weight="3" />
 
-</LinearLayout>
+</com.writer.view.SplitLayout>
