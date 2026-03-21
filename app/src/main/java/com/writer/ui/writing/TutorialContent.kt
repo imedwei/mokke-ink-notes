@@ -40,7 +40,6 @@ object TutorialContent {
 
     private val LINE_SPACING = HandwritingCanvasView.LINE_SPACING
     private val TOP_MARGIN = HandwritingCanvasView.TOP_MARGIN
-    private val GUTTER_WIDTH get() = HandwritingCanvasView.GUTTER_WIDTH
 
     private val textPaint = Paint().apply {
         typeface = Typeface.create("cursive", Typeface.NORMAL)
@@ -48,7 +47,7 @@ object TutorialContent {
     }
 
     fun generate(canvasWidth: Int, canvasHeight: Int): TutorialData {
-        val writingWidth = canvasWidth - GUTTER_WIDTH
+        val writingWidth = canvasWidth.toFloat()
 
         val strokes = mutableListOf<InkStroke>()
         val annotations = mutableListOf<AnnotationStroke>()
@@ -103,15 +102,10 @@ object TutorialContent {
             TextAnnotation("Strike through to delete words", 700f, strikeY + 10f, red, 32f)
         )
 
-        // --- Gutter scroll hint (top line, matching resize arrow style) ---
+        // --- Finger scroll hint ---
         val scrollHintY = lineTop(0) + LINE_SPACING * 0.4f
-        val scrollHintRight = writingWidth - 20f
-        val scrollHintLeft = writingWidth - 370f
-        annotations.add(makeLine(scrollHintLeft, scrollHintY, scrollHintRight, scrollHintY, blue, 4f))
-        annotations.add(makeLine(scrollHintRight - 20f, scrollHintY - 12f, scrollHintRight, scrollHintY, blue, 4f))
-        annotations.add(makeLine(scrollHintRight - 20f, scrollHintY + 12f, scrollHintRight, scrollHintY, blue, 4f))
         textAnnotations.add(
-            TextAnnotation("Drag this gutter to scroll", scrollHintLeft.toFloat() - 10f, scrollHintY - 21f, blue, 34f)
+            TextAnnotation("Scroll with your finger", writingWidth - 200f, scrollHintY, blue, 34f)
         )
 
         // --- Insert/delete line demo (right of eggs/bread area, +100px right) ---

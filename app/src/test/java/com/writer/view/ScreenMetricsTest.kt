@@ -91,45 +91,6 @@ class ScreenMetricsTest {
         assertTrue("lineSpacing should be <= 9 mm on Palma 2 Pro, was $mm mm", mm <= 9f)
     }
 
-    // ── gutter width ─────────────────────────────────────────────────────────
-
-    @Test fun gutterWidth_isAtLeastMinimumTouchTarget_standardDevices() {
-        val standard = listOf(
-            Triple(SW_TAB_X_C, W_TAB_X_C, H_TAB_X_C),
-            Triple(SW_NOTE_5C, W_NOTE_5C, H_NOTE_5C),
-            Triple(SW_GO_7,    W_GO_7,    H_GO_7),
-        )
-        for ((sw, w, h) in standard) {
-            init(sw, w, h)
-            val mm = toMm(ScreenMetrics.gutterWidth)
-            assertTrue("gutterWidth < 9 mm on sw=$sw (was $mm mm)", mm >= 9f)
-        }
-    }
-
-    @Test fun gutterWidth_isAtLeastStylusTarget_compactDevices() {
-        // Compact screens use a narrower gutter; 6 mm is still reliable for a stylus.
-        init(SW_PALMA_2PRO, W_PALMA_2PRO, H_PALMA_2PRO)
-        val mm = toMm(ScreenMetrics.gutterWidth)
-        assertTrue("gutterWidth < 6 mm on Palma 2 Pro (was $mm mm)", mm >= 6f)
-    }
-
-    @Test fun gutterWidth_doesNotExceedMaxFraction_narrowScreen() {
-        // Palma 2 Pro portrait — 824 px wide at 300 PPI
-        init(SW_PALMA_2PRO, W_PALMA_2PRO, H_PALMA_2PRO)
-        val fraction = ScreenMetrics.gutterWidth / W_PALMA_2PRO.toFloat()
-        assertTrue("gutter fraction $fraction exceeds 0.12 on Palma 2 Pro portrait", fraction <= 0.12f)
-    }
-
-    @Test fun gutterWidth_isConsistentAcrossStandardDevices() {
-        // All standard devices share the same density, so gutter pixel values should be equal
-        // (barring screen-width cap, which doesn't apply at these resolutions).
-        init(SW_TAB_X_C, W_TAB_X_C, H_TAB_X_C)
-        val tabXC = ScreenMetrics.gutterWidth
-        init(SW_NOTE_5C, W_NOTE_5C, H_NOTE_5C)
-        val note5C = ScreenMetrics.gutterWidth
-        assertEquals("Standard devices at same density should have equal gutter px", tabXC, note5C, 1f)
-    }
-
     // ── text sizes ───────────────────────────────────────────────────────────
 
     @Test fun textBody_isReadable_allDevices() {
@@ -251,7 +212,6 @@ class ScreenMetricsTest {
             init(sw, w, h)
             assertTrue("lineSpacing <= 0 on sw=$sw",  ScreenMetrics.lineSpacing  > 0f)
             assertTrue("topMargin <= 0 on sw=$sw",    ScreenMetrics.topMargin    > 0f)
-            assertTrue("gutterWidth <= 0 on sw=$sw",  ScreenMetrics.gutterWidth  > 0f)
             assertTrue("strokeWidth <= 0 on sw=$sw",  ScreenMetrics.strokeWidth  > 0f)
             assertTrue("textBody <= 0 on sw=$sw",     ScreenMetrics.textBody     > 0f)
             assertTrue("textLogo <= 0 on sw=$sw",     ScreenMetrics.textLogo     > 0f)
@@ -266,7 +226,6 @@ class ScreenMetricsTest {
         // Clamps to minimum 0.5 internally
         ScreenMetrics.init(0.3f, fontScale = 0.3f, smallestWidthDp = 400, widthPixels = 800, heightPixels = 600)
         assertTrue(ScreenMetrics.lineSpacing > 0f)
-        assertTrue(ScreenMetrics.gutterWidth > 0f)
     }
 
     @Test fun fontScale_2x_doublesTextSizes() {
