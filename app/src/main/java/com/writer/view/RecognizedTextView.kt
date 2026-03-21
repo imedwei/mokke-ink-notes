@@ -203,6 +203,13 @@ class RecognizedTextView @JvmOverloads constructor(
     private var textTapDownY = 0f
     private var textTapTracking = false
 
+    /** Shared palm-rejection filter, set by WritingActivity. */
+    var touchFilter: TouchFilter? = null
+
+    // Finger scroll state
+    private var fingerScrollActive = false
+    private var fingerScrollLastY = 0f
+
     fun setParagraphs(paragraphs: List<List<TextSegment>>) {
         setContent(paragraphs, emptyList())
     }
@@ -345,9 +352,9 @@ class RecognizedTextView @JvmOverloads constructor(
     override fun onTouchEvent(event: MotionEvent): Boolean {
         val toolType = event.getToolType(0)
 
-        // Reject finger/palm touches
+        // Finger touches: filter through palm rejection, allow taps and scroll
         if (toolType == MotionEvent.TOOL_TYPE_FINGER) {
-            return false
+            return handleFingerTouch(event)
         }
 
         // If already in a gutter drag, keep handling even if pen leaves gutter area
@@ -404,6 +411,135 @@ class RecognizedTextView @JvmOverloads constructor(
         }
 
         return super.onTouchEvent(event)
+    }
+
+    /**
+     * Handle filtered finger touches on the text view.
+     * Allows: logo tap, text tap, gutter drag, text body scroll.
+     */
+    private fun handleFingerTouch(event: MotionEvent): Boolean {
+        val tf = touchFilter ?: return false
+        val touchMinorDp = event.touchMinor / ScreenMetrics.density
+
+        // If already in a finger scroll, keep handling
+        if (fingerScrollActive) {
+            when (event.action) {
+                MotionEvent.ACTION_MOVE -> {
+                    if (tf.evaluateMove(
+                            pointerCount = event.pointerCount,
+                            touchMinorDp = touchMinorDp,
+                            eventTime = event.eventTime,
+                            x = event.x,
+                            y = event.y,
+                            checkStationary = false,
+                        ) == TouchFilter.Decision.REJECT
+                    ) {
+                        fingerScrollActive = false
+                        return false
+                    }
+                    val dy = event.y - fingerScrollLastY
+                    fingerScrollLastY = event.y
+                    textContentScroll += dy
+                    invalidate()
+                    return true
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    fingerScrollActive = false
+                    return true
+                }
+            }
+            return true
+        }
+
+        // If already in a gutter drag, keep handling
+        if (isGutterDragging) {
+            return handleGutterTouch(event)
+        }
+
+        when (event.action) {
+            MotionEvent.ACTION_DOWN -> {
+                if (tf.evaluateDown(
+                        pointerCount = event.pointerCount,
+                        touchMinorDp = touchMinorDp,
+                        eventTime = event.eventTime,
+                        x = event.x,
+                        y = event.y,
+                    ) == TouchFilter.Decision.REJECT
+                ) {
+                    return false
+                }
+
+                // Gutter area → resize drag
+                if (event.x >= width - HandwritingCanvasView.GUTTER_WIDTH) {
+                    return handleGutterTouch(event)
+                }
+
+                // Tutorial close button
+                if (tutorialMode && event.x < width - HandwritingCanvasView.GUTTER_WIDTH && event.y < closeButtonHeight) {
+                    return true
+                }
+
+                // Track for tap or scroll on text body
+                if (!tutorialMode) {
+                    textTapDownX = event.x
+                    textTapDownY = event.y
+                    textTapTracking = true
+                    fingerScrollLastY = event.y
+                }
+                return true
+            }
+            MotionEvent.ACTION_MOVE -> {
+                if (tf.evaluateMove(
+                        pointerCount = event.pointerCount,
+                        touchMinorDp = touchMinorDp,
+                        eventTime = event.eventTime,
+                        x = event.x,
+                        y = event.y,
+                        checkStationary = false,
+                    ) == TouchFilter.Decision.REJECT
+                ) {
+                    textTapTracking = false
+                    fingerScrollActive = false
+                    return false
+                }
+                if (textTapTracking) {
+                    val dx = event.x - textTapDownX
+                    val dy = event.y - textTapDownY
+                    if (dx * dx + dy * dy > 400f) {
+                        textTapTracking = false
+                        // Transition to finger scroll
+                        fingerScrollActive = true
+                        fingerScrollLastY = event.y
+                    }
+                }
+                if (fingerScrollActive) {
+                    val dy = event.y - fingerScrollLastY
+                    fingerScrollLastY = event.y
+                    textContentScroll += dy
+                    invalidate()
+                }
+                return true
+            }
+            MotionEvent.ACTION_UP -> {
+                if (tutorialMode && event.x < width - HandwritingCanvasView.GUTTER_WIDTH && event.y < closeButtonHeight) {
+                    onCloseTutorialTap?.invoke()
+                    return true
+                }
+                if (textTapTracking) {
+                    textTapTracking = false
+                    resolveTextTap(event.x, event.y)
+                    return true
+                }
+                fingerScrollActive = false
+                return true
+            }
+            MotionEvent.ACTION_CANCEL -> {
+                textTapTracking = false
+                fingerScrollActive = false
+                return true
+            }
+        }
+        return false
     }
 
     private fun handleGutterTouch(event: MotionEvent): Boolean {
