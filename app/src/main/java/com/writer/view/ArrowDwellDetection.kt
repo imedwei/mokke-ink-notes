@@ -58,4 +58,24 @@ object ArrowDwellDetection {
         tailDwell             -> StrokeType.ARROW_TAIL
         else                  -> StrokeType.LINE
     }
+
+    /**
+     * Classify elbow stroke type from dwell flags.
+     */
+    fun classifyElbow(tipDwell: Boolean, tailDwell: Boolean): StrokeType = when {
+        tipDwell && tailDwell -> StrokeType.ELBOW_ARROW_BOTH
+        tipDwell              -> StrokeType.ELBOW_ARROW_HEAD
+        tailDwell             -> StrokeType.ELBOW_ARROW_TAIL
+        else                  -> StrokeType.ELBOW
+    }
+
+    /**
+     * Classify arc stroke type from dwell flags.
+     */
+    fun classifyArc(tipDwell: Boolean, tailDwell: Boolean): StrokeType = when {
+        tipDwell && tailDwell -> StrokeType.ARC_ARROW_BOTH
+        tipDwell              -> StrokeType.ARC_ARROW_HEAD
+        tailDwell             -> StrokeType.ARC_ARROW_TAIL
+        else                  -> StrokeType.ARC
+    }
 }

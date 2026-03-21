@@ -2,9 +2,12 @@ package com.writer.view
 
 import kotlin.math.abs
 import kotlin.math.acos
+import kotlin.math.atan2
+import kotlin.math.cos
 import kotlin.math.hypot
 import kotlin.math.min
 import kotlin.math.PI
+import kotlin.math.sin
 import kotlin.math.sqrt
 
 /**
@@ -97,6 +100,36 @@ object ShapeSnapDetection {
      */
     const val ROUNDED_CORNER_THRESHOLD = 0.03f
 
+    // ── Elbow constants ────────────────────────────────────────────────────────
+
+    /** Minimum corner angle (degrees) for elbow detection. */
+    const val ELBOW_MIN_ANGLE_DEG = 60f
+
+    /** Maximum corner angle (degrees) for elbow detection. */
+    const val ELBOW_MAX_ANGLE_DEG = 120f
+
+    /** Maximum perpendicular deviation / leg length for each elbow leg to be considered straight. */
+    const val ELBOW_LEG_MAX_DEVIATION = 0.15f
+
+    // ── Arc constants ────────────────────────────────────────────────────────
+
+    /** Minimum path ratio (path length / chord length) for arc detection. */
+    const val ARC_MIN_PATH_RATIO = 1.02f
+
+    /** Maximum path ratio for arc detection. */
+    const val ARC_MAX_PATH_RATIO = 2.5f
+
+    /** Maximum point-to-bezier deviation / chord length for arc fit quality. */
+    const val ARC_MAX_FIT_DEVIATION = 0.08f
+
+    // ── Self-loop constants ────────────────────────────────────────────────────
+
+    /** Maximum gap (start→end distance / diagonal) for self-loop detection. */
+    const val SELF_LOOP_MAX_GAP = 0.75f
+
+    /** Maximum ellipse fit deviation / diagonal for self-loop (more lenient than ELLIPSE_MAX_DEV). */
+    const val SELF_LOOP_MAX_ELLIPSE_DEV = 0.15f
+
     // ── Diamond constant ──────────────────────────────────────────────────────
 
     /**
@@ -134,6 +167,27 @@ object ShapeSnapDetection {
             val x1: Float, val y1: Float,
             val x2: Float, val y2: Float,
             val x3: Float, val y3: Float
+        ) : SnapResult()
+        /** L-shaped connector: start → corner → end. */
+        data class Elbow(
+            val x1: Float, val y1: Float,
+            val cx: Float, val cy: Float,
+            val x2: Float, val y2: Float
+        ) : SnapResult()
+        /** Curved connector: start, quadratic bezier control point, end. */
+        data class Arc(
+            val x1: Float, val y1: Float,
+            val cx: Float, val cy: Float,
+            val x2: Float, val y2: Float
+        ) : SnapResult()
+        /** Smooth open curve that doesn't fit a single bezier (e.g. U-shaped self-referential arc). */
+        data class Curve(val points: List<Pair<Float, Float>>) : SnapResult()
+        /** Self-referential loop: elliptical arc from startAngle sweeping sweepAngle radians. */
+        data class SelfLoop(
+            val cx: Float, val cy: Float,
+            val rx: Float, val ry: Float,
+            val startAngle: Float,
+            val sweepAngle: Float
         ) : SnapResult()
     }
 
@@ -196,7 +250,12 @@ object ShapeSnapDetection {
             }
         }
 
-        return detectLine(xs, ys, lineSpacing)
+        // Open strokes: try line (strictest), then elbow, then arc, self-loop, curve
+        detectLine(xs, ys, lineSpacing)?.let { return it }
+        detectElbow(xs, ys, lineSpacing)?.let { return it }
+        detectArc(xs, ys, lineSpacing)?.let { return it }
+        detectSelfLoop(xs, ys, lineSpacing)?.let { return it }
+        return detectCurve(xs, ys, lineSpacing)
     }
 
     // ── Corner detection ──────────────────────────────────────────────────────
@@ -454,6 +513,288 @@ object ShapeSnapDetection {
         if (maxPerpendicularDeviation(xs, ys, x0, y0, x1, y1) > LINE_MAX_DEVIATION * len) return null
         if (pathLength(xs, ys) > LINE_MAX_PATH_RATIO * len) return null
         return SnapResult.Line(x0, y0, x1, y1)
+    }
+
+    /**
+     * Detect an L-shaped elbow connector: exactly 1 sharp corner with angle in [60°, 120°],
+     * each leg locally straight. Snaps corner to the nearest right-angle position.
+     */
+    private fun detectElbow(xs: FloatArray, ys: FloatArray, lineSpacing: Float): SnapResult.Elbow? {
+        val n = xs.size
+        if (n < 5) return null
+
+        val x0 = xs.first(); val y0 = ys.first()
+        val x1 = xs.last();  val y1 = ys.last()
+        val totalLen = dist(x0, y0, x1, y1)
+        if (totalLen < LINE_MIN_SPANS * lineSpacing) return null
+
+        val window = maxOf(3, n / 12)
+        if (n < 2 * window + 1) return null
+
+        val corners = findCornerIndices(xs, ys, window)
+        if (corners.size != 1) return null
+        val ci = corners[0]
+
+        // Verify corner angle is in [60°, 120°]
+        val ax = xs[ci] - x0; val ay = ys[ci] - y0
+        val bx = x1 - xs[ci]; val by = y1 - ys[ci]
+        val lenA = hypot(ax.toDouble(), ay.toDouble()).toFloat()
+        val lenB = hypot(bx.toDouble(), by.toDouble()).toFloat()
+        if (lenA == 0f || lenB == 0f) return null
+        val dot = ((ax * bx + ay * by) / (lenA * lenB)).coerceIn(-1f, 1f)
+        val angleDeg = (acos(dot.toDouble()) * 180.0 / PI).toFloat()
+        if (angleDeg < ELBOW_MIN_ANGLE_DEG || angleDeg > ELBOW_MAX_ANGLE_DEG) return null
+
+        // Each leg must be locally straight
+        val leg1Xs = FloatArray(ci + 1) { xs[it] }
+        val leg1Ys = FloatArray(ci + 1) { ys[it] }
+        if (maxPerpendicularDeviation(leg1Xs, leg1Ys, x0, y0, xs[ci], ys[ci]) > ELBOW_LEG_MAX_DEVIATION * lenA) return null
+
+        val leg2Size = n - ci
+        val leg2Xs = FloatArray(leg2Size) { xs[ci + it] }
+        val leg2Ys = FloatArray(leg2Size) { ys[ci + it] }
+        if (maxPerpendicularDeviation(leg2Xs, leg2Ys, xs[ci], ys[ci], x1, y1) > ELBOW_LEG_MAX_DEVIATION * lenB) return null
+
+        // Snap corner to right angle: choose (x0, y1) or (x1, y0) — whichever is closer to the raw corner
+        val opt1x = x0; val opt1y = y1
+        val opt2x = x1; val opt2y = y0
+        val d1 = dist(xs[ci], ys[ci], opt1x, opt1y)
+        val d2 = dist(xs[ci], ys[ci], opt2x, opt2y)
+        val (cx, cy) = if (d1 <= d2) Pair(opt1x, opt1y) else Pair(opt2x, opt2y)
+
+        return SnapResult.Elbow(x0, y0, cx, cy, x1, y1)
+    }
+
+    /**
+     * Detect a smooth arc connector via quadratic bezier fit quality.
+     *
+     * Uses bounding box diagonal (not chord) for minimum size and fit normalization,
+     * so self-referential arcs with close endpoints are still detected. No path-ratio
+     * or corner-count gates — the bezier fit alone rejects zigzags, scribbles, and
+     * other non-arc shapes because they deviate far from any single quadratic curve.
+     */
+    private fun detectArc(xs: FloatArray, ys: FloatArray, lineSpacing: Float): SnapResult.Arc? {
+        val n = xs.size
+        if (n < 5) return null
+
+        val x0 = xs.first(); val y0 = ys.first()
+        val x1 = xs.last();  val y1 = ys.last()
+        val chordLen = dist(x0, y0, x1, y1)
+
+        val minX = xs.min(); val maxX = xs.max()
+        val minY = ys.min(); val maxY = ys.max()
+        val w = maxX - minX; val h = maxY - minY
+        val diagonal = sqrt(w * w + h * h)
+
+        // Must be large enough (bounding box, not chord — short-chord arcs are valid)
+        if (diagonal < LINE_MIN_SPANS * lineSpacing * 0.5f) return null
+
+        // Must not be closed
+        if (diagonal > 0f && chordLen < CLOSE_FRACTION * diagonal) return null
+
+        // Find point of max perpendicular deviation from chord — this is the arc midpoint M.
+        // For short-chord arcs, use distance from chord midpoint instead.
+        var maxDev = 0f
+        var maxIdx = n / 2
+        if (chordLen > 1f) {
+            val dx = x1 - x0; val dy = y1 - y0
+            for (i in xs.indices) {
+                val dev = abs((xs[i] - x0) * dy - (ys[i] - y0) * dx) / chordLen
+                if (dev > maxDev) { maxDev = dev; maxIdx = i }
+            }
+        } else {
+            // Near-zero chord: find the point farthest from the midpoint
+            val midX = (x0 + x1) / 2f; val midY = (y0 + y1) / 2f
+            for (i in xs.indices) {
+                val d = dist(xs[i], ys[i], midX, midY)
+                if (d > maxDev) { maxDev = d; maxIdx = i }
+            }
+        }
+
+        // The arc must have meaningful curvature (not nearly straight)
+        val fitRef = maxOf(chordLen, diagonal * 0.5f)
+        if (maxDev < fitRef * 0.05f) return null
+
+        // Convert midpoint M to quadratic bezier control point: C = 2*M - 0.5*P0 - 0.5*P2
+        val mx = xs[maxIdx]; val my = ys[maxIdx]
+        val cx = 2f * mx - 0.5f * x0 - 0.5f * x1
+        val cy = 2f * my - 0.5f * y0 - 0.5f * y1
+
+        // Validate fit: for each stroke point, find minimum distance to the bezier curve.
+        // Normalize by the larger of chord and half-diagonal, so short-chord arcs
+        // get a reasonable tolerance.
+        val samples = 50
+        var maxFitDev = 0f
+        for (i in xs.indices) {
+            var minD = Float.MAX_VALUE
+            for (s in 0..samples) {
+                val t = s.toFloat() / samples
+                val omt = 1f - t
+                val bx = omt * omt * x0 + 2f * omt * t * cx + t * t * x1
+                val by = omt * omt * y0 + 2f * omt * t * cy + t * t * y1
+                val d = dist(xs[i], ys[i], bx, by)
+                if (d < minD) minD = d
+            }
+            if (minD > maxFitDev) maxFitDev = minD
+        }
+        if (maxFitDev > ARC_MAX_FIT_DEVIATION * fitRef) return null
+
+        return SnapResult.Arc(x0, y0, cx, cy, x1, y1)
+    }
+
+    /**
+     * Detect a smooth open curve that doesn't fit a single quadratic bezier
+     * (e.g. U-shaped self-referential arcs). Strips dwell duplicates, checks
+     * smoothness with a fixed window, and resamples to evenly-spaced points.
+     */
+    private fun detectCurve(xs: FloatArray, ys: FloatArray, lineSpacing: Float): SnapResult.Curve? {
+        val n = xs.size
+        if (n < 10) return null
+
+        // Strip dwell duplicates (consecutive near-identical points)
+        val sxs = mutableListOf(xs[0])
+        val sys = mutableListOf(ys[0])
+        for (i in 1 until n) {
+            if (dist(xs[i], ys[i], sxs.last(), sys.last()) > 0.5f) {
+                sxs.add(xs[i]); sys.add(ys[i])
+            }
+        }
+        val sx = sxs.toFloatArray()
+        val sy = sys.toFloatArray()
+        val sn = sx.size
+        if (sn < 10) return null
+
+        val minX = sx.min(); val maxX = sx.max()
+        val minY = sy.min(); val maxY = sy.max()
+        val w = maxX - minX; val h = maxY - minY
+        val diagonal = sqrt(w * w + h * h)
+        if (diagonal < LINE_MIN_SPANS * lineSpacing * 0.5f) return null
+
+        // Must not be closed
+        val chordLen = dist(sx.first(), sy.first(), sx.last(), sy.last())
+        if (diagonal > 0f && chordLen < CLOSE_FRACTION * diagonal) return null
+
+        // Smooth: no SHARP corners (>120°). Uses a higher threshold than the standard
+        // CORNER_ANGLE_DEG (50°) because smooth U-turns have 70-100° direction changes
+        // that are valid curve features, not zigzag corners.
+        val window = minOf(8, sn / 4)
+        val sharpThreshold = (120f * PI / 180f).toFloat()
+        if (window >= 3 && sn >= 2 * window + 1) {
+            for (i in window until sn - window) {
+                val ax = sx[i] - sx[i - window]; val ay = sy[i] - sy[i - window]
+                val bx = sx[i + window] - sx[i]; val by = sy[i + window] - sy[i]
+                val lenA = hypot(ax.toDouble(), ay.toDouble()).toFloat()
+                val lenB = hypot(bx.toDouble(), by.toDouble()).toFloat()
+                if (lenA == 0f || lenB == 0f) continue
+                val dot = ((ax * bx + ay * by) / (lenA * lenB)).coerceIn(-1f, 1f)
+                if (acos(dot.toDouble()).toFloat() > sharpThreshold) return null
+            }
+        }
+
+        // Must have meaningful curvature
+        val maxPerp = maxPerpendicularDeviation(sx, sy, sx.first(), sy.first(), sx.last(), sy.last())
+        if (maxPerp < diagonal * 0.05f) return null
+
+        // Resample to ~30 evenly-spaced points along the path
+        val totalLen = pathLength(sx, sy)
+        val numPts = 30
+        val step = totalLen / numPts
+        val pts = mutableListOf(Pair(sx[0], sy[0]))
+        var accumulated = 0f
+        var nextTarget = step
+        for (i in 1 until sn) {
+            val segLen = dist(sx[i - 1], sy[i - 1], sx[i], sy[i])
+            accumulated += segLen
+            while (accumulated >= nextTarget && pts.size < numPts) {
+                val overshoot = accumulated - nextTarget
+                val t = if (segLen > 0f) 1f - overshoot / segLen else 1f
+                pts.add(Pair(
+                    sx[i - 1] + (sx[i] - sx[i - 1]) * t,
+                    sy[i - 1] + (sy[i] - sy[i - 1]) * t
+                ))
+                nextTarget += step
+            }
+        }
+        pts.add(Pair(sx.last(), sy.last()))
+
+        return SnapResult.Curve(pts)
+    }
+
+    /**
+     * Detect a self-referential loop: a near-closed smooth curve that fits an elliptical arc.
+     * Used for flowchart self-loop connectors (arrows from a node back to itself).
+     */
+    private fun detectSelfLoop(xs: FloatArray, ys: FloatArray, lineSpacing: Float): SnapResult.SelfLoop? {
+        val n = xs.size
+        if (n < 10) return null
+
+        val x0 = xs.first(); val y0 = ys.first()
+        val x1 = xs.last();  val y1 = ys.last()
+
+        val minX = xs.min(); val maxX = xs.max()
+        val minY = ys.min(); val maxY = ys.max()
+        val w = maxX - minX; val h = maxY - minY
+        val diagonal = sqrt(w * w + h * h)
+
+        // Must have significant extent
+        if (min(w, h) < LINE_MIN_SPANS * lineSpacing * 0.5f) return null
+
+        // Must be nearly closed
+        val closeDist = dist(x0, y0, x1, y1)
+        if (closeDist > SELF_LOOP_MAX_GAP * diagonal) return null
+
+        // Must be smooth (0 corners)
+        val window = maxOf(3, n / 12)
+        if (n >= 2 * window + 1) {
+            val corners = findCornerIndices(xs, ys, window)
+            if (corners.isNotEmpty()) return null
+        }
+
+        // Fit ellipse using bounding box
+        val cx = (minX + maxX) / 2f
+        val cy = (minY + maxY) / 2f
+        val rx = w / 2f
+        val ry = h / 2f
+        if (rx == 0f || ry == 0f) return null
+
+        // Validate ellipse fit (more lenient than full ellipse detection)
+        val rx2 = rx * rx; val ry2 = ry * ry
+        var maxDev = 0f
+        for (i in xs.indices) {
+            val dx = xs[i] - cx; val dy = ys[i] - cy
+            val f = dx * dx / rx2 + dy * dy / ry2 - 1f
+            val gx = 2f * dx / rx2; val gy = 2f * dy / ry2
+            val gLen = sqrt(gx * gx + gy * gy)
+            val d = if (gLen > 0f) abs(f) / gLen else 0f
+            if (d > maxDev) maxDev = d
+        }
+        if (maxDev > SELF_LOOP_MAX_ELLIPSE_DEV * diagonal) return null
+
+        // Compute start/end angles on the normalized ellipse
+        val startAngle = atan2((y0 - cy).toDouble() / ry, (x0 - cx).toDouble() / rx).toFloat()
+        val endAngle = atan2((y1 - cy).toDouble() / ry, (x1 - cx).toDouble() / rx).toFloat()
+
+        // Determine winding direction using cross product of chord × midpoint offset.
+        // The shoelace formula doesn't work for open curves; this method checks which
+        // side of the start→end chord the arc's midpoint falls on.
+        // In screen coords (y-down): cross < 0 → clockwise, cross > 0 → counter-clockwise.
+        val midIdx = n / 2
+        val chordDx = x1 - x0; val chordDy = y1 - y0
+        val midDx = xs[midIdx] - x0; val midDy = ys[midIdx] - y0
+        val cross = chordDx * midDy - chordDy * midDx
+        val cw = cross < 0
+
+        var sweep = endAngle - startAngle
+        if (cw) {
+            if (sweep < 0) sweep += (2 * PI).toFloat()
+        } else {
+            if (sweep > 0) sweep -= (2 * PI).toFloat()
+        }
+
+        // Sweep must cover most of the ellipse (at least 180°)
+        if (abs(sweep) < PI.toFloat()) return null
+
+        return SnapResult.SelfLoop(cx, cy, rx, ry, startAngle, sweep)
     }
 
     // ── Geometry helpers ──────────────────────────────────────────────────────

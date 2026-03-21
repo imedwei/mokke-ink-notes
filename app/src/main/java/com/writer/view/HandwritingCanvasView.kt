@@ -640,7 +640,15 @@ class HandwritingCanvasView @JvmOverloads constructor(
 
         val xs = FloatArray(currentStrokePoints.size) { currentStrokePoints[it].x }
         val ys = FloatArray(currentStrokePoints.size) { currentStrokePoints[it].y }
-        val result = ShapeSnapDetection.detect(xs, ys, LINE_SPACING) ?: return null
+        // Dump stroke data for fixture creation (remove after debugging)
+        val xsStr = xs.joinToString(",") { "%.1f".format(it) }
+        val ysStr = ys.joinToString(",") { "%.1f".format(it) }
+        Log.d(TAG, "SNAP_FIXTURE n=${xs.size} ls=$LINE_SPACING")
+        Log.d(TAG, "SNAP_XS $xsStr")
+        Log.d(TAG, "SNAP_YS $ysStr")
+        val result = ShapeSnapDetection.detect(xs, ys, LINE_SPACING)
+        Log.d(TAG, "SNAP_RESULT $result")
+        if (result == null) return null
 
         val t = currentStrokePoints.first().timestamp
         var strokeType = StrokeType.FREEHAND
@@ -659,6 +667,32 @@ class HandwritingCanvasView @JvmOverloads constructor(
                 )
             }
             is ShapeSnapDetection.SnapResult.Arrow -> return null
+            is ShapeSnapDetection.SnapResult.Elbow -> {
+                val tipDwell = ArrowDwellDetection.hasDwellAtEnd(
+                    currentStrokePoints, result.x2, result.y2, ARROW_DWELL_RADIUS_PX, ARROW_DWELL_MS
+                )
+                strokeType = ArrowDwellDetection.classifyElbow(tipDwell, tailDwell)
+                isGeometric = true
+
+                listOf(
+                    StrokePoint(result.x1, result.y1, 0f, t),
+                    StrokePoint(result.cx, result.cy, 0f, t),
+                    StrokePoint(result.x2, result.y2, 0f, t)
+                )
+            }
+            is ShapeSnapDetection.SnapResult.Arc -> {
+                val tipDwell = ArrowDwellDetection.hasDwellAtEnd(
+                    currentStrokePoints, result.x2, result.y2, ARROW_DWELL_RADIUS_PX, ARROW_DWELL_MS
+                )
+                strokeType = ArrowDwellDetection.classifyArc(tipDwell, tailDwell)
+                isGeometric = false
+
+                listOf(
+                    StrokePoint(result.x1, result.y1, 0f, t),
+                    StrokePoint(result.cx, result.cy, 0f, t),
+                    StrokePoint(result.x2, result.y2, 0f, t)
+                )
+            }
             is ShapeSnapDetection.SnapResult.Ellipse -> {
                 strokeType = StrokeType.ELLIPSE
                 val n = 60
@@ -726,6 +760,32 @@ class HandwritingCanvasView @JvmOverloads constructor(
                     StrokePoint(result.x3, result.y3, 0f, t),
                     StrokePoint(result.x1, result.y1, 0f, t),
                 )
+            }
+            is ShapeSnapDetection.SnapResult.Curve -> {
+                val tipDwell = ArrowDwellDetection.hasDwellAtEnd(
+                    currentStrokePoints, last.x, last.y, ARROW_DWELL_RADIUS_PX, ARROW_DWELL_MS
+                )
+                strokeType = ArrowDwellDetection.classifyArc(tipDwell, tailDwell)
+                isGeometric = false
+
+                result.points.map { (x, y) -> StrokePoint(x, y, 0f, t) }
+            }
+            is ShapeSnapDetection.SnapResult.SelfLoop -> {
+                val tipDwell = ArrowDwellDetection.hasDwellAtEnd(
+                    currentStrokePoints, last.x, last.y, ARROW_DWELL_RADIUS_PX, ARROW_DWELL_MS
+                )
+                strokeType = ArrowDwellDetection.classifyArc(tipDwell, tailDwell)
+                isGeometric = false
+
+                val nPts = 40
+                (0..nPts).map { i ->
+                    val angle = result.startAngle + result.sweepAngle * i.toFloat() / nPts
+                    StrokePoint(
+                        (result.cx + result.rx * cos(angle.toDouble())).toFloat(),
+                        (result.cy + result.ry * sin(angle.toDouble())).toFloat(),
+                        0f, t
+                    )
+                }
             }
         }
         currentStrokePoints.clear()

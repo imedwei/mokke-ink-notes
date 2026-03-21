@@ -59,54 +59,100 @@ object CanvasTheme {
     fun drawStroke(canvas: Canvas, stroke: InkStroke, path: Path, paint: Paint) {
         if (stroke.points.size < 2) return
         path.reset()
-        path.moveTo(stroke.points[0].x, stroke.points[0].y)
-        if (stroke.isGeometric) {
-            // Sharp corners: lineTo each point (rectangle, triangle, arrow line, diamond).
-            for (i in 1 until stroke.points.size) {
-                path.lineTo(stroke.points[i].x, stroke.points[i].y)
+        val pts = stroke.points
+        val n = pts.size
+        path.moveTo(pts[0].x, pts[0].y)
+        if (stroke.strokeType.isArc && n == 3) {
+            // Arc: 3 points = start, bezier control, end → quadratic bezier
+            path.quadTo(pts[1].x, pts[1].y, pts[2].x, pts[2].y)
+        } else if (stroke.isGeometric) {
+            // Sharp corners: lineTo each point (rectangle, triangle, arrow line, elbow, diamond).
+            for (i in 1 until n) {
+                path.lineTo(pts[i].x, pts[i].y)
             }
         } else {
             // Smooth freehand rendering via quadratic bezier through midpoints.
-            for (i in 1 until stroke.points.size) {
-                val prev = stroke.points[i - 1]
-                val curr = stroke.points[i]
+            for (i in 1 until n) {
+                val prev = pts[i - 1]
+                val curr = pts[i]
                 val midX = (prev.x + curr.x) / 2f
                 val midY = (prev.y + curr.y) / 2f
                 path.quadTo(prev.x, prev.y, midX, midY)
             }
-            path.lineTo(stroke.points.last().x, stroke.points.last().y)
+            path.lineTo(pts.last().x, pts.last().y)
         }
         canvas.drawPath(path, paint)
 
-        // Draw arrowheads for arrow stroke types
-        val first = stroke.points.first()
-        val last = stroke.points.last()
-        val n = stroke.points.size
+        // Draw arrowheads
+        val first = pts.first()
+        val last = pts.last()
         val size = stroke.strokeWidth * 4f
-        // For non-geometric strokes with enough points, use local tangent
-        // so self-loop arrowheads point along the curve instead of using
-        // the (near-zero) first→last vector.
-        val useLocalTangent = !stroke.isGeometric && n > 3
-        when (stroke.strokeType) {
-            StrokeType.ARROW_HEAD -> {
-                val ref = if (useLocalTangent) stroke.points[n - 3] else first
-                drawArrowhead(canvas, paint, last.x, last.y,
-                    last.x - ref.x, last.y - ref.y, size)
+        val st = stroke.strokeType
+
+        if (st.hasArrowAtTip) {
+            val (dx, dy) = tipDirection(stroke)
+            drawArrowhead(canvas, paint, last.x, last.y, dx, dy, size)
+        }
+        if (st.hasArrowAtTail) {
+            val (dx, dy) = tailDirection(stroke)
+            drawArrowhead(canvas, paint, first.x, first.y, dx, dy, size)
+        }
+    }
+
+    /**
+     * Compute the direction vector for the arrowhead at the tip (end) of a stroke.
+     * Uses local tangent for arcs/elbows/freehand, chord for simple geometric lines.
+     */
+    private fun tipDirection(stroke: InkStroke): Pair<Float, Float> {
+        val pts = stroke.points
+        val n = pts.size
+        val last = pts.last()
+        val st = stroke.strokeType
+        return when {
+            // Arc: tip tangent = derivative of quadratic bezier at t=1 = 2(P2 - C)
+            st.isArc && n == 3 -> {
+                val dx = 2f * (pts[2].x - pts[1].x)
+                val dy = 2f * (pts[2].y - pts[1].y)
+                Pair(dx, dy)
             }
-            StrokeType.ARROW_TAIL -> {
-                val ref = if (useLocalTangent) stroke.points[2] else last
-                drawArrowhead(canvas, paint, first.x, first.y,
-                    first.x - ref.x, first.y - ref.y, size)
+            // Elbow: tip direction = corner → end
+            st.isElbow && n == 3 -> {
+                Pair(pts[2].x - pts[1].x, pts[2].y - pts[1].y)
             }
-            StrokeType.ARROW_BOTH -> {
-                val tipRef = if (useLocalTangent) stroke.points[n - 3] else first
-                drawArrowhead(canvas, paint, last.x, last.y,
-                    last.x - tipRef.x, last.y - tipRef.y, size)
-                val tailRef = if (useLocalTangent) stroke.points[2] else last
-                drawArrowhead(canvas, paint, first.x, first.y,
-                    first.x - tailRef.x, first.y - tailRef.y, size)
+            // Freehand with enough points: use local tangent
+            !stroke.isGeometric && n > 3 -> {
+                Pair(last.x - pts[n - 3].x, last.y - pts[n - 3].y)
             }
-            else -> {}
+            // Simple geometric line: chord direction
+            else -> Pair(last.x - pts.first().x, last.y - pts.first().y)
+        }
+    }
+
+    /**
+     * Compute the direction vector for the arrowhead at the tail (start) of a stroke.
+     */
+    private fun tailDirection(stroke: InkStroke): Pair<Float, Float> {
+        val pts = stroke.points
+        val n = pts.size
+        val first = pts.first()
+        val st = stroke.strokeType
+        return when {
+            // Arc: tail tangent = derivative at t=0 = 2(C - P0), reversed for pointing away
+            st.isArc && n == 3 -> {
+                val dx = 2f * (pts[0].x - pts[1].x)
+                val dy = 2f * (pts[0].y - pts[1].y)
+                Pair(dx, dy)
+            }
+            // Elbow: tail direction = corner → start
+            st.isElbow && n == 3 -> {
+                Pair(pts[0].x - pts[1].x, pts[0].y - pts[1].y)
+            }
+            // Freehand with enough points: use local tangent
+            !stroke.isGeometric && n > 3 -> {
+                Pair(first.x - pts[2].x, first.y - pts[2].y)
+            }
+            // Simple geometric line: reversed chord direction
+            else -> Pair(first.x - pts.last().x, first.y - pts.last().y)
         }
     }
 

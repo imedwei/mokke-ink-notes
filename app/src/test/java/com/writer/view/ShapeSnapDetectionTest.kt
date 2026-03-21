@@ -115,15 +115,16 @@ class ShapeSnapDetectionTest {
             result is ShapeSnapDetection.SnapResult.Ellipse)
     }
 
-    @Test fun threeQuarterArc_doesNotSnap() {
+    @Test fun threeQuarterArc_snapsToSelfLoop() {
         // 3/4 of a circle (270°): start at (200,100), end at (100,0).
-        // close distance = ~141 px; diagonal ≈ 283 px; ratio 0.50 > CLOSE_FRACTION.
-        // Perpendicular deviation > LINE_MAX_DEVIATION so it won't snap to a line either.
+        // Nearly closed (gap ratio ~0.50 < SELF_LOOP_MAX_GAP), smooth, fits ellipse.
         val n = 30
         val xs = FloatArray(n + 1) { i -> (100 + 100 * cos(3 * PI / 2 * i / n)).toFloat() }
         val ys = FloatArray(n + 1) { i -> (100 + 100 * sin(3 * PI / 2 * i / n)).toFloat() }
         val result = ShapeSnapDetection.detect(xs, ys, LS)
-        assertNull("Open 3/4 arc must not snap", result)
+        assertNotNull("3/4 arc should snap to SelfLoop", result)
+        assertTrue("Should be SelfLoop, got $result",
+            result is ShapeSnapDetection.SnapResult.SelfLoop)
     }
 
     // ── RoundedRectangle ──────────────────────────────────────────────────────
@@ -532,13 +533,15 @@ class ShapeSnapDetectionTest {
         assertNull(result)
     }
 
-    @Test fun arc_tooMuchPathLength_notDetected() {
+    @Test fun semicircle_doesNotSnapToLine() {
         // Semicircle: path length ≈ 314, straight-line length = 200, ratio ≈ 1.57 > 1.5.
+        // Must not snap to Line (too much path ratio), but may snap to Arc.
         val n = 20
         val xs = FloatArray(n + 1) { (100f * cos(PI * it / n)).toFloat() }
         val ys = FloatArray(n + 1) { (-100f * sin(PI * it / n)).toFloat() }
         val result = ShapeSnapDetection.detect(xs, ys, LS)
-        assertNull("Semicircle must not snap to a line", result)
+        assertTrue("Semicircle must not snap to a line, got $result",
+            result !is ShapeSnapDetection.SnapResult.Line)
     }
 
     @Test fun closedLoop_tooSmallForLine_notDetected() {
@@ -1030,5 +1033,238 @@ class ShapeSnapDetectionTest {
         // ...but the dwell gate blocks snapping
         val gatedResult = if (hasDwell) shapeResult else null
         assertNull("Without dwell, shape snapping should not activate", gatedResult)
+    }
+
+    // ── Elbow detection ─────────────────────────────────────────────────────
+
+    /** Build an L-shaped stroke from (x0,y0) → corner → (x1,y1) with n points per leg. */
+    private fun makeElbow(
+        x0: Float, y0: Float, cx: Float, cy: Float, x1: Float, y1: Float,
+        pointsPerLeg: Int = 15
+    ): Pair<FloatArray, FloatArray> {
+        val xs = mutableListOf<Float>()
+        val ys = mutableListOf<Float>()
+        for (i in 0 until pointsPerLeg) {
+            val t = i.toFloat() / pointsPerLeg
+            xs += x0 + (cx - x0) * t
+            ys += y0 + (cy - y0) * t
+        }
+        for (i in 0..pointsPerLeg) {
+            val t = i.toFloat() / pointsPerLeg
+            xs += cx + (x1 - cx) * t
+            ys += cy + (y1 - cy) * t
+        }
+        return xs.toFloatArray() to ys.toFloatArray()
+    }
+
+    @Test fun rightAngleElbow_horizontal_then_vertical_snaps() {
+        // L-shape: (0,0) → (200,0) → (200,200)
+        val (xs, ys) = makeElbow(0f, 0f, 200f, 0f, 200f, 200f)
+        val result = ShapeSnapDetection.detect(xs, ys, LS)
+        assertNotNull("L-shaped stroke should snap to Elbow", result)
+        assertTrue("Should be Elbow, got $result", result is ShapeSnapDetection.SnapResult.Elbow)
+        val elbow = result as ShapeSnapDetection.SnapResult.Elbow
+        assertEquals(0f, elbow.x1, 1f)
+        assertEquals(0f, elbow.y1, 1f)
+        assertEquals(200f, elbow.x2, 1f)
+        assertEquals(200f, elbow.y2, 1f)
+    }
+
+    @Test fun rightAngleElbow_vertical_then_horizontal_snaps() {
+        // L-shape: (0,0) → (0,200) → (200,200)
+        val (xs, ys) = makeElbow(0f, 0f, 0f, 200f, 200f, 200f)
+        val result = ShapeSnapDetection.detect(xs, ys, LS)
+        assertNotNull("Vertical-then-horizontal L should snap to Elbow", result)
+        assertTrue("Should be Elbow, got $result", result is ShapeSnapDetection.SnapResult.Elbow)
+    }
+
+    @Test fun elbowWithAcuteAngle_doesNotSnap() {
+        // Angle < 60° — too sharp for an elbow
+        // V-shape: (0,0) → (100,200) → (50,0)
+        val (xs, ys) = makeElbow(0f, 0f, 100f, 200f, 50f, 0f)
+        val result = ShapeSnapDetection.detect(xs, ys, LS)
+        assertTrue("Acute angle should not snap to Elbow, got $result",
+            result !is ShapeSnapDetection.SnapResult.Elbow)
+    }
+
+    @Test fun straightLine_doesNotSnapToElbow() {
+        val xs = FloatArray(20) { it * 15f }
+        val ys = FloatArray(20) { 100f }
+        val result = ShapeSnapDetection.detect(xs, ys, LS)
+        assertTrue("Straight line must not snap to Elbow, got $result",
+            result !is ShapeSnapDetection.SnapResult.Elbow)
+    }
+
+    // ── Arc detection ──────────────────────────────────────────────────────
+
+    /** Build a circular arc stroke from startAngle to endAngle (radians) with given center and radius. */
+    private fun makeArcStroke(
+        cx: Float, cy: Float, radius: Float,
+        startAngle: Double, endAngle: Double,
+        n: Int = 30
+    ): Pair<FloatArray, FloatArray> {
+        val xs = FloatArray(n + 1) { i ->
+            val angle = startAngle + (endAngle - startAngle) * i / n
+            (cx + radius * cos(angle)).toFloat()
+        }
+        val ys = FloatArray(n + 1) { i ->
+            val angle = startAngle + (endAngle - startAngle) * i / n
+            (cy + radius * sin(angle)).toFloat()
+        }
+        return xs to ys
+    }
+
+    @Test fun semicircularArc_snapsToArc() {
+        // Half circle: 180° arc, radius 100
+        val (xs, ys) = makeArcStroke(100f, 100f, 100f, 0.0, PI, 30)
+        val result = ShapeSnapDetection.detect(xs, ys, LS)
+        assertNotNull("Semicircular arc should snap", result)
+        assertTrue("Semicircle should snap to Arc, got $result",
+            result is ShapeSnapDetection.SnapResult.Arc)
+    }
+
+    @Test fun quarterCircleArc_snapsToArc() {
+        // Quarter circle: 90° arc, radius 150
+        val (xs, ys) = makeArcStroke(0f, 0f, 150f, 0.0, PI / 2, 25)
+        val result = ShapeSnapDetection.detect(xs, ys, LS)
+        assertNotNull("Quarter-circle arc should snap", result)
+        assertTrue("Quarter-circle should snap to Arc, got $result",
+            result is ShapeSnapDetection.SnapResult.Arc)
+    }
+
+    @Test fun shallowArc_snapsToArc() {
+        // Shallow arc: 60° sweep, radius 200
+        val (xs, ys) = makeArcStroke(0f, 0f, 200f, -PI / 6, PI / 6, 25)
+        val result = ShapeSnapDetection.detect(xs, ys, LS)
+        assertNotNull("Shallow arc should snap", result)
+        assertTrue("Shallow arc should snap to Arc, got $result",
+            result is ShapeSnapDetection.SnapResult.Arc)
+    }
+
+    @Test fun closedLoop_doesNotSnapToArc() {
+        // Full circle — closed, should not snap to arc
+        val n = 40
+        val xs = FloatArray(n + 1) { i -> (100 + 100 * cos(2 * PI * i / n)).toFloat() }
+        val ys = FloatArray(n + 1) { i -> (100 + 100 * sin(2 * PI * i / n)).toFloat() }
+        val result = ShapeSnapDetection.detect(xs, ys, LS)
+        assertTrue("Closed loop must not snap to Arc, got $result",
+            result !is ShapeSnapDetection.SnapResult.Arc)
+    }
+
+    @Test fun straightLine_doesNotSnapToArc() {
+        val xs = FloatArray(20) { it * 15f }
+        val ys = FloatArray(20) { 100f }
+        val result = ShapeSnapDetection.detect(xs, ys, LS)
+        assertTrue("Straight line must not snap to Arc, got $result",
+            result !is ShapeSnapDetection.SnapResult.Arc)
+    }
+
+    @Test fun selfReferentialArc_shortChord_snapsToArc() {
+        // Arc from one side of a circle to another — chord is short (80px)
+        // but the arc extends 120px outward.
+        val (xs2, ys2) = makeArcStroke(0f, 0f, 100f, -PI / 8, PI / 8, 25)
+        // chord ≈ 76.5px < LS (118px), but diagonal ≈ 100px > 59px
+        val result = ShapeSnapDetection.detect(xs2, ys2, LS)
+        assertNotNull("Short-chord self-referential arc should snap", result)
+        assertTrue("Should be Arc, got $result",
+            result is ShapeSnapDetection.SnapResult.Arc)
+    }
+
+    @Test fun selfReferentialArc_realPenFixture_snapsToArc() {
+        // Downsampled real pen data: U-shaped arc from one side of a circle to another.
+        // Start ≈ (651, 2629), loops right to (721, 2653), then left-down to (656, 2567),
+        // back up to (656, 2584). Chord ≈ 43px, diagonal ≈ 111px.
+        // Originally 553 points; downsampled every ~18th point for the moving portion.
+        val xs = floatArrayOf(
+            651.0f, 652.4f, 653.6f, 655.0f, 657.4f, 660.5f, 664.7f,
+            668.7f, 673.2f, 677.8f, 682.3f, 686.5f, 690.3f, 695.4f,
+            700.6f, 705.5f, 710.5f, 714.4f, 717.8f, 720.0f, 721.2f,
+            721.2f, 720.4f, 717.2f, 713.1f, 709.9f, 706.3f, 702.4f,
+            698.4f, 694.4f, 690.9f, 686.9f, 684.5f, 680.4f, 676.2f,
+            672.0f, 668.1f, 665.7f, 660.3f, 656.2f
+        )
+        val ys = floatArrayOf(
+            2629.0f, 2635.2f, 2638.8f, 2641.3f, 2643.3f, 2646.5f, 2649.2f,
+            2650.8f, 2652.0f, 2653.0f, 2653.6f, 2653.6f, 2652.6f, 2649.2f,
+            2646.1f, 2642.9f, 2639.3f, 2635.4f, 2630.6f, 2625.9f, 2620.5f,
+            2614.0f, 2608.0f, 2601.7f, 2596.2f, 2591.0f, 2585.3f, 2580.5f,
+            2575.8f, 2572.0f, 2569.2f, 2567.0f, 2566.8f, 2567.4f, 2568.8f,
+            2572.0f, 2575.4f, 2576.7f, 2580.7f, 2584.1f
+        )
+        val result = ShapeSnapDetection.detect(xs, ys, 77f)
+        assertNotNull("Real pen self-referential arc should snap, got null", result)
+        assertTrue("Should be Arc or Curve, got $result",
+            result is ShapeSnapDetection.SnapResult.Arc ||
+            result is ShapeSnapDetection.SnapResult.Curve)
+    }
+
+    @Test fun zigzag_doesNotSnapToArc() {
+        // Zigzag: has corners, should not snap to arc
+        val xs = mutableListOf<Float>()
+        val ys = mutableListOf<Float>()
+        for (i in 0..30) {
+            xs += i * 10f
+            ys += if (i % 2 == 0) 0f else 50f
+        }
+        val result = ShapeSnapDetection.detect(xs.toFloatArray(), ys.toFloatArray(), LS)
+        assertTrue("Zigzag must not snap to Arc, got $result",
+            result !is ShapeSnapDetection.SnapResult.Arc)
+    }
+
+    // ── Self-loop detection ──────────────────────────────────────────────────
+
+    @Test fun nearCompleteCircle_snapsToSelfLoop() {
+        // 300° arc (5/6 of a circle), radius 100
+        val n = 40
+        val sweepRad = 300.0 * PI / 180.0
+        val xs = FloatArray(n + 1) { i -> (100 + 100 * cos(sweepRad * i / n)).toFloat() }
+        val ys = FloatArray(n + 1) { i -> (100 + 100 * sin(sweepRad * i / n)).toFloat() }
+        val result = ShapeSnapDetection.detect(xs, ys, LS)
+        assertNotNull("300° arc should snap to SelfLoop", result)
+        assertTrue("Should be SelfLoop, got $result",
+            result is ShapeSnapDetection.SnapResult.SelfLoop)
+    }
+
+    @Test fun nearCompleteOval_snapsToSelfLoop() {
+        // 300° oval arc, rx=150, ry=80
+        val n = 40
+        val sweepRad = 300.0 * PI / 180.0
+        val xs = FloatArray(n + 1) { i -> (150 + 150 * cos(sweepRad * i / n)).toFloat() }
+        val ys = FloatArray(n + 1) { i -> (80 + 80 * sin(sweepRad * i / n)).toFloat() }
+        val result = ShapeSnapDetection.detect(xs, ys, LS)
+        assertNotNull("300° oval should snap to SelfLoop", result)
+        assertTrue("Should be SelfLoop, got $result",
+            result is ShapeSnapDetection.SnapResult.SelfLoop)
+    }
+
+    @Test fun fullClosedCircle_doesNotSnapToSelfLoop() {
+        // Full closed circle should snap to Ellipse, not SelfLoop
+        val n = 40
+        val xs = FloatArray(n + 1) { i -> (100 + 100 * cos(2 * PI * i / n)).toFloat() }
+        val ys = FloatArray(n + 1) { i -> (100 + 100 * sin(2 * PI * i / n)).toFloat() }
+        val result = ShapeSnapDetection.detect(xs, ys, LS)
+        assertTrue("Full circle should be Ellipse not SelfLoop, got $result",
+            result is ShapeSnapDetection.SnapResult.Ellipse)
+    }
+
+    @Test fun halfCircle_doesNotSnapToSelfLoop() {
+        // 180° arc — gap too large for self-loop (ratio > 0.75)
+        val (xs, ys) = makeArcStroke(100f, 100f, 100f, 0.0, PI, 30)
+        val result = ShapeSnapDetection.detect(xs, ys, LS)
+        assertTrue("Half circle should not be SelfLoop, got $result",
+            result !is ShapeSnapDetection.SnapResult.SelfLoop)
+    }
+
+    @Test fun zigzagNearClosed_doesNotSnapToSelfLoop() {
+        // Near-closed zigzag: has corners, should not be SelfLoop
+        val xs = mutableListOf<Float>()
+        val ys = mutableListOf<Float>()
+        for (i in 0..30) {
+            xs += 100f + 80f * cos(2 * PI * i / 30).toFloat() + if (i % 2 == 0) 20f else -20f
+            ys += 100f + 80f * sin(2 * PI * i / 30).toFloat()
+        }
+        val result = ShapeSnapDetection.detect(xs.toFloatArray(), ys.toFloatArray(), LS)
+        assertTrue("Zigzag near-closed loop must not snap to SelfLoop, got $result",
+            result !is ShapeSnapDetection.SnapResult.SelfLoop)
     }
 }
