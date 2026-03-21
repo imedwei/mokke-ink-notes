@@ -4,11 +4,7 @@ import android.util.Log
 import com.writer.model.DiagramArea
 import com.writer.model.DocumentModel
 import com.writer.model.InkStroke
-import com.writer.model.minX
-import com.writer.model.maxX
-import com.writer.model.minY
 import com.writer.model.maxY
-import com.writer.model.shiftY
 import com.writer.view.ScratchOutDetection
 import com.writer.recognition.TextRecognizer
 import com.writer.recognition.LineSegmenter
@@ -84,18 +80,6 @@ class WritingCoordinator(
     // Deferred e-ink refresh for text view updates (avoids interrupting active writing)
     private var textRefreshJob: Job? = null
 
-    // Line-drag gesture state
-    private var lineDragAnchorLine = -1
-    private var lineDragOriginalStrokes: List<InkStroke>? = null
-    private var lineDragOriginalDiagrams: List<DiagramArea>? = null
-    private var lineDragCurrentShift = 0
-
-    // Diagram insert gesture state
-    private var diagramInsertAnchorLine = -1
-    private var diagramInsertOriginalStrokes: List<InkStroke>? = null
-    private var diagramInsertOriginalDiagrams: List<DiagramArea>? = null
-    private var diagramInsertCurrentHeight = 0
-
     fun start() {
         Log.i(TAG, "Coordinator started")
         inkCanvas.onStrokeCompleted = { stroke -> onStrokeCompleted(stroke) }
@@ -109,22 +93,8 @@ class WritingCoordinator(
             displayHiddenLines()
         }
         textView.onTextTap = { lineIndex -> scrollToLine(lineIndex) }
-        inkCanvas.onLineDragStart = { anchorLine -> onLineDragStart(anchorLine) }
-        inkCanvas.onLineDragStep = { shiftLines -> onLineDragStep(shiftLines) }
-        inkCanvas.onLineDragEnd = { onLineDragEnd() }
-        inkCanvas.onDiagramInsertStart = { anchorLine -> onDiagramInsertStart(anchorLine) }
-        inkCanvas.onDiagramInsertStep = { height -> onDiagramInsertStep(height) }
-        inkCanvas.onDiagramInsertEnd = { onDiagramInsertEnd() }
-        inkCanvas.onUndoGestureStart = {
-            undoManager.beginScrub(currentSnapshot())
-        }
-        inkCanvas.onUndoGestureStep = step@{ offset ->
-            val snapshot = undoManager.scrubTo(offset) ?: return@step
-            applySnapshot(snapshot)
-        }
-        inkCanvas.onUndoGestureEnd = {
-            undoManager.endScrub()
-        }
+        inkCanvas.onDiagramShapeDetected = { stroke -> onDiagramShapeDetected(stroke) }
+        inkCanvas.onDiagramStrokeOverflow = { minY, maxY -> onDiagramStrokeOverflow(minY, maxY) }
         inkCanvas.onScratchOut = { left, top, right, bottom ->
             onScratchOut(left, top, right, bottom)
         }
@@ -140,15 +110,8 @@ class WritingCoordinator(
         inkCanvas.onIdleTimeout = null
         inkCanvas.onManualScroll = null
         textView.onTextTap = null
-        inkCanvas.onLineDragStart = null
-        inkCanvas.onLineDragStep = null
-        inkCanvas.onLineDragEnd = null
-        inkCanvas.onDiagramInsertStart = null
-        inkCanvas.onDiagramInsertStep = null
-        inkCanvas.onDiagramInsertEnd = null
-        inkCanvas.onUndoGestureStart = null
-        inkCanvas.onUndoGestureStep = null
-        inkCanvas.onUndoGestureEnd = null
+        inkCanvas.onDiagramShapeDetected = null
+        inkCanvas.onDiagramStrokeOverflow = null
         inkCanvas.onScratchOut = null
         inkCanvas.onStrokeReplaced = null
     }
@@ -616,251 +579,94 @@ class WritingCoordinator(
         return blocks.sortedBy { it.lineIndex }.joinToString("\n\n") { it.text }
     }
 
-    // --- Line-drag gesture ---
+    // --- Auto-diagram creation (shape-intent detection) ---
 
-    private fun onLineDragStart(anchorLine: Int) {
-        saveUndoSnapshot()
-        lineDragAnchorLine = anchorLine
-        lineDragOriginalStrokes = documentModel.activeStrokes.toList()
-        lineDragOriginalDiagrams = documentModel.diagramAreas.toList()
-        lineDragCurrentShift = 0
-        Log.i(TAG, "Line-drag started: anchorLine=$anchorLine")
-    }
+    /**
+     * Called when a shape is detected outside a diagram area.
+     * Creates a diagram area around the shape's bounding box with 1 line padding,
+     * merging with adjacent diagram areas.
+     * Returns the diagram bounds (topY, bottomY) or null.
+     */
+    fun onDiagramShapeDetected(stroke: InkStroke): Pair<Float, Float>? {
+        val minY = stroke.points.minOf { it.y }
+        val maxY = stroke.points.maxOf { it.y }
+        val topLine = lineSegmenter.getLineIndex(minY)
+        val bottomLine = lineSegmenter.getLineIndex(maxY)
 
-    private fun onLineDragStep(shiftLines: Int) {
-        val originals = lineDragOriginalStrokes ?: return
-        val originalDiagrams = lineDragOriginalDiagrams ?: return
-        val clamped = shiftLines.coerceAtLeast(-lineDragAnchorLine)
-        if (clamped == lineDragCurrentShift) return
-        lineDragCurrentShift = clamped
+        // Exact bounding box — no padding
+        var mergeStart = topLine
+        var mergeHeight = bottomLine - topLine + 1
 
-        val shiftAmount = clamped * HandwritingCanvasView.LINE_SPACING
-        val newStrokes = mutableListOf<InkStroke>()
-
-        for (stroke in originals) {
-            val strokeLine = lineSegmenter.getStrokeLineIndex(stroke)
-            if (strokeLine >= lineDragAnchorLine) {
-                // Anchor line and below: shift
-                newStrokes.add(stroke.shiftY(shiftAmount))
-            } else if (clamped < 0) {
-                // Upward drag: check if this stroke is in the overwritten zone
-                val overwrittenStart = lineDragAnchorLine + clamped
-                if (strokeLine >= overwrittenStart) {
-                    continue
-                }
-                newStrokes.add(stroke)
-            } else {
-                newStrokes.add(stroke)
-            }
-        }
-
-        // Shift/shrink diagram areas
-        val newDiagrams = mutableListOf<DiagramArea>()
-        for (area in originalDiagrams) {
-            if (area.startLineIndex >= lineDragAnchorLine) {
-                // Below anchor: shift
-                newDiagrams.add(area.copy(startLineIndex = area.startLineIndex + clamped))
-            } else if (clamped < 0) {
-                val overwrittenStart = lineDragAnchorLine + clamped
-                if (area.endLineIndex < overwrittenStart) {
-                    // Entirely above overwritten zone: keep
-                    newDiagrams.add(area)
-                } else if (area.startLineIndex >= overwrittenStart) {
-                    // Entirely in overwritten zone: remove
-                } else {
-                    // Partially overlaps: shrink
-                    val newHeight = overwrittenStart - area.startLineIndex
-                    if (newHeight > 0) {
-                        newDiagrams.add(area.copy(heightInLines = newHeight))
-                    }
-                }
-            } else {
-                newDiagrams.add(area)
-            }
-        }
-
-        // Truncate strokes that extend outside their diagram area bounds
-        val truncatedStrokes = if (clamped < 0 && newDiagrams.isNotEmpty()) {
-            newStrokes.mapNotNull { stroke ->
-                val strokeLine = lineSegmenter.getStrokeLineIndex(stroke)
-                val area = newDiagrams.find { it.containsLine(strokeLine) }
-                if (area != null) {
-                    val topY = lineSegmenter.getLineY(area.startLineIndex)
-                    val bottomY = lineSegmenter.getLineY(area.startLineIndex + area.heightInLines)
-                    val clipped = stroke.points.filter { it.y >= topY && it.y <= bottomY }
-                    if (clipped.size >= 2) InkStroke(
-                        strokeId = stroke.strokeId,
-                        points = clipped,
-                        strokeWidth = stroke.strokeWidth
-                    ) else null
-                } else {
-                    stroke
-                }
-            }
-        } else {
-            newStrokes
-        }
-
-        documentModel.activeStrokes.clear()
-        documentModel.activeStrokes.addAll(truncatedStrokes)
-        documentModel.diagramAreas.clear()
-        documentModel.diagramAreas.addAll(newDiagrams)
-        inkCanvas.diagramAreas = newDiagrams
-        inkCanvas.loadStrokes(truncatedStrokes)
-    }
-
-    private fun onLineDragEnd() {
-        val shift = lineDragCurrentShift
-        if (shift == 0) {
-            // No net shift — restore originals
-            val originals = lineDragOriginalStrokes
-            val originalDiagrams = lineDragOriginalDiagrams
-            if (originals != null) {
-                documentModel.activeStrokes.clear()
-                documentModel.activeStrokes.addAll(originals)
-                inkCanvas.loadStrokes(originals)
-            }
-            if (originalDiagrams != null) {
-                documentModel.diagramAreas.clear()
-                documentModel.diagramAreas.addAll(originalDiagrams)
-                inkCanvas.diagramAreas = originalDiagrams
-            }
-        } else {
-            // Invalidate text cache for all affected lines
-            val minAffected = if (shift < 0) {
-                lineDragAnchorLine + shift
-            } else {
-                lineDragAnchorLine
-            }
-            val maxAffected = (lineSegmenter.getBottomOccupiedLine(documentModel.activeStrokes)
-                .coerceAtLeast(lineDragAnchorLine)) + kotlin.math.abs(shift)
-            val invalidated = (minAffected..maxAffected).toSet()
-            for (line in invalidated) {
-                lineTextCache.remove(line)
-            }
-            displayHiddenLines()
-        }
-
-        lineDragOriginalStrokes = null
-        lineDragOriginalDiagrams = null
-        lineDragAnchorLine = -1
-        lineDragCurrentShift = 0
-        Log.i(TAG, "Line-drag ended: shift=$shift lines")
-    }
-
-    // --- Diagram insert gesture ---
-
-    private fun onDiagramInsertStart(anchorLine: Int) {
-        saveUndoSnapshot()
-        diagramInsertAnchorLine = anchorLine
-        diagramInsertOriginalStrokes = documentModel.activeStrokes.toList()
-        diagramInsertOriginalDiagrams = documentModel.diagramAreas.toList()
-        diagramInsertCurrentHeight = 0
-        Log.i(TAG, "Diagram insert started: anchorLine=$anchorLine")
-    }
-
-    private fun onDiagramInsertStep(heightInLines: Int) {
-        val originals = diagramInsertOriginalStrokes ?: return
-        val originalDiagrams = diagramInsertOriginalDiagrams ?: return
-        if (heightInLines == diagramInsertCurrentHeight) return
-        diagramInsertCurrentHeight = heightInLines
-
-        val shiftAmount = heightInLines * HandwritingCanvasView.LINE_SPACING
-        val newStrokes = originals.map { stroke ->
-            val strokeLine = lineSegmenter.getStrokeLineIndex(stroke)
-            if (strokeLine >= diagramInsertAnchorLine) {
-                stroke.shiftY(shiftAmount)
-            } else {
-                stroke
-            }
-        }
-
-        // Shift existing diagram areas at/below anchor
-        val newDiagrams = originalDiagrams.map { area ->
-            if (area.startLineIndex >= diagramInsertAnchorLine) {
-                area.copy(startLineIndex = area.startLineIndex + heightInLines)
-            } else {
-                area
-            }
-        }
-
-        // Add preview diagram area so borders render during drag
-        val previewDiagram = DiagramArea(
-            startLineIndex = diagramInsertAnchorLine,
-            heightInLines = heightInLines
-        )
-
-        documentModel.activeStrokes.clear()
-        documentModel.activeStrokes.addAll(newStrokes)
-        documentModel.diagramAreas.clear()
-        documentModel.diagramAreas.addAll(newDiagrams)
-        inkCanvas.diagramAreas = newDiagrams + previewDiagram
-        inkCanvas.loadStrokes(newStrokes)
-    }
-
-    private fun onDiagramInsertEnd() {
-        val height = diagramInsertCurrentHeight
-        if (height == 0) {
-            // No insertion — restore originals
-            val originals = diagramInsertOriginalStrokes
-            val originalDiagrams = diagramInsertOriginalDiagrams
-            if (originals != null) {
-                documentModel.activeStrokes.clear()
-                documentModel.activeStrokes.addAll(originals)
-                inkCanvas.loadStrokes(originals)
-            }
-            if (originalDiagrams != null) {
-                documentModel.diagramAreas.clear()
-                documentModel.diagramAreas.addAll(originalDiagrams)
-                inkCanvas.diagramAreas = originalDiagrams
-            }
-        } else {
-            // Merge with adjacent diagram areas if present
-            var mergeStart = diagramInsertAnchorLine
-            var mergeHeight = height
-
-            // Check above: existing diagram ending right above the new one
-            val above = documentModel.diagramAreas.find {
-                it.endLineIndex + 1 == diagramInsertAnchorLine
-            }
-            if (above != null) {
+        // Merge with adjacent diagram area above
+        val above = documentModel.diagramAreas.find { it.endLineIndex + 1 >= mergeStart && it.endLineIndex < mergeStart + mergeHeight }
+        if (above != null && above.endLineIndex + 1 >= mergeStart) {
+            if (above.startLineIndex < mergeStart) {
+                mergeHeight += mergeStart - above.startLineIndex
                 mergeStart = above.startLineIndex
-                mergeHeight += above.heightInLines
-                documentModel.diagramAreas.remove(above)
             }
-
-            // Check below: existing diagram starting right below the new one
-            val below = documentModel.diagramAreas.find {
-                it.startLineIndex == diagramInsertAnchorLine + height
-            }
-            if (below != null) {
-                mergeHeight += below.heightInLines
-                documentModel.diagramAreas.remove(below)
-            }
-
-            val newArea = DiagramArea(
-                startLineIndex = mergeStart,
-                heightInLines = mergeHeight
-            )
-            documentModel.diagramAreas.add(newArea)
-            inkCanvas.diagramAreas = documentModel.diagramAreas.toList()
-
-            // Invalidate text cache for affected lines
-            val maxAffected = (lineSegmenter.getBottomOccupiedLine(documentModel.activeStrokes)
-                .coerceAtLeast(diagramInsertAnchorLine)) + height
-            val invalidated = (diagramInsertAnchorLine..maxAffected).toSet()
-            for (line in invalidated) {
-                lineTextCache.remove(line)
-            }
-            displayHiddenLines()
-            inkCanvas.drawToSurface()
+            documentModel.diagramAreas.remove(above)
         }
 
-        diagramInsertOriginalStrokes = null
-        diagramInsertOriginalDiagrams = null
-        diagramInsertAnchorLine = -1
-        diagramInsertCurrentHeight = 0
-        Log.i(TAG, "Diagram insert ended: height=$height lines")
+        // Merge with adjacent diagram area below
+        val below = documentModel.diagramAreas.find { it.startLineIndex <= mergeStart + mergeHeight && it.startLineIndex >= mergeStart }
+        if (below != null && below != above) {
+            val belowEnd = below.startLineIndex + below.heightInLines
+            if (belowEnd > mergeStart + mergeHeight) {
+                mergeHeight = belowEnd - mergeStart
+            }
+            documentModel.diagramAreas.remove(below)
+        }
+
+        val newArea = DiagramArea(
+            startLineIndex = mergeStart,
+            heightInLines = mergeHeight
+        )
+        documentModel.diagramAreas.add(newArea)
+        inkCanvas.diagramAreas = documentModel.diagramAreas.toList()
+
+        // Invalidate text cache for affected lines
+        for (line in mergeStart until mergeStart + mergeHeight) {
+            lineTextCache.remove(line)
+        }
+
+        val topY = lineSegmenter.getLineY(mergeStart)
+        val bottomY = lineSegmenter.getLineY(mergeStart + mergeHeight)
+        Log.i(TAG, "Auto-created diagram area: lines $mergeStart-${mergeStart + mergeHeight - 1}")
+        return Pair(topY, bottomY)
+    }
+
+    /**
+     * Called when a stroke inside a diagram area extends beyond its bounds.
+     * Expands the diagram area to cover the stroke's Y range.
+     */
+    private fun onDiagramStrokeOverflow(strokeMinY: Float, strokeMaxY: Float) {
+        val strokeTopLine = lineSegmenter.getLineIndex(strokeMinY)
+        val strokeBottomLine = lineSegmenter.getLineIndex(strokeMaxY)
+
+        // Find the diagram area that the stroke started in (closest match)
+        val area = documentModel.diagramAreas.find {
+            // The stroke overlaps this area
+            strokeTopLine <= it.endLineIndex && strokeBottomLine >= it.startLineIndex
+        } ?: return
+
+        val newStart = minOf(area.startLineIndex, strokeTopLine)
+        val newEnd = maxOf(area.endLineIndex, strokeBottomLine)
+
+        if (newStart == area.startLineIndex && newEnd == area.endLineIndex) return // no change
+
+        documentModel.diagramAreas.remove(area)
+        val expanded = area.copy(
+            startLineIndex = newStart,
+            heightInLines = newEnd - newStart + 1
+        )
+        documentModel.diagramAreas.add(expanded)
+        inkCanvas.diagramAreas = documentModel.diagramAreas.toList()
+
+        // Invalidate text cache for newly covered lines
+        for (line in newStart..newEnd) {
+            lineTextCache.remove(line)
+        }
+        Log.i(TAG, "Expanded diagram area: ${area.startLineIndex}-${area.endLineIndex} → $newStart-$newEnd")
     }
 
     // --- Undo / Redo ---
