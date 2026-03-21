@@ -149,6 +149,13 @@ class HandwritingCanvasView @JvmOverloads constructor(
     // Whether we've temporarily changed the Onyx SDK limit rect for a diagram stroke
     private var diagramLimitActive = false
 
+    /** Shared palm-rejection filter, set by WritingActivity. */
+    var touchFilter: TouchFilter? = null
+
+    // Finger scroll state
+    private var fingerScrollActive = false
+    private var fingerScrollLastY = 0f
+
     private val idleRunnable = Runnable { onIdleTimeout?.invoke() }
 
     private var useOnyxSdk = false
@@ -172,6 +179,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
 
     private val onyxCallback = object : RawInputCallback() {
         override fun onBeginRawDrawing(b: Boolean, tp: TouchPoint) {
+            touchFilter?.penActive = true
             handler.removeCallbacks(idleRunnable)
             currentStrokePoints.clear()
             val docPt = tp.toDocStrokePoint()
@@ -216,6 +224,12 @@ class HandwritingCanvasView @JvmOverloads constructor(
         }
 
         override fun onEndRawDrawing(b: Boolean, tp: TouchPoint) {
+            if (!lineDragActive && !diagramInsertActive && !undoScrubActive) {
+                touchFilter?.let {
+                    it.penActive = false
+                    it.penUpTimestamp = android.os.SystemClock.uptimeMillis()
+                }
+            }
             Log.d(TAG, "onEndRawDrawing: ${currentStrokePoints.size} points, lineDrag=$lineDragActive, diagramInsert=$diagramInsertActive, undoReady=$undoGestureReady, undoScrub=$undoScrubActive")
             if (lineDragActive || diagramInsertActive || undoScrubActive) {
                 // SDK fires this when disabled mid-stroke (buffer dump).
@@ -325,10 +339,10 @@ class HandwritingCanvasView @JvmOverloads constructor(
     override fun onTouchEvent(event: MotionEvent): Boolean {
         val toolType = event.getToolType(0)
 
-        // Reject all finger/palm touches, but cancel idle timer
+        // Finger touches: filter through palm rejection, allow vertical scroll
         if (toolType == MotionEvent.TOOL_TYPE_FINGER) {
             handler.removeCallbacks(idleRunnable)
-            return false
+            return handleFingerTouch(event)
         }
 
         // If already in a gutter drag, keep handling as gutter even if pen leaves the area
@@ -374,6 +388,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
 
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
+                touchFilter?.penActive = true
                 handler.removeCallbacks(idleRunnable)
                 currentStrokePoints.clear()
                 currentPath.reset()
@@ -412,6 +427,10 @@ class HandwritingCanvasView @JvmOverloads constructor(
                 return true
             }
             MotionEvent.ACTION_UP -> {
+                touchFilter?.let {
+                    it.penActive = false
+                    it.penUpTimestamp = android.os.SystemClock.uptimeMillis()
+                }
                 if (lineDragActive) {
                     endLineDrag()
                     return true
@@ -472,6 +491,81 @@ class HandwritingCanvasView @JvmOverloads constructor(
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 if (!isGutterDragging) return false
                 isGutterDragging = false
+                if (textOverscroll == 0f) {
+                    scrollOffsetY = snapToLine(scrollOffsetY)
+                }
+                drawToSurface()
+                if (!tutorialMode) resumeRawDrawing()
+                onManualScroll?.invoke()
+                return true
+            }
+        }
+        return false
+    }
+
+    /**
+     * Handle filtered finger touches on the canvas. Only vertical scrolling is
+     * allowed — no taps (avoids accidental palm taps).
+     */
+    private fun handleFingerTouch(event: MotionEvent): Boolean {
+        val tf = touchFilter ?: return false
+        val touchMinorDp = event.touchMinor / ScreenMetrics.density
+
+        when (event.action) {
+            MotionEvent.ACTION_DOWN -> {
+                if (tf.evaluateDown(
+                        pointerCount = event.pointerCount,
+                        touchMinorDp = touchMinorDp,
+                        eventTime = event.eventTime,
+                        x = event.x,
+                        y = event.y,
+                    ) == TouchFilter.Decision.REJECT
+                ) {
+                    fingerScrollActive = false
+                    return false
+                }
+                fingerScrollLastY = event.y
+                fingerScrollActive = true
+                pauseRawDrawing()
+                return true
+            }
+            MotionEvent.ACTION_MOVE -> {
+                if (!fingerScrollActive) return false
+                if (tf.evaluateMove(
+                        pointerCount = event.pointerCount,
+                        touchMinorDp = touchMinorDp,
+                        eventTime = event.eventTime,
+                        x = event.x,
+                        y = event.y,
+                        checkStationary = true,
+                    ) == TouchFilter.Decision.REJECT
+                ) {
+                    // Cancel this finger gesture
+                    fingerScrollActive = false
+                    if (!tutorialMode) resumeRawDrawing()
+                    return false
+                }
+                if (!tf.hasMovedPastSlop()) return true // wait for intentional drag
+                val dy = fingerScrollLastY - event.y // drag up = scroll down
+                fingerScrollLastY = event.y
+                if (textOverscroll > 0f && dy > 0f) {
+                    textOverscroll = (textOverscroll - dy).coerceAtLeast(0f)
+                } else {
+                    val raw = scrollOffsetY + dy
+                    if (raw < 0f) {
+                        scrollOffsetY = 0f
+                        textOverscroll = (textOverscroll - raw).coerceAtLeast(0f)
+                    } else {
+                        scrollOffsetY = raw
+                    }
+                }
+                drawToSurface()
+                onManualScroll?.invoke()
+                return true
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                if (!fingerScrollActive) return false
+                fingerScrollActive = false
                 if (textOverscroll == 0f) {
                     scrollOffsetY = snapToLine(scrollOffsetY)
                 }
