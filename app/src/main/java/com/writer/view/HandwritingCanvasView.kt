@@ -112,11 +112,15 @@ class HandwritingCanvasView @JvmOverloads constructor(
     /** Called when a shape is detected outside a diagram area. Returns diagram bounds if created. */
     var onDiagramShapeDetected: ((stroke: InkStroke) -> Pair<Float, Float>?)? = null
 
+    /** Raw stroke capture: called with every finished stroke BEFORE any processing.
+     *  Used for test fixture recording. Set to non-null to enable capture. */
+    var onRawStrokeCapture: ((points: List<StrokePoint>) -> Unit)? = null
+
     /** Called when a stroke inside a diagram extends beyond its bounds, to expand the area. */
     var onDiagramStrokeOverflow: ((minY: Float, maxY: Float) -> Unit)? = null
 
     // Scratch-out callback (inside diagram areas: erase overlapping strokes)
-    var onScratchOut: ((left: Float, top: Float, right: Float, bottom: Float) -> Unit)? = null
+    var onScratchOut: ((scratchPoints: List<StrokePoint>, left: Float, top: Float, right: Float, bottom: Float) -> Unit)? = null
 
     // Stroke-replaced callback (shape snap: raw freehand → snapped geometric)
     var onStrokeReplaced: ((oldStrokeId: String, newStroke: InkStroke) -> Unit)? = null
@@ -424,6 +428,9 @@ class HandwritingCanvasView @JvmOverloads constructor(
             dwellIndicatorShown = false
             return
         }
+
+        // Raw capture: record stroke before any processing (scratch-out, shape snap, etc.)
+        onRawStrokeCapture?.invoke(currentStrokePoints.toList())
 
         if (currentDiagramBounds != null) {
             // INSIDE DIAGRAM AREA: post-stroke shape-snap pipeline
@@ -757,16 +764,18 @@ class HandwritingCanvasView @JvmOverloads constructor(
         val left = strokeMinX; val top = strokeMinY
         val right = strokeMaxX; val bottom = strokeMaxY
 
-        // Only treat as scratch-out if there are existing strokes under the region.
-        // Without this, new cursive words with many reversals (e.g. "difficulty")
-        // are consumed as scratch-outs and disappear.
-        if (!ScratchOutDetection.hasTargetStrokes(completedStrokes, left, top, right, bottom)) return false
+        // Only treat as scratch-out if existing strokes actually intersect
+        // the scratch-out path (not just bounding box overlap)
+        val scratchPoints = currentStrokePoints.toList()
+        if (!completedStrokes.any { stroke ->
+            ScratchOutDetection.strokesIntersect(scratchPoints, stroke.points)
+        }) return false
 
         currentStrokePoints.clear()
         currentPath.reset()
 
         pauseRawDrawing()
-        onScratchOut?.invoke(left, top, right, bottom)
+        onScratchOut?.invoke(scratchPoints, left, top, right, bottom)
         resumeRawDrawing()
 
         Log.i(TAG, "Post-stroke scratch-out: region=[$left,$top,$right,$bottom]")

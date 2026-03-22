@@ -7,8 +7,12 @@ import com.writer.view.HandwritingCanvasView
 
 /**
  * Assigns strokes to ruled line positions on the canvas.
- * Uses the stroke's starting point Y to determine line assignment,
- * so descenders (g, y, p, etc.) stay on the correct line.
+ *
+ * Uses the stroke's vertical centroid (midpoint of Y bounding box) to determine
+ * line assignment. This is more robust than using the first point because:
+ * - Cursive strokes may start above the baseline (e.g. "t" crossbar)
+ * - Descenders hang below but the letter body is on the line above
+ * - Words written at slightly different heights are assigned to the same line
  */
 class LineSegmenter {
 
@@ -19,9 +23,17 @@ class LineSegmenter {
             .coerceAtLeast(0)
     }
 
-    /** Returns the line index for a stroke, based on its starting point. */
+    /**
+     * Returns the line index for a stroke, based on its vertical centroid.
+     *
+     * The centroid (midpoint of Y bounding box) is more stable than the first
+     * point because it represents where the bulk of the stroke sits, regardless
+     * of stroke direction or starting position.
+     */
     fun getStrokeLineIndex(stroke: InkStroke): Int {
-        return getLineIndex(stroke.points.first().y)
+        val minY = stroke.points.minOf { it.y }
+        val maxY = stroke.points.maxOf { it.y }
+        return getLineIndex((minY + maxY) / 2f)
     }
 
     /** Returns the document-space Y for the top of a line index. */
@@ -29,7 +41,7 @@ class LineSegmenter {
         return HandwritingCanvasView.TOP_MARGIN + lineIndex * HandwritingCanvasView.LINE_SPACING
     }
 
-    /** Group strokes by their line index (using start point Y). */
+    /** Group strokes by their line index (using Y centroid). */
     fun groupByLine(strokes: List<InkStroke>): Map<Int, List<InkStroke>> {
         val result = mutableMapOf<Int, MutableList<InkStroke>>()
         for (stroke in strokes) {
