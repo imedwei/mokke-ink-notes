@@ -93,9 +93,16 @@ class WritingCoordinator(
     )
     private val diagramTextCache = mutableMapOf<Int, List<DiagramTextGroup>>()
 
+    /** Always-on ring buffer for bug report capture. */
+    val eventLog = StrokeEventLog()
+    private var lastStrokeIndex = -1
+
     fun start() {
         Log.i(TAG, "Coordinator started")
         inkCanvas.documentModel = documentModel
+        inkCanvas.onRawStrokeCapture = { points ->
+            lastStrokeIndex = eventLog.recordStroke(points)
+        }
         inkCanvas.onStrokeCompleted = { stroke -> onStrokeCompleted(stroke) }
         inkCanvas.onIdleTimeout = { onIdle() }
         inkCanvas.onManualScroll = {
@@ -151,10 +158,14 @@ class WritingCoordinator(
 
     private fun onStrokeCompleted(stroke: InkStroke) {
         textRefreshJob?.cancel()
-        if (gestureHandler.tryHandle(stroke)) return
+        if (gestureHandler.tryHandle(stroke)) {
+            eventLog.recordEvent(lastStrokeIndex, StrokeEventLog.EventType.GESTURE_CONSUMED)
+            return
+        }
 
         saveUndoSnapshot()
         documentModel.activeStrokes.add(stroke)
+        eventLog.recordEvent(lastStrokeIndex, StrokeEventLog.EventType.ADDED, "line=${lineSegmenter.getStrokeLineIndex(stroke)}")
 
         val lineIdx = lineSegmenter.getStrokeLineIndex(stroke)
 
@@ -195,6 +206,7 @@ class WritingCoordinator(
         saveUndoSnapshot()  // captures state with raw stroke (state N+1)
         documentModel.activeStrokes.removeAll { it.strokeId == oldStrokeId }
         documentModel.activeStrokes.add(newStroke)
+        eventLog.recordEvent(lastStrokeIndex, StrokeEventLog.EventType.REPLACED, newStroke.strokeType.name)
 
         // Track shape nodes for magnetic arrow snapping
         if (!newStroke.strokeType.isConnector && newStroke.strokeType != StrokeType.FREEHAND) {
@@ -241,6 +253,8 @@ class WritingCoordinator(
         inkCanvas.removeStrokes(idsToRemove)
         inkCanvas.drawToSurface()
 
+        eventLog.recordEvent(lastStrokeIndex, StrokeEventLog.EventType.SCRATCH_OUT,
+            "erased=${idsToRemove.joinToString(",")}")
         Log.i(TAG, "Scratch-out erase: removed ${overlapping.size} strokes in [$left,$top,$right,$bottom]")
     }
 
@@ -873,6 +887,42 @@ class WritingCoordinator(
     }
 
 
+
+    // --- Bug report ---
+
+    /**
+     * Generate a bug report file containing device info, recent stroke history,
+     * processing decisions, and current document state.
+     * @return the file, or null if no strokes in the buffer
+     */
+    fun generateBugReport(): java.io.File? {
+        val snapshot = eventLog.snapshot()
+        if (snapshot.strokes.isEmpty()) return null
+
+        val json = BugReport.serialize(
+            eventSnapshot = snapshot,
+            activeStrokes = documentModel.activeStrokes.toList(),
+            diagramAreas = documentModel.diagramAreas.toList(),
+            lineTextCache = lineTextCache.toMap()
+        )
+
+        val outDir = java.io.File(
+            android.os.Environment.getExternalStoragePublicDirectory(
+                android.os.Environment.DIRECTORY_DOWNLOADS
+            ),
+            "inkup-reports"
+        )
+        outDir.mkdirs()
+
+        val timestamp = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US)
+            .format(java.util.Date())
+        val outFile = java.io.File(outDir, "bug-report-$timestamp.json")
+        outFile.writeText(json.toString(2))
+
+        Log.i(TAG, "Bug report generated: ${outFile.absolutePath} " +
+            "(${snapshot.strokes.size} strokes, ${snapshot.events.size} events)")
+        return outFile
+    }
 
     // --- State persistence ---
 

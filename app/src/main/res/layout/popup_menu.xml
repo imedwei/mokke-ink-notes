@@ -108,6 +108,26 @@
         android:layout_marginEnd="16dp" />
 
     <TextView
+        android:id="@+id/menuBugReport"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Report Bug"
+        android:textSize="22sp"
+        android:textColor="@color/black"
+        android:paddingStart="24dp"
+        android:paddingEnd="24dp"
+        android:paddingTop="16dp"
+        android:paddingBottom="16dp"
+        android:background="?attr/selectableItemBackground" />
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="#AAAAAA"
+        android:layout_marginStart="16dp"
+        android:layout_marginEnd="16dp" />
+
+    <TextView
         android:id="@+id/menuClose"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
