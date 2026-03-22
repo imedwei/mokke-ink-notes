@@ -21,8 +21,13 @@ import kotlin.math.abs
  */
 object ScratchOutDetection {
 
-    /** Minimum number of X-direction reversals to qualify as a scratch-out. */
-    const val MIN_REVERSALS = 2
+    /**
+     * Minimum number of direction reversals to qualify as a scratch-out.
+     * Set to 3 because cursive words naturally have 2 reversals from letter
+     * loops (e.g., h, l, p, d in "helped"). A deliberate scratch-out has
+     * rapid back-and-forth motion with 3+ reversals.
+     */
+    const val MIN_REVERSALS = 3
 
     /** Minimum total X-travel (sum of all |dx|) in line spacings. */
     const val MIN_X_TRAVEL_SPANS = 0.5f
@@ -188,6 +193,95 @@ object ScratchOutDetection {
      * otherwise new cursive words with many reversals (e.g. "difficulty") are
      * consumed as scratch-outs and disappear.
      */
+    /**
+     * Minimum fraction of scratch-out points that must be near existing strokes
+     * for the scratch-out to be considered "focused" on erasing. A real scratch-out
+     * stays over the target text; cursive writing that grazes a descender has
+     * most of its points elsewhere.
+     */
+    const val MIN_COVERAGE_FRACTION = 0.3f
+
+    /**
+     * Maximum distance (in dp) from a scratch-out point to the nearest
+     * existing stroke point for the point to count as "covering" the target.
+     * Scaled by density at runtime via [ScreenMetrics.dp].
+     */
+    const val COVERAGE_RADIUS_DP = 16f
+
+    /**
+     * Check if a scratch-out stroke is focused on erasing existing strokes.
+     *
+     * Two requirements:
+     * 1. The stroke must physically intersect at least one existing stroke
+     * 2. At least [MIN_COVERAGE_FRACTION] of the scratch-out's points must be
+     *    near existing stroke points (within [COVERAGE_RADIUS])
+     *
+     * This prevents cursive text that merely grazes a descender from being
+     * treated as a scratch-out.
+     */
+    fun isFocusedScratchOut(
+        scratchPoints: List<StrokePoint>,
+        existingStrokes: List<InkStroke>
+    ): Boolean {
+        if (scratchPoints.size < 2 || existingStrokes.isEmpty()) return false
+
+        val scratchMinX = scratchPoints.minOf { it.x }
+        val scratchMaxX = scratchPoints.maxOf { it.x }
+        val scratchMinY = scratchPoints.minOf { it.y }
+        val scratchMaxY = scratchPoints.maxOf { it.y }
+        val radius = ScreenMetrics.dp(COVERAGE_RADIUS_DP)
+
+        // Pre-filter: only check strokes whose bounding box overlaps the scratch-out
+        // region (expanded by coverage radius). Avoids expensive intersection checks
+        // against distant strokes.
+        val candidates = existingStrokes.filter { stroke ->
+            val sMinX = stroke.points.minOf { it.x }
+            val sMaxX = stroke.points.maxOf { it.x }
+            val sMinY = stroke.points.minOf { it.y }
+            val sMaxY = stroke.points.maxOf { it.y }
+            sMaxX >= scratchMinX - radius && sMinX <= scratchMaxX + radius &&
+                sMaxY >= scratchMinY - radius && sMinY <= scratchMaxY + radius
+        }
+        if (candidates.isEmpty()) return false
+
+        // 1. Must intersect or be very close to at least one candidate stroke.
+        // For small targets (dots, taps with < 5 points), proximity is sufficient
+        // since segment intersection is unreliable with 1-2 point strokes.
+        val radiusSq = radius * radius
+        val intersecting = candidates.filter { stroke ->
+            if (stroke.points.size < 5) {
+                // Small target: any scratch point within radius counts
+                stroke.points.any { tp ->
+                    scratchPoints.any { sp ->
+                        val dx = sp.x - tp.x; val dy = sp.y - tp.y
+                        dx * dx + dy * dy <= radiusSq
+                    }
+                }
+            } else {
+                strokesIntersect(scratchPoints, stroke.points)
+            }
+        }
+        if (intersecting.isEmpty()) return false
+
+        // 2. Check coverage: what fraction of scratch-out points are near target strokes?
+        // For small targets (< 5 total points), intersection/proximity alone is sufficient.
+        val targetPoints = intersecting.flatMap { it.points }
+        if (targetPoints.size < 5) return true
+
+        var nearCount = 0
+        for (sp in scratchPoints) {
+            val isNear = targetPoints.any { tp ->
+                val dx = sp.x - tp.x
+                val dy = sp.y - tp.y
+                dx * dx + dy * dy <= radiusSq
+            }
+            if (isNear) nearCount++
+        }
+
+        val coverage = nearCount.toFloat() / scratchPoints.size
+        return coverage >= MIN_COVERAGE_FRACTION
+    }
+
     fun hasTargetStrokes(
         existingStrokes: List<InkStroke>,
         left: Float, top: Float, right: Float, bottom: Float

@@ -1,4 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
-    <external-path name="downloads" path="Download/inkup-reports/" />
+    <external-files-path name="bug-reports" path="Documents/bug-reports/" />
 </paths>

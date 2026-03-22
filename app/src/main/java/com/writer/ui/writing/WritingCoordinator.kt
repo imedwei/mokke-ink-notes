@@ -95,6 +95,8 @@ class WritingCoordinator(
 
     /** Always-on ring buffer for bug report capture. */
     val eventLog = StrokeEventLog()
+    /** Index of the most recent raw stroke in the event log.
+     *  Safe as a single field because stylus input is single-touch on the main thread. */
     private var lastStrokeIndex = -1
 
     fun start() {
@@ -227,17 +229,10 @@ class WritingCoordinator(
     }
 
     private fun onScratchOut(scratchPoints: List<StrokePoint>, left: Float, top: Float, right: Float, bottom: Float) {
-        // Only erase strokes that the scratch-out stroke actually intersects,
-        // filtered by centroid proximity to prevent descender false positives
-        val scratchCentroidY = (top + bottom) / 2f
-        val centroidThreshold = HandwritingCanvasView.LINE_SPACING * 0.25f
+        // Erase strokes that the scratch-out physically intersects.
+        // The caller (checkPostStrokeScratchOut) already verified this is a focused
+        // scratch-out via isFocusedScratchOut — most of its path covers existing strokes.
         val overlapping = documentModel.activeStrokes.filter { stroke ->
-            if (!stroke.strokeType.isConnector) {
-                val sMinY = stroke.points.minOf { it.y }
-                val sMaxY = stroke.points.maxOf { it.y }
-                val strokeCentroidY = (sMinY + sMaxY) / 2f
-                if (kotlin.math.abs(strokeCentroidY - scratchCentroidY) > centroidThreshold) return@filter false
-            }
             ScratchOutDetection.strokesIntersect(scratchPoints, stroke.points)
                 || stroke.strokeType.isConnector
                     && ScratchOutDetection.strokeIntersectsRect(stroke.points, left, top, right, bottom)
@@ -907,10 +902,8 @@ class WritingCoordinator(
         )
 
         val outDir = java.io.File(
-            android.os.Environment.getExternalStoragePublicDirectory(
-                android.os.Environment.DIRECTORY_DOWNLOADS
-            ),
-            "inkup-reports"
+            inkCanvas.context.getExternalFilesDir(android.os.Environment.DIRECTORY_DOCUMENTS),
+            "bug-reports"
         )
         outDir.mkdirs()
 
