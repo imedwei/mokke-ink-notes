@@ -19,6 +19,7 @@ import android.view.MotionEvent
 import android.view.View
 import com.writer.model.InkStroke
 import com.writer.ui.writing.WritingCoordinator.DiagramDisplay
+import com.writer.ui.writing.WritingCoordinator.DiagramTextLabel
 import com.writer.ui.writing.WritingCoordinator.TextSegment
 
 /**
@@ -44,7 +45,6 @@ class RecognizedTextView @JvmOverloads constructor(
         private val BULLET_HANG_INDENT    get() = ScreenMetrics.dp(54f).toInt()
         private const val BULLET_PREFIX   = "\u2022  "
         private val HEADING_SPACING_AFTER get() = ScreenMetrics.dp(6f)
-        private val BOTTOM_PADDING        get() = ScreenMetrics.dp(5f)
 
         // Gutter tap zone thresholds (multiples of GUTTER_WIDTH from top)
         private const val GUTTER_LOGO_ZONE  = 1.2f
@@ -120,6 +120,11 @@ class RecognizedTextView @JvmOverloads constructor(
 
     // Diagram rendering
     private val diagramStrokePaint = CanvasTheme.newStrokePaint()
+    private val diagramTextPaint = TextPaint().apply {
+        color = Color.BLACK
+        textSize = ScreenMetrics.textBody
+        isAntiAlias = false
+    }
     private val diagramPath = Path()
 
     // Render items: text paragraphs and inline diagrams
@@ -140,7 +145,8 @@ class RecognizedTextView @JvmOverloads constructor(
         val offsetY: Float,
         val fullHeightPx: Float,
         override val heightPx: Float,
-        val lineIndex: Int
+        val lineIndex: Int,
+        val textLabels: List<DiagramTextLabel> = emptyList()
     ) : RenderItem()
 
 
@@ -358,7 +364,7 @@ class RecognizedTextView @JvmOverloads constructor(
             )
             Indexed(
                 lineIndex = diagram.startLineIndex,
-                item = DiagramRenderItem(diagram.strokes, metrics.scale, diagram.offsetY, metrics.fullRenderedHeight, metrics.renderedHeight, diagram.startLineIndex),
+                item = DiagramRenderItem(diagram.strokes, metrics.scale, diagram.offsetY, metrics.fullRenderedHeight, metrics.renderedHeight, diagram.startLineIndex, diagram.textLabels),
                 lineHeights = listOf(Pair(diagram.startLineIndex, metrics.renderedHeight))
             )
         }
@@ -722,7 +728,7 @@ class RecognizedTextView @JvmOverloads constructor(
     }
 
     private fun drawDiagramItem(canvas: Canvas, item: DiagramRenderItem) {
-        if (item.strokes.isEmpty()) return
+        if (item.strokes.isEmpty() && item.textLabels.isEmpty()) return
         canvas.save()
         // Always clip diagram to its allocated height so strokes don't overflow into adjacent items
         canvas.clipRect(
@@ -735,6 +741,18 @@ class RecognizedTextView @JvmOverloads constructor(
         canvas.translate(0f, -item.offsetY)
         for (stroke in item.strokes) {
             CanvasTheme.drawStroke(canvas, stroke, diagramPath, diagramStrokePaint)
+        }
+        // Draw recognized text labels centered at their stroke group positions
+        for (label in item.textLabels) {
+            val textWidth = diagramTextPaint.measureText(label.text)
+            val metrics = diagramTextPaint.fontMetrics
+            val textHeight = metrics.descent - metrics.ascent
+            canvas.drawText(
+                label.text,
+                label.x - textWidth / 2f,
+                label.y + textHeight / 2f - metrics.descent,
+                diagramTextPaint
+            )
         }
         canvas.restore()
     }

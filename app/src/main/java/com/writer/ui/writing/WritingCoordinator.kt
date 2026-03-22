@@ -3,7 +3,9 @@ package com.writer.ui.writing
 import android.util.Log
 import com.writer.model.DiagramArea
 import com.writer.model.DocumentModel
+import com.writer.model.InkLine
 import com.writer.model.InkStroke
+import com.writer.model.StrokeType
 import com.writer.model.maxY
 import com.writer.view.ScratchOutDetection
 import com.writer.recognition.TextRecognizer
@@ -79,6 +81,15 @@ class WritingCoordinator(
     var onHeadingDetected: ((String) -> Unit)? = null
     // Deferred e-ink refresh for text view updates (avoids interrupting active writing)
     private var textRefreshJob: Job? = null
+    // Diagram text: recognized text groups keyed by diagram area start line
+    // Each entry is a list of (text, centerX, centerY, strokeIds)
+    data class DiagramTextGroup(
+        val text: String,
+        val centerX: Float,
+        val centerY: Float,
+        val strokeIds: Set<String>
+    )
+    private val diagramTextCache = mutableMapOf<Int, List<DiagramTextGroup>>()
 
     fun start() {
         Log.i(TAG, "Coordinator started")
@@ -120,6 +131,7 @@ class WritingCoordinator(
         scrollAnimating = false
         textRefreshJob?.cancel()
         lineTextCache.clear()
+        diagramTextCache.clear()
         recognizingLines.clear()
         pendingRerecognize.clear()
         everHiddenLines.clear()
@@ -143,8 +155,14 @@ class WritingCoordinator(
 
         val lineIdx = lineSegmenter.getStrokeLineIndex(stroke)
 
-        // Diagram strokes: no recognition, no line tracking
-        if (isDiagramLine(lineIdx)) return
+        // Diagram strokes: recognize freehand by spatial groups, not by line
+        if (isDiagramLine(lineIdx)) {
+            if (stroke.strokeType == StrokeType.FREEHAND) {
+                val area = documentModel.diagramAreas.find { it.containsLine(lineIdx) }
+                if (area != null) recognizeDiagramArea(area)
+            }
+            return
+        }
 
         // If the user modified a previously recognized line, invalidate cache
         lineTextCache.remove(lineIdx)
@@ -202,9 +220,12 @@ class WritingCoordinator(
     fun recognizeAllLines() {
         val strokesByLine = lineSegmenter.groupByLine(documentModel.activeStrokes)
         if (strokesByLine.isEmpty()) return
+        // Recognize diagram areas
+        for (area in documentModel.diagramAreas) {
+            recognizeDiagramArea(area)
+        }
         scope.launch {
             for (lineIndex in strokesByLine.keys.sorted()) {
-                if (isDiagramLine(lineIndex)) continue
                 // Re-recognize lines that failed ("[?]") or were never cached
                 val cached = lineTextCache[lineIndex]
                 if (cached != null && cached != "[?]") continue
@@ -255,11 +276,84 @@ class WritingCoordinator(
     }
 
     /**
+     * Recognize all freehand text in a diagram area by spatial groups.
+     * Groups strokes that are close together (across all lines in the area),
+     * recognizes each group independently, and caches the results.
+     */
+    private fun recognizeDiagramArea(area: DiagramArea) {
+        // Collect all freehand strokes in the diagram area
+        val freehandStrokes = documentModel.activeStrokes.filter { stroke ->
+            stroke.strokeType == StrokeType.FREEHAND &&
+                area.containsLine(lineSegmenter.getStrokeLineIndex(stroke))
+        }
+        if (freehandStrokes.isEmpty()) {
+            diagramTextCache.remove(area.startLineIndex)
+            return
+        }
+
+        val ls = HandwritingCanvasView.LINE_SPACING
+
+        // Filter out freehand strokes that look like unsnapped connectors:
+        // wide and flat (width > 2 LS and height < 30% of width)
+        val textStrokes = freehandStrokes.filter { s ->
+            val w = s.points.maxOf { it.x } - s.points.minOf { it.x }
+            val h = s.points.maxOf { it.y } - s.points.minOf { it.y }
+            w < ls * 2 || h > w * 0.3f
+        }
+        if (textStrokes.isEmpty()) {
+            diagramTextCache.remove(area.startLineIndex)
+            return
+        }
+
+        // Collect geometric (shape) strokes for containment-based grouping
+        val shapeStrokes = documentModel.activeStrokes.filter { stroke ->
+            stroke.strokeType != StrokeType.FREEHAND &&
+                !stroke.strokeType.isConnector &&
+                area.containsLine(lineSegmenter.getStrokeLineIndex(stroke))
+        }
+
+        val groups = DiagramTextGrouping.groupByProximity(textStrokes, ls, shapeStrokes)
+
+        scope.launch {
+            val results = mutableListOf<DiagramTextGroup>()
+            for (group in groups) {
+                val yRows = DiagramTextGrouping.splitIntoRowsAdaptive(group, ls * 0.25f)
+                val groupIds = group.map { it.strokeId }.toSet()
+                for (row in yRows) {
+                    val inkLine = InkLine.build(row)
+                    try {
+                        val preContext = buildPreContext(area.startLineIndex)
+                        val text = withContext(Dispatchers.IO) {
+                            recognizer.recognizeLine(inkLine, preContext)
+                        }.trim()
+                        if (text.isNotEmpty() && text != "[?]") {
+                            val cx = (inkLine.boundingBox.left + inkLine.boundingBox.right) / 2f
+                            val cy = (inkLine.boundingBox.top + inkLine.boundingBox.bottom) / 2f
+                            results.add(DiagramTextGroup(
+                                text = text,
+                                centerX = cx,
+                                centerY = cy,
+                                strokeIds = groupIds
+                            ))
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Diagram group recognition failed", e)
+                    }
+                }
+            }
+            diagramTextCache[area.startLineIndex] = results
+            Log.d(TAG, "Diagram area ${area.startLineIndex}: recognized ${results.size} groups: ${results.map { it.text }}")
+            displayHiddenLines()
+        }
+    }
+
+    /**
      * Core recognition: get strokes for [lineIndex], filter markers, recognize,
      * and cache the result. Returns the recognized text, or null if there were
      * no strokes or recognition failed.
      */
     private suspend fun doRecognizeLine(lineIndex: Int): String? {
+        // Diagram lines are recognized by recognizeDiagramArea, not here
         if (isDiagramLine(lineIndex)) {
             recognizingLines.remove(lineIndex)
             return null
@@ -430,7 +524,7 @@ class WritingCoordinator(
         updateTextView(notYetVisible)
         updateTextScrollOffset()
 
-        val uncached = everHiddenLines.filter { !lineTextCache.containsKey(it) && !isDiagramLine(it) && !recognizingLines.contains(it) }
+        val uncached = everHiddenLines.filter { !lineTextCache.containsKey(it) && !recognizingLines.contains(it) }
         if (uncached.isNotEmpty()) {
             for (lineIdx in uncached) {
                 recognizingLines.add(lineIdx)
@@ -451,6 +545,9 @@ class WritingCoordinator(
     /** A segment of text within a paragraph, with its own dimming state. */
     data class TextSegment(val text: String, val dimmed: Boolean, val lineIndex: Int, val listItem: Boolean = false, val heading: Boolean = false)
 
+    /** A text label to render inside a diagram at its original stroke position. */
+    data class DiagramTextLabel(val text: String, val x: Float, val y: Float)
+
     /** Diagram display data for inline rendering in the text view. */
     data class DiagramDisplay(
         val startLineIndex: Int,
@@ -459,16 +556,20 @@ class WritingCoordinator(
         val heightPx: Float,
         val offsetY: Float,
         /** How much of the diagram's height is scrolled off the canvas (for partial rendering). */
-        val visibleHeightPx: Float = heightPx
+        val visibleHeightPx: Float = heightPx,
+        /** Recognized text labels replacing freehand strokes in the diagram. */
+        val textLabels: List<DiagramTextLabel> = emptyList()
     )
 
     private fun updateTextView(currentlyHidden: Set<Int>) {
         val strokesByLine = lineSegmenter.groupByLine(documentModel.activeStrokes)
         val writingWidth = inkCanvas.width.toFloat()
 
-        val classifiedLines = currentlyHidden.sorted().filter { !isDiagramLine(it) }.mapNotNull { lineIdx ->
-            paragraphBuilder.classifyLine(lineIdx, lineTextCache[lineIdx], strokesByLine[lineIdx], writingWidth)
-        }
+        val classifiedLines = currentlyHidden.sorted()
+            .filter { !isDiagramLine(it) }
+            .mapNotNull { lineIdx ->
+                paragraphBuilder.classifyLine(lineIdx, lineTextCache[lineIdx], strokesByLine[lineIdx], writingWidth)
+            }
 
         val grouped = paragraphBuilder.groupIntoParagraphs(classifiedLines, strokesByLine, writingWidth, documentModel.diagramAreas)
 
@@ -509,13 +610,22 @@ class WritingCoordinator(
                     area.containsLine(lineSegmenter.getStrokeLineIndex(stroke))
                 }
             } else emptyList()
+
+            // Use diagram text cache for recognized spatial groups
+            val textGroups = diagramTextCache[vis.startLineIndex] ?: emptyList()
+            val hiddenIds = textGroups.flatMap { it.strokeIds }.toSet()
+            val displayStrokes = areaStrokes.filter { it.strokeId !in hiddenIds }
+            val textLabels = textGroups.map { group ->
+                DiagramTextLabel(text = group.text, x = group.centerX, y = group.centerY)
+            }
             DiagramDisplay(
                 startLineIndex = vis.startLineIndex,
-                strokes = areaStrokes,
+                strokes = displayStrokes,
                 canvasWidth = writingWidth,
                 heightPx = vis.fullHeight,
                 offsetY = vis.areaTop,
-                visibleHeightPx = vis.visibleHeight
+                visibleHeightPx = vis.visibleHeight,
+                textLabels = textLabels
             )
         }
 
@@ -685,6 +795,7 @@ class WritingCoordinator(
         documentModel.activeStrokes.addAll(snapshot.strokes)
         documentModel.diagramAreas.clear()
         documentModel.diagramAreas.addAll(snapshot.diagramAreas)
+        diagramTextCache.clear()
         inkCanvas.diagramAreas = snapshot.diagramAreas
         inkCanvas.loadStrokes(snapshot.strokes)
         inkCanvas.scrollOffsetY = snapshot.scrollOffsetY

@@ -27,7 +27,7 @@ class DiagramEraseTest {
         left: Float, top: Float, right: Float, bottom: Float
     ): List<InkStroke> = strokes.filter { stroke ->
         stroke.points.any { pt -> pt.x in left..right && pt.y in top..bottom }
-            || stroke.strokeType.isArrowOrLine
+            || stroke.strokeType.isConnector
                 && ScratchOutDetection.strokeIntersectsRect(stroke.points, left, top, right, bottom)
     }
 
