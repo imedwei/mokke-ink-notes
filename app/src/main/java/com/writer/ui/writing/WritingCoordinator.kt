@@ -6,6 +6,7 @@ import com.writer.model.DiagramNode
 import com.writer.model.DocumentModel
 import com.writer.model.InkLine
 import com.writer.model.InkStroke
+import com.writer.model.StrokePoint
 import com.writer.model.StrokeType
 import com.writer.model.maxY
 import com.writer.view.ScratchOutDetection
@@ -108,8 +109,8 @@ class WritingCoordinator(
         textView.onTextTap = { lineIndex -> scrollToLine(lineIndex) }
         inkCanvas.onDiagramShapeDetected = { stroke -> onDiagramShapeDetected(stroke) }
         inkCanvas.onDiagramStrokeOverflow = { minY, maxY -> onDiagramStrokeOverflow(minY, maxY) }
-        inkCanvas.onScratchOut = { left, top, right, bottom ->
-            onScratchOut(left, top, right, bottom)
+        inkCanvas.onScratchOut = { scratchPoints, left, top, right, bottom ->
+            onScratchOut(scratchPoints, left, top, right, bottom)
         }
         inkCanvas.onStrokeReplaced = { oldStrokeId, newStroke ->
             onStrokeReplaced(oldStrokeId, newStroke)
@@ -213,9 +214,19 @@ class WritingCoordinator(
         Log.i(TAG, "Stroke replaced: $oldStrokeId → ${newStroke.strokeId} (${newStroke.strokeType})")
     }
 
-    private fun onScratchOut(left: Float, top: Float, right: Float, bottom: Float) {
+    private fun onScratchOut(scratchPoints: List<StrokePoint>, left: Float, top: Float, right: Float, bottom: Float) {
+        // Only erase strokes that the scratch-out stroke actually intersects,
+        // filtered by centroid proximity to prevent descender false positives
+        val scratchCentroidY = (top + bottom) / 2f
+        val centroidThreshold = HandwritingCanvasView.LINE_SPACING * 0.25f
         val overlapping = documentModel.activeStrokes.filter { stroke ->
-            stroke.points.any { pt -> pt.x in left..right && pt.y in top..bottom }
+            if (!stroke.strokeType.isConnector) {
+                val sMinY = stroke.points.minOf { it.y }
+                val sMaxY = stroke.points.maxOf { it.y }
+                val strokeCentroidY = (sMinY + sMaxY) / 2f
+                if (kotlin.math.abs(strokeCentroidY - scratchCentroidY) > centroidThreshold) return@filter false
+            }
+            ScratchOutDetection.strokesIntersect(scratchPoints, stroke.points)
                 || stroke.strokeType.isConnector
                     && ScratchOutDetection.strokeIntersectsRect(stroke.points, left, top, right, bottom)
         }
@@ -225,6 +236,7 @@ class WritingCoordinator(
 
         val idsToRemove = overlapping.map { it.strokeId }.toSet()
         documentModel.activeStrokes.removeAll { it.strokeId in idsToRemove }
+        for (id in idsToRemove) { documentModel.diagram.nodes.remove(id) }
 
         inkCanvas.removeStrokes(idsToRemove)
         inkCanvas.drawToSurface()
@@ -859,6 +871,8 @@ class WritingCoordinator(
         inkCanvas.resumeRawDrawing()
         Log.i(TAG, "Redo: restored ${snapshot.strokes.size} strokes")
     }
+
+
 
     // --- State persistence ---
 

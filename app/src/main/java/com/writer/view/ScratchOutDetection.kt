@@ -265,4 +265,46 @@ object ScratchOutDetection {
             else { bx = x; by = y; codeB = outcode(bx, by) }
         }
     }
+
+    /**
+     * Test whether any segment of [strokeA] intersects any segment of [strokeB].
+     * Uses a segment-segment intersection test based on cross products.
+     *
+     * This is more precise than bounding-box overlap — the scratch-out stroke
+     * must actually cross the target stroke's path.
+     */
+    fun strokesIntersect(strokeA: List<StrokePoint>, strokeB: List<StrokePoint>): Boolean {
+        if (strokeA.size < 2 || strokeB.size < 2) return false
+        for (i in 0 until strokeA.size - 1) {
+            for (j in 0 until strokeB.size - 1) {
+                if (segmentsIntersect(
+                        strokeA[i].x, strokeA[i].y, strokeA[i + 1].x, strokeA[i + 1].y,
+                        strokeB[j].x, strokeB[j].y, strokeB[j + 1].x, strokeB[j + 1].y
+                    )) return true
+            }
+        }
+        return false
+    }
+
+    /**
+     * Test whether two line segments (p1→p2) and (p3→p4) intersect.
+     * Uses the cross-product orientation test.
+     */
+    internal fun segmentsIntersect(
+        x1: Float, y1: Float, x2: Float, y2: Float,
+        x3: Float, y3: Float, x4: Float, y4: Float
+    ): Boolean {
+        fun cross(ax: Float, ay: Float, bx: Float, by: Float) = ax * by - ay * bx
+
+        val d1 = cross(x4 - x3, y4 - y3, x1 - x3, y1 - y3)
+        val d2 = cross(x4 - x3, y4 - y3, x2 - x3, y2 - y3)
+        val d3 = cross(x2 - x1, y2 - y1, x3 - x1, y3 - y1)
+        val d4 = cross(x2 - x1, y2 - y1, x4 - x1, y4 - y1)
+
+        if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) &&
+            ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) return true
+
+        // Collinear/touching cases — skip for scratch-out (require clear crossing)
+        return false
+    }
 }

@@ -292,6 +292,7 @@ class WritingActivity : AppCompatActivity() {
         )
         coordinator?.onHeadingDetected = { heading -> autoRenameFromHeading(heading) }
         coordinator?.start()
+
     }
 
     private fun autoRenameFromHeading(heading: String) {
