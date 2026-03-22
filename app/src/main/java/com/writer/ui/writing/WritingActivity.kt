@@ -498,6 +498,10 @@ class WritingActivity : AppCompatActivity() {
             popup.dismiss()
             tutorialManager.show()
         }
+        popupView.findViewById<android.view.View>(R.id.menuBugReport).setOnClickListener {
+            popup.dismiss()
+            generateAndShareBugReport()
+        }
         popupView.findViewById<android.view.View>(R.id.menuClose).setOnClickListener {
             popup.dismiss()
             saveDocument()
@@ -544,6 +548,34 @@ class WritingActivity : AppCompatActivity() {
             DocumentStorage.exportToSyncFolder(
                 this, currentDocumentName, state, markdown, Uri.parse(syncUri)
             )
+        }
+    }
+
+    // --- Bug report ---
+
+    private fun generateAndShareBugReport() {
+        val file = coordinator?.generateBugReport()
+        if (file == null) {
+            Toast.makeText(this, "No strokes to report", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        Toast.makeText(this, "Bug report saved", Toast.LENGTH_SHORT).show()
+
+        try {
+            val uri = androidx.core.content.FileProvider.getUriForFile(
+                this, "$packageName.fileprovider", file
+            )
+            val intent = Intent(Intent.ACTION_SEND).apply {
+                type = "application/json"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                putExtra(Intent.EXTRA_SUBJECT, "InkUp Bug Report")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(Intent.createChooser(intent, "Share Bug Report"))
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to share bug report: ${e.message}")
+            Toast.makeText(this, "Report saved to ${file.absolutePath}", Toast.LENGTH_LONG).show()
         }
     }
 
