@@ -21,6 +21,7 @@ import com.onyx.android.sdk.pen.RawInputCallback
 import com.onyx.android.sdk.pen.TouchHelper
 import com.onyx.android.sdk.pen.data.TouchPointList
 import com.writer.model.DiagramArea
+import com.writer.model.DocumentModel
 import com.writer.model.InkStroke
 import com.writer.model.StrokePoint
 import com.writer.model.StrokeType
@@ -51,7 +52,9 @@ class HandwritingCanvasView @JvmOverloads constructor(
         val TOP_MARGIN get() = ScreenMetrics.topMargin
         // Arrow dwell detection: radius and time for start/end dwell
         private const val ARROW_DWELL_RADIUS_PX = 15f   // ~8 dp
-        private const val ARROW_DWELL_MS = 300L
+        // Magnetic snap: max distance in line-spacings to snap arrow to node
+        private const val MAGNET_THRESHOLD_SPANS = 1.5f
+        private const val ARROW_DWELL_MS = 500L
     }
 
     private val completedStrokes = mutableListOf<InkStroke>()
@@ -79,7 +82,8 @@ class HandwritingCanvasView @JvmOverloads constructor(
     /** Diagram areas in the current document. */
     var diagramAreas: List<DiagramArea> = emptyList()
 
-
+    /** Document model reference for magnetic snap access. */
+    var documentModel: DocumentModel? = null
 
     // Dwell indicator state (arrow start-dwell inside diagram areas)
     private var dwellJob: Runnable? = null
@@ -580,6 +584,19 @@ class HandwritingCanvasView @JvmOverloads constructor(
         val t = currentStrokePoints.first().timestamp
         var strokeType = StrokeType.FREEHAND
         var isGeometric = false
+
+        // Magnetic snap: resolve arrow endpoints to nearest shape perimeters
+        val nodes = documentModel?.diagram?.nodes ?: emptyMap()
+        val magnetThreshold = MAGNET_THRESHOLD_SPANS * LINE_SPACING
+
+        fun magnetSnap(x1: Float, y1: Float, x2: Float, y2: Float): Pair<Pair<Float, Float>, Pair<Float, Float>> {
+            if (nodes.isEmpty()) return Pair(x1 to y1, x2 to y2)
+            val (from, to, _) = DiagramNodeSnap.snapArrowEndpointsRaw(
+                x1, y1, x2, y2, nodes, magnetThreshold
+            )
+            return Pair(from, to)
+        }
+
         val snappedPoints: List<StrokePoint> = when (result) {
             is ShapeSnapDetection.SnapResult.Line -> {
                 val tipDwell = ArrowDwellDetection.hasDwellAtEnd(
@@ -588,9 +605,10 @@ class HandwritingCanvasView @JvmOverloads constructor(
                 strokeType = ArrowDwellDetection.classifyArrow(tipDwell, tailDwell)
                 isGeometric = true
 
+                val (from, to) = magnetSnap(result.x1, result.y1, result.x2, result.y2)
                 listOf(
-                    StrokePoint(result.x1, result.y1, 0f, t),
-                    StrokePoint(result.x2, result.y2, 0f, t)
+                    StrokePoint(from.first, from.second, 0f, t),
+                    StrokePoint(to.first, to.second, 0f, t)
                 )
             }
             is ShapeSnapDetection.SnapResult.Arrow -> return null
@@ -601,10 +619,11 @@ class HandwritingCanvasView @JvmOverloads constructor(
                 strokeType = ArrowDwellDetection.classifyElbow(tipDwell, tailDwell)
                 isGeometric = true
 
+                val (from, to) = magnetSnap(result.x1, result.y1, result.x2, result.y2)
                 listOf(
-                    StrokePoint(result.x1, result.y1, 0f, t),
+                    StrokePoint(from.first, from.second, 0f, t),
                     StrokePoint(result.cx, result.cy, 0f, t),
-                    StrokePoint(result.x2, result.y2, 0f, t)
+                    StrokePoint(to.first, to.second, 0f, t)
                 )
             }
             is ShapeSnapDetection.SnapResult.Arc -> {
@@ -614,10 +633,11 @@ class HandwritingCanvasView @JvmOverloads constructor(
                 strokeType = ArrowDwellDetection.classifyArc(tipDwell, tailDwell)
                 isGeometric = false
 
+                val (from, to) = magnetSnap(result.x1, result.y1, result.x2, result.y2)
                 listOf(
-                    StrokePoint(result.x1, result.y1, 0f, t),
+                    StrokePoint(from.first, from.second, 0f, t),
                     StrokePoint(result.cx, result.cy, 0f, t),
-                    StrokePoint(result.x2, result.y2, 0f, t)
+                    StrokePoint(to.first, to.second, 0f, t)
                 )
             }
             is ShapeSnapDetection.SnapResult.Ellipse -> {

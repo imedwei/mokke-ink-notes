@@ -2,6 +2,7 @@ package com.writer.ui.writing
 
 import android.util.Log
 import com.writer.model.DiagramArea
+import com.writer.model.DiagramNode
 import com.writer.model.DocumentModel
 import com.writer.model.InkLine
 import com.writer.model.InkStroke
@@ -93,6 +94,7 @@ class WritingCoordinator(
 
     fun start() {
         Log.i(TAG, "Coordinator started")
+        inkCanvas.documentModel = documentModel
         inkCanvas.onStrokeCompleted = { stroke -> onStrokeCompleted(stroke) }
         inkCanvas.onIdleTimeout = { onIdle() }
         inkCanvas.onManualScroll = {
@@ -192,6 +194,22 @@ class WritingCoordinator(
         saveUndoSnapshot()  // captures state with raw stroke (state N+1)
         documentModel.activeStrokes.removeAll { it.strokeId == oldStrokeId }
         documentModel.activeStrokes.add(newStroke)
+
+        // Track shape nodes for magnetic arrow snapping
+        if (!newStroke.strokeType.isConnector && newStroke.strokeType != StrokeType.FREEHAND) {
+            val bounds = android.graphics.RectF(
+                newStroke.points.minOf { it.x },
+                newStroke.points.minOf { it.y },
+                newStroke.points.maxOf { it.x },
+                newStroke.points.maxOf { it.y }
+            )
+            documentModel.diagram.nodes[newStroke.strokeId] = DiagramNode(
+                strokeId = newStroke.strokeId,
+                shapeType = newStroke.strokeType,
+                bounds = bounds
+            )
+        }
+
         Log.i(TAG, "Stroke replaced: $oldStrokeId → ${newStroke.strokeId} (${newStroke.strokeType})")
     }
 
@@ -796,6 +814,19 @@ class WritingCoordinator(
         documentModel.diagramAreas.clear()
         documentModel.diagramAreas.addAll(snapshot.diagramAreas)
         diagramTextCache.clear()
+        // Rebuild diagram model nodes from restored strokes
+        documentModel.diagram.nodes.clear()
+        for (stroke in snapshot.strokes) {
+            if (!stroke.strokeType.isConnector && stroke.strokeType != StrokeType.FREEHAND) {
+                val bounds = android.graphics.RectF(
+                    stroke.points.minOf { it.x }, stroke.points.minOf { it.y },
+                    stroke.points.maxOf { it.x }, stroke.points.maxOf { it.y }
+                )
+                documentModel.diagram.nodes[stroke.strokeId] = DiagramNode(
+                    strokeId = stroke.strokeId, shapeType = stroke.strokeType, bounds = bounds
+                )
+            }
+        }
         inkCanvas.diagramAreas = snapshot.diagramAreas
         inkCanvas.loadStrokes(snapshot.strokes)
         inkCanvas.scrollOffsetY = snapshot.scrollOffsetY
@@ -853,6 +884,19 @@ class WritingCoordinator(
         documentModel.diagramAreas.clear()
         documentModel.diagramAreas.addAll(data.diagramAreas)
         inkCanvas.diagramAreas = data.diagramAreas
+        // Rebuild diagram model nodes from loaded strokes
+        documentModel.diagram.nodes.clear()
+        for (stroke in documentModel.activeStrokes) {
+            if (!stroke.strokeType.isConnector && stroke.strokeType != StrokeType.FREEHAND) {
+                val bounds = android.graphics.RectF(
+                    stroke.points.minOf { it.x }, stroke.points.minOf { it.y },
+                    stroke.points.maxOf { it.x }, stroke.points.maxOf { it.y }
+                )
+                documentModel.diagram.nodes[stroke.strokeId] = DiagramNode(
+                    strokeId = stroke.strokeId, shapeType = stroke.strokeType, bounds = bounds
+                )
+            }
+        }
         displayHiddenLines()
     }
 }
