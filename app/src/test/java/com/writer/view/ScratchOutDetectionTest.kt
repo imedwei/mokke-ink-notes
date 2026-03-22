@@ -32,11 +32,18 @@ class ScratchOutDetectionTest {
         assertTrue(ScratchOutDetection.detect(xs, yRange = 5f, lineSpacing = LS))
     }
 
-    @Test fun minimalZigzag_exactlyTwoReversals_detects() {
-        // 3 segments → 2 reversals; total travel just above threshold
+    @Test fun minimalZigzag_exactlyThreeReversals_detects() {
+        // 4 segments → 3 reversals; total travel just above threshold
+        val segW = X_THRESH / 3f + 2f
+        val xs = zigzag(startX = 0f, segmentWidth = segW, segments = 4)
+        assertTrue(ScratchOutDetection.detect(xs, yRange = 2f, lineSpacing = LS))
+    }
+
+    @Test fun twoReversals_notDetected() {
+        // 3 segments → 2 reversals; below MIN_REVERSALS threshold of 3
         val segW = X_THRESH / 2f + 2f
         val xs = zigzag(startX = 0f, segmentWidth = segW, segments = 3)
-        assertTrue(ScratchOutDetection.detect(xs, yRange = 2f, lineSpacing = LS))
+        assertFalse(ScratchOutDetection.detect(xs, yRange = 2f, lineSpacing = LS))
     }
 
     @Test fun manyReversals_detects() {

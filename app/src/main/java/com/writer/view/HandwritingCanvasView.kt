@@ -764,12 +764,12 @@ class HandwritingCanvasView @JvmOverloads constructor(
         val left = strokeMinX; val top = strokeMinY
         val right = strokeMaxX; val bottom = strokeMaxY
 
-        // Only treat as scratch-out if existing strokes actually intersect
-        // the scratch-out path (not just bounding box overlap)
+        // Only treat as scratch-out if:
+        // 1) It intersects existing strokes, AND
+        // 2) The bulk of its path is focused on crossing those strokes
+        //    (not just grazing a descender while writing new text)
         val scratchPoints = currentStrokePoints.toList()
-        if (!completedStrokes.any { stroke ->
-            ScratchOutDetection.strokesIntersect(scratchPoints, stroke.points)
-        }) return false
+        if (!ScratchOutDetection.isFocusedScratchOut(scratchPoints, completedStrokes)) return false
 
         currentStrokePoints.clear()
         currentPath.reset()
