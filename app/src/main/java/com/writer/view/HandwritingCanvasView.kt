@@ -79,6 +79,8 @@ class HandwritingCanvasView @JvmOverloads constructor(
     /** Diagram areas in the current document. */
     var diagramAreas: List<DiagramArea> = emptyList()
 
+
+
     // Dwell indicator state (arrow start-dwell inside diagram areas)
     private var dwellJob: Runnable? = null
     private var dwellIndicatorShown = false
@@ -572,14 +574,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
 
         val xs = FloatArray(currentStrokePoints.size) { currentStrokePoints[it].x }
         val ys = FloatArray(currentStrokePoints.size) { currentStrokePoints[it].y }
-        // Dump stroke data for fixture creation (remove after debugging)
-        val xsStr = xs.joinToString(",") { "%.1f".format(it) }
-        val ysStr = ys.joinToString(",") { "%.1f".format(it) }
-        Log.d(TAG, "SNAP_FIXTURE n=${xs.size} ls=$LINE_SPACING")
-        Log.d(TAG, "SNAP_XS $xsStr")
-        Log.d(TAG, "SNAP_YS $ysStr")
         val result = ShapeSnapDetection.detect(xs, ys, LINE_SPACING)
-        Log.d(TAG, "SNAP_RESULT $result")
         if (result == null) return null
 
         val t = currentStrokePoints.first().timestamp

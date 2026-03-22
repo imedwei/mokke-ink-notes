@@ -310,6 +310,7 @@ object ShapeSnapDetection {
      */
     // Reusable buffers for findCornerIndicesCyclic to avoid per-call allocations.
     // ShapeSnapDetection is a singleton object, so these are effectively static.
+    // NOT thread-safe: detect() must only be called from the main thread.
     private var cyclicBufXs = FloatArray(0)
     private var cyclicBufYs = FloatArray(0)
 
