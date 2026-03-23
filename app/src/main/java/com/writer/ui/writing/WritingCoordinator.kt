@@ -42,6 +42,8 @@ class WritingCoordinator(
         private const val SCROLL_THRESHOLD = 0.25f
         // Delay before refreshing e-ink display after text view updates
         private const val TEXT_REFRESH_DELAY_MS = 500L
+        // Delay before running diagram text recognition after a stroke
+        private const val DIAGRAM_RECOGNIZE_DELAY_MS = 600L
     }
 
     private val lineSegmenter = LineSegmenter()
@@ -84,6 +86,8 @@ class WritingCoordinator(
     var onHeadingDetected: ((String) -> Unit)? = null
     // Deferred e-ink refresh for text view updates (avoids interrupting active writing)
     private var textRefreshJob: Job? = null
+    // Debounced diagram recognition jobs, keyed by area startLineIndex
+    private val diagramRecognizeJobs = mutableMapOf<Int, Job>()
     // Diagram text: recognized text groups keyed by diagram area start line
     // Each entry is a list of (text, centerX, centerY, strokeIds)
     data class DiagramTextGroup(
@@ -130,6 +134,8 @@ class WritingCoordinator(
     fun stop() {
         scrollAnimating = false
         textRefreshJob?.cancel()
+        diagramRecognizeJobs.values.forEach { it.cancel() }
+        diagramRecognizeJobs.clear()
         inkCanvas.onStrokeCompleted = null
         inkCanvas.onIdleTimeout = null
         inkCanvas.onManualScroll = null
@@ -143,6 +149,8 @@ class WritingCoordinator(
     fun reset() {
         scrollAnimating = false
         textRefreshJob?.cancel()
+        diagramRecognizeJobs.values.forEach { it.cancel() }
+        diagramRecognizeJobs.clear()
         lineTextCache.clear()
         diagramTextCache.clear()
         recognizingLines.clear()
@@ -468,9 +476,9 @@ class WritingCoordinator(
     fun recognizeAllLines() {
         val strokesByLine = lineSegmenter.groupByLine(documentModel.activeStrokes)
         if (strokesByLine.isEmpty()) return
-        // Recognize diagram areas
+        // Recognize diagram areas immediately on load (no debounce)
         for (area in documentModel.diagramAreas) {
-            recognizeDiagramArea(area)
+            recognizeDiagramArea(area, immediate = true)
         }
         scope.launch {
             for (lineIndex in strokesByLine.keys.sorted()) {
@@ -528,7 +536,24 @@ class WritingCoordinator(
      * Groups strokes that are close together (across all lines in the area),
      * recognizes each group independently, and caches the results.
      */
-    private fun recognizeDiagramArea(area: DiagramArea) {
+    /**
+     * Schedule diagram text recognition for [area], debounced by default.
+     * Rapid calls cancel the previous pending job — only the last one runs.
+     * Pass [immediate] = true for initial load (no delay).
+     */
+    private fun recognizeDiagramArea(area: DiagramArea, immediate: Boolean = false) {
+        diagramRecognizeJobs[area.startLineIndex]?.cancel()
+        if (immediate) {
+            recognizeDiagramAreaNow(area)
+            return
+        }
+        diagramRecognizeJobs[area.startLineIndex] = scope.launch {
+            delay(DIAGRAM_RECOGNIZE_DELAY_MS)
+            recognizeDiagramAreaNow(area)
+        }
+    }
+
+    private fun recognizeDiagramAreaNow(area: DiagramArea) {
         // Collect all freehand strokes in the diagram area
         val freehandStrokes = documentModel.activeStrokes.filter { stroke ->
             stroke.strokeType == StrokeType.FREEHAND &&
