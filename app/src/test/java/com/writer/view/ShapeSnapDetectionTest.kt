@@ -115,6 +115,192 @@ class ShapeSnapDetectionTest {
             result is ShapeSnapDetection.SnapResult.Ellipse)
     }
 
+    /** Helper: generate an oval with optional noise and non-uniform point spacing. */
+    private fun makeOval(
+        cx: Float, cy: Float, a: Float, b: Float,
+        n: Int = 60, noise: Float = 0f, gapFraction: Float = 0f
+    ): Pair<FloatArray, FloatArray> {
+        val count = n + 1
+        // Non-uniform angular spacing: slight speed variation like hand-drawn
+        val angles = DoubleArray(count) { i ->
+            val base = 2 * PI * i / n
+            // Small angular jitter for realism
+            if (noise > 0 && i > 0 && i < n) base + (((i * 17) % 7) - 3) * 0.01
+            else base
+        }
+        val xs = FloatArray(count) { i ->
+            val px = (cx + a * cos(angles[i])).toFloat()
+            if (noise > 0) px + ((i * 7 % 11) - 5).toFloat() * noise / 5f else px
+        }
+        val ys = FloatArray(count) { i ->
+            val py = (cy + b * sin(angles[i])).toFloat()
+            if (noise > 0) py + ((i * 13 % 11) - 5).toFloat() * noise / 5f else py
+        }
+        // Simulate imperfect closure: last point offset from first
+        if (gapFraction > 0) {
+            val gapPx = gapFraction * sqrt((2 * a) * (2 * a) + (2 * b) * (2 * b))
+            xs[n] = xs[0] + gapPx * 0.3f
+            ys[n] = ys[0] + gapPx * 0.7f
+        }
+        return Pair(xs, ys)
+    }
+
+    // ── Tall/narrow ovals at various aspect ratios ──────────────────────────
+
+    @Test fun tallOval_2to1_perfect() {
+        val (xs, ys) = makeOval(200f, 200f, 50f, 100f)
+        val result = ShapeSnapDetection.detect(xs, ys, LS)
+        assertTrue("2:1 tall oval → Ellipse, got $result", result is ShapeSnapDetection.SnapResult.Ellipse)
+    }
+
+    @Test fun tallOval_3to1_perfect() {
+        val (xs, ys) = makeOval(200f, 300f, 40f, 120f)
+        val result = ShapeSnapDetection.detect(xs, ys, LS)
+        assertTrue("3:1 tall oval → Ellipse, got $result", result is ShapeSnapDetection.SnapResult.Ellipse)
+    }
+
+    @Test fun tallOval_4to1_perfect() {
+        val (xs, ys) = makeOval(200f, 300f, 30f, 120f)
+        val result = ShapeSnapDetection.detect(xs, ys, LS)
+        assertTrue("4:1 tall oval → Ellipse, got $result", result is ShapeSnapDetection.SnapResult.Ellipse)
+    }
+
+    @Test fun tallOval_5to1_perfect() {
+        // Very narrow: 48 px wide, 240 px tall — tests RECT_MIN_SIDE_SPANS gate
+        val (xs, ys) = makeOval(200f, 300f, 24f, 120f)
+        val result = ShapeSnapDetection.detect(xs, ys, LS)
+        assertTrue("5:1 tall oval → Ellipse, got $result", result is ShapeSnapDetection.SnapResult.Ellipse)
+    }
+
+    @Test fun wideOval_3to1_perfect() {
+        val (xs, ys) = makeOval(200f, 200f, 150f, 50f)
+        val result = ShapeSnapDetection.detect(xs, ys, LS)
+        assertTrue("3:1 wide oval → Ellipse, got $result", result is ShapeSnapDetection.SnapResult.Ellipse)
+    }
+
+    // ── Hand-drawn ovals with noise ─────────────────────────────────────────
+
+    @Test fun tallOval_3to1_noise5px() {
+        val (xs, ys) = makeOval(200f, 300f, 40f, 120f, noise = 5f)
+        val result = ShapeSnapDetection.detect(xs, ys, LS)
+        assertTrue("Noisy 3:1 tall oval → Ellipse, got $result", result is ShapeSnapDetection.SnapResult.Ellipse)
+    }
+
+    @Test fun tallOval_3to1_noise8px() {
+        val (xs, ys) = makeOval(200f, 300f, 40f, 120f, noise = 8f)
+        val result = ShapeSnapDetection.detect(xs, ys, LS)
+        assertTrue("Noisy 8px 3:1 tall oval → Ellipse, got $result", result is ShapeSnapDetection.SnapResult.Ellipse)
+    }
+
+    @Test fun tallOval_2to1_noise3px() {
+        // 3px noise is realistic for pen input on a 100px-wide oval
+        val (xs, ys) = makeOval(200f, 200f, 50f, 100f, noise = 3f)
+        val result = ShapeSnapDetection.detect(xs, ys, LS)
+        assertTrue("Noisy 2:1 tall oval → Ellipse, got $result", result is ShapeSnapDetection.SnapResult.Ellipse)
+    }
+
+    // ── Imperfect closure ───────────────────────────────────────────────────
+
+    @Test fun tallOval_3to1_slightGap() {
+        // Stroke doesn't perfectly close — 5% gap
+        val (xs, ys) = makeOval(200f, 300f, 40f, 120f, noise = 3f, gapFraction = 0.05f)
+        val result = ShapeSnapDetection.detect(xs, ys, LS)
+        assertTrue("Slightly open 3:1 oval → Ellipse, got $result", result is ShapeSnapDetection.SnapResult.Ellipse)
+    }
+
+    // ── Device-realistic: 80-point strokes like real pen input ──────────────
+
+    @Test fun tallOval_deviceRealistic_80points() {
+        // Simulate real device: ~80 points, 3:1 aspect, moderate noise
+        val (xs, ys) = makeOval(400f, 500f, 60f, 180f, n = 80, noise = 6f)
+        val result = ShapeSnapDetection.detect(xs, ys, LS)
+        assertTrue("80pt realistic tall oval → Ellipse, got $result", result is ShapeSnapDetection.SnapResult.Ellipse)
+    }
+
+    @Test fun tallOval_deviceRealistic_40points() {
+        // Fast draw: fewer points, 3:1 aspect
+        val (xs, ys) = makeOval(400f, 500f, 50f, 150f, n = 40, noise = 4f)
+        val result = ShapeSnapDetection.detect(xs, ys, LS)
+        assertTrue("40pt realistic tall oval → Ellipse, got $result", result is ShapeSnapDetection.SnapResult.Ellipse)
+    }
+
+    @Test fun tallOval_deviceRealistic_smallOnScreen() {
+        // Small oval: 60 px wide, 120 px tall — near minimum size
+        val (xs, ys) = makeOval(300f, 300f, 30f, 60f, n = 50, noise = 3f)
+        val result = ShapeSnapDetection.detect(xs, ys, LS)
+        assertTrue("Small realistic tall oval → Ellipse, got $result", result is ShapeSnapDetection.SnapResult.Ellipse)
+    }
+
+    // ── Real device strokes from bug report (misclassified as non-ellipse) ──
+
+    @Test fun deviceStroke_rectangle_shouldBeEllipse() {
+        // Real stroke from bug report: classified as RECTANGLE, aspect ratio 4.02
+        val raw = floatArrayOf(
+            349.69f, 184.92f, 347.11f, 194.43f, 333.25f, 234.05f,
+            324.13f, 267.73f, 312.64f, 321.81f, 307.09f, 353.90f,
+            294.21f, 412.74f, 289.86f, 441.26f, 288.27f, 477.32f,
+            288.27f, 505.25f, 286.69f, 530.01f, 286.88f, 548.04f,
+            289.26f, 559.33f, 294.21f, 568.84f, 299.76f, 572.21f,
+            305.51f, 573.20f, 311.25f, 572.80f, 315.61f, 571.22f,
+            318.39f, 569.63f, 323.93f, 564.48f, 336.22f, 547.05f,
+            347.51f, 527.64f, 357.81f, 503.47f, 365.14f, 474.74f,
+            374.85f, 428.19f, 379.01f, 389.36f, 383.37f, 358.46f,
+            383.37f, 260.20f, 381.19f, 247.32f, 377.23f, 231.48f,
+            375.05f, 215.03f, 373.86f, 211.07f, 370.10f, 204.53f,
+            363.36f, 196.81f, 357.81f, 192.65f, 353.85f, 191.06f,
+            347.11f, 191.86f, 337.21f, 191.46f
+        )
+        val xs = FloatArray(raw.size / 2) { raw[it * 2] }
+        val ys = FloatArray(raw.size / 2) { raw[it * 2 + 1] }
+        val result = ShapeSnapDetection.detect(xs, ys, LS)
+        assertTrue("Device stroke (was RECTANGLE) → Ellipse, got $result",
+            result is ShapeSnapDetection.SnapResult.Ellipse)
+    }
+
+    @Test fun deviceStroke_roundedRect_shouldBeEllipse() {
+        // Real stroke from bug report: classified as ROUNDED_RECTANGLE, aspect ratio 4.12
+        val raw = floatArrayOf(
+            666.49f, 196.61f, 653.41f, 231.48f, 642.72f, 268.52f,
+            638.16f, 287.93f, 632.02f, 320.22f, 621.71f, 382.03f,
+            618.54f, 406.99f, 616.56f, 450.38f, 617.75f, 493.56f,
+            618.35f, 503.27f, 620.53f, 517.73f, 623.50f, 527.64f,
+            627.86f, 535.76f, 631.03f, 539.72f, 635.78f, 543.29f,
+            640.14f, 545.27f, 645.69f, 546.46f, 652.03f, 545.66f,
+            659.36f, 542.10f, 664.51f, 536.55f, 667.68f, 531.20f,
+            669.86f, 524.66f, 681.75f, 468.01f, 695.81f, 414.72f,
+            698.19f, 402.04f, 701.36f, 379.06f, 701.56f, 347.76f,
+            697.99f, 319.43f, 697.20f, 297.44f, 690.46f, 234.65f,
+            687.69f, 222.17f, 686.50f, 219.79f, 679.17f, 211.67f,
+            672.24f, 206.71f, 668.67f, 205.13f
+        )
+        val xs = FloatArray(raw.size / 2) { raw[it * 2] }
+        val ys = FloatArray(raw.size / 2) { raw[it * 2 + 1] }
+        val result = ShapeSnapDetection.detect(xs, ys, LS)
+        assertTrue("Device stroke (was ROUNDED_RECT) → Ellipse, got $result",
+            result is ShapeSnapDetection.SnapResult.Ellipse)
+    }
+
+    @Test fun deviceStroke_triangle_shouldBeEllipse() {
+        // Real stroke from bug report: classified as TRIANGLE, aspect ratio 2.77
+        val raw = floatArrayOf(
+            562.08f, 588.45f, 557.32f, 592.22f, 554.15f, 596.18f,
+            547.42f, 611.43f, 537.91f, 641.54f, 526.02f, 694.83f,
+            523.64f, 715.63f, 522.85f, 745.15f, 524.04f, 765.36f,
+            527.21f, 776.65f, 530.38f, 778.83f, 533.55f, 779.42f,
+            539.30f, 777.84f, 545.04f, 774.67f, 564.06f, 744.56f,
+            569.01f, 735.05f, 575.35f, 719.79f, 579.51f, 705.53f,
+            587.44f, 658.58f, 590.01f, 651.85f, 593.18f, 637.38f,
+            593.78f, 626.29f, 592.59f, 619.95f, 586.05f, 596.18f,
+            583.28f, 590.63f, 578.52f, 585.68f, 570.60f, 582.91f,
+            558.12f, 584.49f
+        )
+        val xs = FloatArray(raw.size / 2) { raw[it * 2] }
+        val ys = FloatArray(raw.size / 2) { raw[it * 2 + 1] }
+        val result = ShapeSnapDetection.detect(xs, ys, LS)
+        assertTrue("Device stroke (was TRIANGLE) → Ellipse, got $result",
+            result is ShapeSnapDetection.SnapResult.Ellipse)
+    }
+
     @Test fun threeQuarterArc_snapsToSelfLoop() {
         // 3/4 of a circle (270°): start at (200,100), end at (100,0).
         // Nearly closed (gap ratio ~0.50 < SELF_LOOP_MAX_GAP), smooth, fits ellipse.

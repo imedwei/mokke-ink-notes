@@ -407,14 +407,25 @@ object ShapeSnapDetection {
             val d = if (gLen > 0f) abs(f) / gLen else 0f
             if (d > maxDev) maxDev = d
         }
-        if (maxDev > ELLIPSE_MAX_DEV * diagonal) return null
+        // For high-aspect-ratio ovals, hand-drawn strokes naturally have more
+        // deviation because the narrow dimension amplifies imperfections.
+        // Scale the tolerance for aspect ratios above 2:1.
+        val aspectRatio = maxOf(a, b) / minOf(a, b)
+        // Quadratic scaling: gentle for low ratios, aggressive for high
+        val ar = maxOf(0f, aspectRatio - 1f)
+        val adjustedMaxDev = ELLIPSE_MAX_DEV * (1f + ar * ar * 0.5f)
+        if (maxDev > adjustedMaxDev * diagonal) return null
 
         // Straightness check: an ellipse has non-zero curvature everywhere, so its
         // straight fraction is near 0. A rounded rectangle that passes the ellipse-fit
         // test (generous corner radii) still has four flat sides with straight fraction
         // > 0.20. Reject the ellipse classification if the stroke has too many straight
         // points — the caller will then fall through to rounded-rectangle detection.
-        if (straightFraction(xs, ys, minX, maxX, minY, maxY) > STRAIGHT_FRACTION_MIN) return null
+        // For high-aspect-ratio ellipses, allow more "straight" points because the
+        // tips naturally have very low curvature (especially with hand-drawn noise).
+        // Scale linearly for aspect ratios above 2:1 (where tips are naturally flat)
+        val adjustedStraightMax = STRAIGHT_FRACTION_MIN * (1f + ar * ar * 0.5f)
+        if (straightFraction(xs, ys, minX, maxX, minY, maxY) > adjustedStraightMax) return null
 
         return SnapResult.Ellipse(cx, cy, a, b)
     }
