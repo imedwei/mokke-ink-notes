@@ -111,9 +111,11 @@ object DiagramStrokeClassifier {
     /**
      * Full classification pipeline: per-stroke scoring + group-level contagion.
      *
-     * Groups ALL freehand strokes (text + drawing) with geometric shapes by proximity.
-     * If any stroke in a group is drawing-classified or geometric, the entire group
-     * becomes drawing. Also applies multi-line span filter.
+     * Groups freehand strokes by proximity. If any freehand stroke in a group
+     * is drawing-classified (per-stroke heuristics), the entire group becomes
+     * drawing. Geometric shapes do NOT trigger contagion — text labels are
+     * often inside or adjacent to shapes and must remain as text.
+     * Also applies multi-line span filter.
      *
      * @return (textCandidates, drawingStrokes)
      */
@@ -128,17 +130,16 @@ object DiagramStrokeClassifier {
         val drawingScores = freehandStrokes.associateWith { classifyStroke(it, lineSpacing) }
         val perStrokeDrawingIds = drawingScores.filter { it.value >= DRAWING_THRESHOLD }.keys.map { it.strokeId }.toSet()
 
-        // Step 2: Proximity-group ALL strokes (freehand + geometric) for contagion
-        val allStrokes = freehandStrokes + geometricStrokes
-        val groups = groupByProximity(allStrokes, lineSpacing)
+        // Step 2: Proximity-group FREEHAND strokes only for contagion.
+        // Geometric shapes are NOT included — text labels near shapes must stay text.
+        val groups = groupByProximity(freehandStrokes, lineSpacing)
 
-        // Step 3: Drawing contagion — if any stroke in a group is drawing or geometric,
-        // all freehand strokes in the group become drawing
+        // Step 3: Drawing contagion — if any freehand stroke in a group is
+        // drawing-classified, all freehand strokes in the group become drawing.
         val contagionDrawingIds = mutableSetOf<String>()
         for (group in groups) {
             val hasDrawing = group.any { stroke ->
-                stroke.strokeId in perStrokeDrawingIds ||
-                stroke.strokeType != StrokeType.FREEHAND  // geometric shapes
+                stroke.strokeId in perStrokeDrawingIds
             }
             // Multi-line span check
             val groupYRange = group.maxOf { it.points.maxOf { p -> p.y } } -
