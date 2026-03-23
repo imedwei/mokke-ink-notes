@@ -165,9 +165,9 @@ class DiagramIntentTest {
         val topLine = lineSegmenter.getLineIndex(minY)
         val bottomLine = lineSegmenter.getLineIndex(maxY)
 
-        // 1-line padding on each side to fully contain shapes
-        var mergeStart = (topLine - 1).coerceAtLeast(0)
-        var mergeHeight = (bottomLine + 1) - mergeStart + 1
+        // Exact bounding box — no forced padding
+        var mergeStart = topLine
+        var mergeHeight = bottomLine - mergeStart + 1
 
         // Merge with adjacent diagram area above
         val above = documentModel.diagramAreas.find { it.endLineIndex + 1 >= mergeStart && it.endLineIndex < mergeStart + mergeHeight }
@@ -243,9 +243,9 @@ class DiagramIntentTest {
 
         assertEquals("Should have 1 diagram area", 1, documentModel.diagramAreas.size)
         val area = documentModel.diagramAreas[0]
-        // Padded bounding box: lines 2-7 (1-line padding each side)
-        assertEquals("Start line should be 1 above shape top", 2, area.startLineIndex)
-        assertTrue("Should cover line 7 (1 below shape bottom)", area.containsLine(7))
+        // Exact bounding box: lines 3-6
+        assertEquals("Start line should match shape top", 3, area.startLineIndex)
+        assertTrue("Should cover line 6", area.containsLine(6))
     }
 
     @Test
@@ -273,9 +273,9 @@ class DiagramIntentTest {
         assertNotNull(bounds)
 
         val area = documentModel.diagramAreas[0]
-        // Padded bounding box: lines 3-8 (1-line padding each side)
-        assertEquals("Start should be 1 above shape top", 3, area.startLineIndex)
-        assertTrue("Should contain line 8 (1 below shape bottom)", area.containsLine(8))
+        // Exact bounding box: lines 4-7
+        assertEquals("Start should match shape top", 4, area.startLineIndex)
+        assertTrue("Should contain line 7", area.containsLine(7))
     }
 
     @Test
@@ -320,7 +320,7 @@ class DiagramIntentTest {
 
         assertEquals("Should merge into 1 area", 1, documentModel.diagramAreas.size)
         val area = documentModel.diagramAreas[0]
-        assertEquals("Merged area should start at 4 (padded)", 4, area.startLineIndex)
+        assertEquals("Merged area should start at 5", 5, area.startLineIndex)
         assertTrue("Merged area should contain line 9 (original below end)", area.containsLine(9))
     }
 
@@ -943,44 +943,215 @@ class DiagramIntentTest {
     // ── Padding respects text lines ──────────────────────────────────────────
 
     @Test
-    fun `diagram creation pads into adjacent text with 1-line padding`() {
-        // Pre-existing text on line 4 — diagram still gets 1-line padding
+    fun `diagram creation does not absorb adjacent text above`() {
         val textStroke = makeTextStroke(line = 4)
         documentModel.activeStrokes.add(textStroke)
 
-        // Shape drawn on lines 5-7 → 1-line padding above lands on text line 4
         val shapeStroke = makeRectangleStroke(startLine = 5, endLine = 7)
         simulateDiagramShapeDetected(shapeStroke)
 
         val area = documentModel.diagramAreas[0]
-        assertEquals("Start should be 4 (1-line padding)", 4, area.startLineIndex)
-        assertTrue("Should contain line 8 (1-line padding below)", area.containsLine(8))
+        assertEquals("Start should be 5 (no padding into text)", 5, area.startLineIndex)
+        assertTrue("Should contain line 7", area.containsLine(7))
+        assertTrue("Should NOT contain text line 4", !area.containsLine(4))
     }
 
     @Test
-    fun `diagram pads below into adjacent text with 1-line padding`() {
-        // Pre-existing text on line 8
+    fun `diagram creation does not absorb adjacent text below`() {
         val textStroke = makeTextStroke(line = 8)
         documentModel.activeStrokes.add(textStroke)
 
-        // Shape drawn on lines 5-7 → 1-line padding below lands on text line 8
         val shapeStroke = makeRectangleStroke(startLine = 5, endLine = 7)
         simulateDiagramShapeDetected(shapeStroke)
 
         val area = documentModel.diagramAreas[0]
-        assertEquals("Start should be 4 (1-line padding above)", 4, area.startLineIndex)
-        assertTrue("Should contain line 8 (1-line padding)", area.containsLine(8))
+        assertEquals("Start should be 5", 5, area.startLineIndex)
+        assertTrue("Should contain line 7", area.containsLine(7))
+        assertTrue("Should NOT contain text line 8", !area.containsLine(8))
     }
 
     @Test
-    fun `diagram creation pads both sides when no text nearby`() {
-        // No text strokes — padding should apply on both sides
+    fun `diagram creation uses exact bounds when no text nearby`() {
         val shapeStroke = makeRectangleStroke(startLine = 5, endLine = 7)
         simulateDiagramShapeDetected(shapeStroke)
 
         val area = documentModel.diagramAreas[0]
-        assertEquals("Start should be 4 (1-line padding above)", 4, area.startLineIndex)
-        assertTrue("Should contain line 8 (1-line padding below)", area.containsLine(8))
+        assertEquals("Start should be 5 (exact bounds)", 5, area.startLineIndex)
+        assertTrue("Should contain line 7", area.containsLine(7))
     }
 
+    // ── Diagram shrink on scratch-out ────────────────────────────────────────
+
+    /**
+     * Simulate shrinkDiagramAfterErase: compute new bounds from remaining strokes,
+     * shrink the area, and shift content to reclaim freed lines.
+     */
+    private fun simulateShrink(area: DiagramArea) {
+        val ls = LS
+        val remaining = documentModel.activeStrokes.filter {
+            area.containsLine(lineSegmenter.getStrokeLineIndex(it))
+        }
+
+        if (remaining.isEmpty()) {
+            val linesFreed = area.heightInLines
+            val shiftUpPx = linesFreed * ls
+            val oldEnd = area.endLineIndex
+            documentModel.diagramAreas.remove(area)
+            val shifted = documentModel.activeStrokes.map { stroke ->
+                if (lineSegmenter.getStrokeLineIndex(stroke) > oldEnd) stroke.shiftY(-shiftUpPx) else stroke
+            }
+            documentModel.activeStrokes.clear()
+            documentModel.activeStrokes.addAll(shifted)
+            return
+        }
+
+        val minLine = remaining.minOf { lineSegmenter.getLineIndex(it.points.minOf { p -> p.y }) }
+        val maxLine = remaining.maxOf { lineSegmenter.getLineIndex(it.points.maxOf { p -> p.y }) }
+        val newStart = (minLine - 1).coerceAtLeast(area.startLineIndex)
+        val newEnd = (maxLine + 1).coerceAtMost(area.endLineIndex)
+        val linesFreedBelow = area.endLineIndex - newEnd
+        val linesFreedAbove = newStart - area.startLineIndex
+        if (linesFreedAbove + linesFreedBelow == 0) return
+
+        documentModel.diagramAreas.remove(area)
+        documentModel.diagramAreas.add(DiagramArea(startLineIndex = newStart, heightInLines = newEnd - newStart + 1))
+
+        if (linesFreedBelow > 0) {
+            val shiftUpPx = linesFreedBelow * ls
+            val shifted = documentModel.activeStrokes.map { stroke ->
+                if (lineSegmenter.getStrokeLineIndex(stroke) > area.endLineIndex) stroke.shiftY(-shiftUpPx) else stroke
+            }
+            documentModel.activeStrokes.clear()
+            documentModel.activeStrokes.addAll(shifted)
+        }
+        if (linesFreedAbove > 0) {
+            val shiftUpPx = linesFreedAbove * ls
+            val shifted = documentModel.activeStrokes.map { stroke ->
+                if (lineSegmenter.getStrokeLineIndex(stroke) >= newStart) stroke.shiftY(-shiftUpPx) else stroke
+            }
+            documentModel.activeStrokes.clear()
+            documentModel.activeStrokes.addAll(shifted)
+            val shiftedAreas = documentModel.diagramAreas.map { other ->
+                if (other.startLineIndex >= newStart)
+                    other.copy(startLineIndex = other.startLineIndex - linesFreedAbove)
+                else other
+            }
+            documentModel.diagramAreas.clear()
+            documentModel.diagramAreas.addAll(shiftedAreas)
+        }
+    }
+
+    @Test
+    fun `scenario 1 - erase near bottom shrinks diagram and shifts text up`() {
+        // Text above
+        val helloStroke = makeTextStroke(line = 1)
+        documentModel.activeStrokes.add(helloStroke)
+
+        // Diagram at lines 3-7
+        documentModel.diagramAreas.add(DiagramArea(startLineIndex = 3, heightInLines = 5))
+        val topShape = makeTextStroke(line = 4)  // stays
+        documentModel.activeStrokes.add(topShape)
+        val bottomShape = makeTextStroke(line = 6) // will be erased
+        documentModel.activeStrokes.add(bottomShape)
+
+        // Text below diagram
+        val textBelow = makeTextStroke(line = 9)
+        documentModel.activeStrokes.add(textBelow)
+
+        // Erase bottom shape
+        documentModel.activeStrokes.remove(bottomShape)
+
+        // Shrink
+        simulateShrink(documentModel.diagramAreas[0])
+
+        // Diagram should have shrunk
+        val area = documentModel.diagramAreas[0]
+        assertTrue("Diagram should not contain line 6 anymore", !area.containsLine(6))
+        assertTrue("Diagram should still contain line 4", area.containsLine(lineSegmenter.getStrokeLineIndex(
+            documentModel.activeStrokes.find { it.strokeId == topShape.strokeId }!!
+        )))
+
+        // Text below should have shifted up
+        val textBelowLine = lineSegmenter.getStrokeLineIndex(
+            documentModel.activeStrokes.find { it.strokeId == textBelow.strokeId }!!
+        )
+        assertTrue("Text below should have shifted up", textBelowLine < 9)
+
+        // Hello World stays
+        assertEquals("Hello stays at 1", 1, lineSegmenter.getStrokeLineIndex(
+            documentModel.activeStrokes.find { it.strokeId == helloStroke.strokeId }!!
+        ))
+    }
+
+    @Test
+    fun `scenario 2 - erase near top shrinks diagram from top`() {
+        val helloStroke = makeTextStroke(line = 1)
+        documentModel.activeStrokes.add(helloStroke)
+
+        documentModel.diagramAreas.add(DiagramArea(startLineIndex = 3, heightInLines = 5))
+        val topShape = makeTextStroke(line = 4)  // will be erased
+        documentModel.activeStrokes.add(topShape)
+        val bottomShape = makeTextStroke(line = 6) // stays
+        documentModel.activeStrokes.add(bottomShape)
+
+        val textBelow = makeTextStroke(line = 9)
+        documentModel.activeStrokes.add(textBelow)
+
+        // Erase top shape
+        documentModel.activeStrokes.remove(topShape)
+
+        simulateShrink(documentModel.diagramAreas[0])
+
+        // Diagram should have shrunk from the top
+        val area = documentModel.diagramAreas[0]
+        assertTrue("Diagram should still contain the remaining shape",
+            area.containsLine(lineSegmenter.getStrokeLineIndex(
+                documentModel.activeStrokes.find { it.strokeId == bottomShape.strokeId }!!
+            )))
+        assertTrue("Diagram height should be smaller than 5", area.heightInLines < 5)
+    }
+
+    @Test
+    fun `erase all strokes removes diagram entirely`() {
+        documentModel.diagramAreas.add(DiagramArea(startLineIndex = 3, heightInLines = 5))
+        val shape = makeTextStroke(line = 5)
+        documentModel.activeStrokes.add(shape)
+
+        val textBelow = makeTextStroke(line = 9)
+        documentModel.activeStrokes.add(textBelow)
+
+        // Erase the only stroke
+        documentModel.activeStrokes.remove(shape)
+
+        simulateShrink(documentModel.diagramAreas[0])
+
+        assertTrue("Diagram area should be removed", documentModel.diagramAreas.isEmpty())
+
+        // Text below should have shifted up
+        val textBelowLine = lineSegmenter.getStrokeLineIndex(
+            documentModel.activeStrokes.find { it.strokeId == textBelow.strokeId }!!
+        )
+        assertTrue("Text below should have shifted up", textBelowLine < 9)
+    }
+
+    @Test
+    fun `erase middle stroke does not shrink diagram`() {
+        documentModel.diagramAreas.add(DiagramArea(startLineIndex = 3, heightInLines = 5))
+        val topShape = makeTextStroke(line = 4)
+        documentModel.activeStrokes.add(topShape)
+        val middleShape = makeTextStroke(line = 5)  // will be erased
+        documentModel.activeStrokes.add(middleShape)
+        val bottomShape = makeTextStroke(line = 6)
+        documentModel.activeStrokes.add(bottomShape)
+
+        documentModel.activeStrokes.remove(middleShape)
+
+        val areaBefore = documentModel.diagramAreas[0].copy()
+        simulateShrink(documentModel.diagramAreas[0])
+
+        // Diagram should stay the same — strokes still at top and bottom
+        val area = documentModel.diagramAreas[0]
+        assertEquals("Start should be unchanged", areaBefore.startLineIndex, area.startLineIndex)
+        assertEquals("Height should be unchanged", areaBefore.heightInLines, area.heightInLines)
+    }
 }

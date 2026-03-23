@@ -297,9 +297,169 @@ class WritingCoordinator(
         inkCanvas.removeStrokes(idsToRemove)
         inkCanvas.drawToSurface()
 
+        // Invalidate diagram text cache for any affected diagram areas —
+        // erased strokes may have been recognized as text labels
+        for (area in documentModel.diagramAreas) {
+            val cachedGroups = diagramTextCache[area.startLineIndex] ?: continue
+            if (cachedGroups.any { group -> group.strokeIds.any { it in idsToRemove } }) {
+                recognizeDiagramArea(area)
+            }
+        }
+
+        // Shrink diagram areas that contained erased strokes.
+        // Process one at a time since shrinking modifies the area list and stroke positions.
+        val affectedStartLines = overlapping.map { lineSegmenter.getStrokeLineIndex(it) }.toSet()
+        for (startLine in affectedStartLines) {
+            val area = documentModel.diagramAreas.find { it.containsLine(startLine) } ?: continue
+            shrinkDiagramAfterErase(area)
+        }
+
         eventLog.recordEvent(lastStrokeIndex, StrokeEventLog.EventType.SCRATCH_OUT,
             "erased=${idsToRemove.joinToString(",")}")
         Log.i(TAG, "Scratch-out erase: removed ${overlapping.size} strokes in [$left,$top,$right,$bottom]")
+    }
+
+    /**
+     * After strokes are erased from a diagram, shrink the area to fit remaining
+     * content and shift text below up to reclaim freed space.
+     */
+    private fun shrinkDiagramAfterErase(area: DiagramArea) {
+        val ls = HandwritingCanvasView.LINE_SPACING
+
+        // Find all remaining strokes in this diagram area
+        val remainingStrokes = documentModel.activeStrokes.filter { stroke ->
+            area.containsLine(lineSegmenter.getStrokeLineIndex(stroke))
+        }
+
+        if (remainingStrokes.isEmpty()) {
+            // Diagram is empty — remove it and shift everything below up
+            val linesFreed = area.heightInLines
+            val shiftUpPx = linesFreed * ls
+            val oldEnd = area.endLineIndex
+
+            documentModel.diagramAreas.remove(area)
+            diagramTextCache.remove(area.startLineIndex)
+
+            // Shift strokes below the old diagram up
+            val shifted = documentModel.activeStrokes.map { stroke ->
+                val strokeLine = lineSegmenter.getStrokeLineIndex(stroke)
+                if (strokeLine > oldEnd) stroke.shiftY(-shiftUpPx) else stroke
+            }
+            documentModel.activeStrokes.clear()
+            documentModel.activeStrokes.addAll(shifted)
+
+            // Shift other diagram areas below
+            val shiftedAreas = documentModel.diagramAreas.map { other ->
+                if (other.startLineIndex > oldEnd)
+                    other.copy(startLineIndex = other.startLineIndex - linesFreed)
+                else other
+            }
+            documentModel.diagramAreas.clear()
+            documentModel.diagramAreas.addAll(shiftedAreas)
+
+            // Shift text cache
+            val shiftedCache = lineTextCache.entries.associate { (line, text) ->
+                (if (line > oldEnd) line - linesFreed else line) to text
+            }
+            lineTextCache.clear()
+            lineTextCache.putAll(shiftedCache)
+
+            inkCanvas.loadStrokes(documentModel.activeStrokes.toList())
+            inkCanvas.diagramAreas = documentModel.diagramAreas.toList()
+            inkCanvas.pauseRawDrawing()
+            inkCanvas.drawToSurface()
+            inkCanvas.resumeRawDrawing()
+            displayHiddenLines()
+            Log.i(TAG, "Removed empty diagram area ${area.startLineIndex}-${area.endLineIndex}, shifted up $linesFreed lines")
+            return
+        }
+
+        // Compute tight bounds from remaining strokes + 1-line padding
+        val minLine = remainingStrokes.minOf { lineSegmenter.getLineIndex(it.points.minOf { p -> p.y }) }
+        val maxLine = remainingStrokes.maxOf { lineSegmenter.getLineIndex(it.points.maxOf { p -> p.y }) }
+        val newStart = (minLine - 1).coerceAtLeast(area.startLineIndex)
+        val newEnd = (maxLine + 1).coerceAtMost(area.endLineIndex)
+
+        val linesFreedBelow = area.endLineIndex - newEnd
+        val linesFreedAbove = newStart - area.startLineIndex
+        val totalFreed = linesFreedAbove + linesFreedBelow
+
+        if (totalFreed == 0) return  // no change
+
+        // Step 1: Shrink the diagram area first
+        documentModel.diagramAreas.remove(area)
+        val shrunk = DiagramArea(
+            startLineIndex = newStart,
+            heightInLines = newEnd - newStart + 1
+        )
+        documentModel.diagramAreas.add(shrunk)
+
+        // Step 2: Shift content below the old diagram end UP by linesFreedBelow
+        if (linesFreedBelow > 0) {
+            val shiftUpPx = linesFreedBelow * ls
+            val shifted = documentModel.activeStrokes.map { stroke ->
+                val strokeLine = lineSegmenter.getStrokeLineIndex(stroke)
+                if (strokeLine > area.endLineIndex) stroke.shiftY(-shiftUpPx) else stroke
+            }
+            documentModel.activeStrokes.clear()
+            documentModel.activeStrokes.addAll(shifted)
+
+            val shiftedAreas = documentModel.diagramAreas.map { other ->
+                if (other.startLineIndex > area.endLineIndex)
+                    other.copy(startLineIndex = other.startLineIndex - linesFreedBelow)
+                else other
+            }
+            documentModel.diagramAreas.clear()
+            documentModel.diagramAreas.addAll(shiftedAreas)
+
+            val shiftedCache = lineTextCache.entries.associate { (line, text) ->
+                (if (line > area.endLineIndex) line - linesFreedBelow else line) to text
+            }
+            lineTextCache.clear()
+            lineTextCache.putAll(shiftedCache)
+        }
+
+        // Step 3: Shrink from top — shift diagram content + everything below UP
+        if (linesFreedAbove > 0) {
+            val shiftUpPx = linesFreedAbove * ls
+            val shifted = documentModel.activeStrokes.map { stroke ->
+                val strokeLine = lineSegmenter.getStrokeLineIndex(stroke)
+                if (strokeLine >= newStart) stroke.shiftY(-shiftUpPx) else stroke
+            }
+            documentModel.activeStrokes.clear()
+            documentModel.activeStrokes.addAll(shifted)
+
+            val shiftedAreas = documentModel.diagramAreas.map { other ->
+                if (other.startLineIndex >= newStart)
+                    other.copy(startLineIndex = other.startLineIndex - linesFreedAbove)
+                else other
+            }
+            documentModel.diagramAreas.clear()
+            documentModel.diagramAreas.addAll(shiftedAreas)
+
+            val shiftedCache = lineTextCache.entries.associate { (line, text) ->
+                (if (line >= newStart) line - linesFreedAbove else line) to text
+            }
+            lineTextCache.clear()
+            lineTextCache.putAll(shiftedCache)
+
+            inkCanvas.scrollOffsetY = (inkCanvas.scrollOffsetY - shiftUpPx).coerceAtLeast(0f)
+        }
+
+        inkCanvas.loadStrokes(documentModel.activeStrokes.toList())
+        inkCanvas.diagramAreas = documentModel.diagramAreas.toList()
+        inkCanvas.pauseRawDrawing()
+        inkCanvas.drawToSurface()
+        inkCanvas.resumeRawDrawing()
+        displayHiddenLines()
+
+        for (line in 0..area.endLineIndex) { lineTextCache.remove(line) }
+
+        val finalArea = documentModel.diagramAreas.find {
+            it.heightInLines == shrunk.heightInLines
+        }
+        Log.i(TAG, "Shrunk diagram: ${area.startLineIndex}-${area.endLineIndex} → " +
+            "${finalArea?.startLineIndex}-${finalArea?.endLineIndex} (freed: ↑$linesFreedAbove ↓$linesFreedBelow)")
     }
 
     // --- Recognition ---
@@ -790,10 +950,11 @@ class WritingCoordinator(
         val topLine = lineSegmenter.getLineIndex(minY)
         val bottomLine = lineSegmenter.getLineIndex(maxY)
 
-        // 1-line padding on each side to fully contain shapes.
-        // No strokes are moved — scroll adjusts so diagram stays on screen.
-        var mergeStart = (topLine - 1).coerceAtLeast(0)
-        var mergeHeight = (bottomLine + 1) - mergeStart + 1
+        // Exact bounding box — no forced padding. Overflow expansion will
+        // add space as needed when strokes cross the boundary.
+        // Don't extend into lines with pre-existing text strokes.
+        var mergeStart = topLine
+        var mergeHeight = bottomLine - mergeStart + 1
 
         // Merge with adjacent diagram area above
         val above = documentModel.diagramAreas.find { it.endLineIndex + 1 >= mergeStart && it.endLineIndex < mergeStart + mergeHeight }
@@ -934,9 +1095,12 @@ class WritingCoordinator(
         )
         documentModel.diagramAreas.add(expanded)
 
-        // Update canvas
+        // Update canvas and force redraw so expanded bounds are immediately visible
         inkCanvas.loadStrokes(documentModel.activeStrokes.toList())
         inkCanvas.diagramAreas = documentModel.diagramAreas.toList()
+        inkCanvas.pauseRawDrawing()
+        inkCanvas.drawToSurface()
+        inkCanvas.resumeRawDrawing()
         for (line in expanded.startLineIndex..expanded.endLineIndex) {
             lineTextCache.remove(line)
         }
