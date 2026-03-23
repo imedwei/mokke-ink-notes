@@ -11,6 +11,7 @@ import com.writer.model.minY
 import com.writer.model.maxX
 import com.writer.model.maxY
 import com.writer.view.ScratchOutDetection
+import com.writer.view.ScreenMetrics
 import com.writer.recognition.TextRecognizer
 import com.writer.recognition.LineSegmenter
 import com.writer.recognition.StrokeClassifier
@@ -273,9 +274,21 @@ class WritingCoordinator(
         // Erase strokes that the scratch-out physically intersects.
         // The caller (checkPostStrokeScratchOut) already verified this is a focused
         // scratch-out via isFocusedScratchOut — most of its path covers existing strokes.
+        val radius = ScreenMetrics.dp(ScratchOutDetection.COVERAGE_RADIUS_DP)
+        val radiusSq = radius * radius
         val overlapping = documentModel.activeStrokes.filter { stroke ->
-            ScratchOutDetection.strokesIntersect(scratchPoints, stroke.points)
-                || stroke.strokeType.isConnector
+            if (stroke.points.size < 5) {
+                // Small strokes (dots, taps): segment intersection is unreliable,
+                // use proximity check instead — any scratch point within radius counts.
+                stroke.points.any { tp ->
+                    scratchPoints.any { sp ->
+                        val dx = sp.x - tp.x; val dy = sp.y - tp.y
+                        dx * dx + dy * dy <= radiusSq
+                    }
+                }
+            } else {
+                ScratchOutDetection.strokesIntersect(scratchPoints, stroke.points)
+            } || stroke.strokeType.isConnector
                     && ScratchOutDetection.strokeIntersectsRect(stroke.points, left, top, right, bottom)
         }
         if (overlapping.isEmpty()) return
