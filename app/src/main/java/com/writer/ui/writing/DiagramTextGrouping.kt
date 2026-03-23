@@ -1,6 +1,11 @@
 package com.writer.ui.writing
 
 import com.writer.model.InkStroke
+import com.writer.model.minX
+import com.writer.model.minY
+import com.writer.model.maxX
+import com.writer.model.maxY
+import com.writer.model.yRange
 
 /**
  * Groups freehand diagram strokes by 2D spatial proximity, then splits
@@ -10,18 +15,6 @@ import com.writer.model.InkStroke
  */
 object DiagramTextGrouping {
 
-    /**
-     * A bounding box for a stroke.
-     */
-    data class BBox(val minX: Float, val minY: Float, val maxX: Float, val maxY: Float)
-
-    /**
-     * Group strokes by 2D spatial proximity. Strokes whose bounding boxes
-     * are within [maxGap] of each other (in both X and Y) are merged into
-     * the same group using union-find.
-     *
-     * @return list of stroke groups (each group is a list of strokes)
-     */
     /**
      * Group strokes by 2D spatial proximity. Strokes whose bounding boxes
      * are within [maxGap] of each other (in both X and Y) are merged into
@@ -44,14 +37,13 @@ object DiagramTextGrouping {
         // If shapes are available, partition freehand strokes by containment
         if (shapeStrokes.isNotEmpty()) {
             val shapeBounds = shapeStrokes.map { s ->
-                BBox(s.points.minOf { it.x }, s.points.minOf { it.y },
-                     s.points.maxOf { it.x }, s.points.maxOf { it.y })
+                BBox(s.minX, s.minY, s.maxX, s.maxY)
             }
 
             // Assign each freehand stroke to a shape (by centroid containment), or -1
             val assignments = strokes.map { s ->
-                val cx = (s.points.minOf { it.x } + s.points.maxOf { it.x }) / 2f
-                val cy = (s.points.minOf { it.y } + s.points.maxOf { it.y }) / 2f
+                val cx = (s.minX + s.maxX) / 2f
+                val cy = (s.minY + s.maxY) / 2f
                 shapeBounds.indexOfFirst { b ->
                     cx >= b.minX && cx <= b.maxX && cy >= b.minY && cy <= b.maxY
                 }
@@ -77,59 +69,8 @@ object DiagramTextGrouping {
     }
 
     /** Simple proximity grouping without shape awareness. */
-    private fun groupByProximitySimple(strokes: List<InkStroke>, maxGap: Float): List<List<InkStroke>> {
-        if (strokes.isEmpty()) return emptyList()
-
-        val boxes = strokes.map { s ->
-            BBox(s.points.minOf { it.x }, s.points.minOf { it.y },
-                 s.points.maxOf { it.x }, s.points.maxOf { it.y })
-        }
-
-        // Union-find
-        val parent = IntArray(strokes.size) { it }
-        fun find(i: Int): Int {
-            var r = i
-            while (parent[r] != r) r = parent[r]
-            var x = i
-            while (x != r) { val n = parent[x]; parent[x] = r; x = n }
-            return r
-        }
-        fun union(a: Int, b: Int) { parent[find(a)] = find(b) }
-
-        // Grid-based spatial index: cell size = maxGap.
-        // Each bbox is inserted into all cells it overlaps (expanded by maxGap).
-        // Boxes in the same cell are candidates for union — O(n) average.
-        val cellSize = maxGap.coerceAtLeast(1f)
-        val grid = HashMap<Long, MutableList<Int>>()
-        fun cellKey(cx: Int, cy: Int) = cx.toLong() shl 32 or (cy.toLong() and 0xFFFFFFFFL)
-
-        for (i in boxes.indices) {
-            val b = boxes[i]
-            val cxMin = ((b.minX - maxGap) / cellSize).toInt()
-            val cxMax = ((b.maxX + maxGap) / cellSize).toInt()
-            val cyMin = ((b.minY - maxGap) / cellSize).toInt()
-            val cyMax = ((b.maxY + maxGap) / cellSize).toInt()
-            for (cx in cxMin..cxMax) {
-                for (cy in cyMin..cyMax) {
-                    val key = cellKey(cx, cy)
-                    val cell = grid.getOrPut(key) { mutableListOf() }
-                    // Check proximity with existing entries in this cell
-                    for (j in cell) {
-                        if (find(i) == find(j)) continue  // already merged
-                        val xDist = maxOf(0f, maxOf(boxes[i].minX - boxes[j].maxX, boxes[j].minX - boxes[i].maxX))
-                        val yDist = maxOf(0f, maxOf(boxes[i].minY - boxes[j].maxY, boxes[j].minY - boxes[i].maxY))
-                        if (xDist <= maxGap && yDist <= maxGap) {
-                            union(i, j)
-                        }
-                    }
-                    cell.add(i)
-                }
-            }
-        }
-
-        return strokes.indices.groupBy { find(it) }
-            .values.map { indices -> indices.map { strokes[it] } }
-    }
+    private fun groupByProximitySimple(strokes: List<InkStroke>, maxGap: Float): List<List<InkStroke>> =
+        SpatialGrouping.groupByProximity(strokes, maxGap) { s -> BBox(s.minX, s.minY, s.maxX, s.maxY) }
 
     /**
      * Split a group of strokes into horizontal rows for recognition.
@@ -145,13 +86,13 @@ object DiagramTextGrouping {
         if (group.isEmpty()) return emptyList()
 
         val byY = group.sortedBy { s ->
-            (s.points.minOf { it.y } + s.points.maxOf { it.y }) / 2f
+            (s.minY + s.maxY) / 2f
         }
 
         val rows = mutableListOf(mutableListOf(byY.first()))
         for (i in 1 until byY.size) {
-            val prevMaxY = rows.last().maxOf { s -> s.points.maxOf { it.y } }
-            val curMinY = byY[i].points.minOf { it.y }
+            val prevMaxY = rows.last().maxOf { s -> s.maxY }
+            val curMinY = byY[i].minY
             if (curMinY - prevMaxY > maxGap) {
                 rows.add(mutableListOf(byY[i]))
             } else {
@@ -159,7 +100,7 @@ object DiagramTextGrouping {
             }
         }
 
-        return rows.map { row -> row.sortedBy { s -> s.points.minOf { it.x } } }
+        return rows.map { row -> row.sortedBy { s -> s.minX } }
     }
 
     /**
@@ -183,9 +124,7 @@ object DiagramTextGrouping {
         if (group.size < 3) return splitIntoRows(group, fallbackGap)
 
         // Compute median stroke height as x-height proxy
-        val heights = group.map { s ->
-            s.points.maxOf { it.y } - s.points.minOf { it.y }
-        }.filter { it > 0f }.sorted()
+        val heights = group.map { s -> s.yRange }.filter { it > 0f }.sorted()
 
         if (heights.isEmpty()) return splitIntoRows(group, fallbackGap)
 
@@ -197,7 +136,7 @@ object DiagramTextGrouping {
 
         data class StrokeWithCentroid(val stroke: InkStroke, val centroidY: Float)
         val sorted = group.map { s ->
-            StrokeWithCentroid(s, (s.points.minOf { it.y } + s.points.maxOf { it.y }) / 2f)
+            StrokeWithCentroid(s, (s.minY + s.maxY) / 2f)
         }.sortedBy { it.centroidY }
 
         val rows = mutableListOf(mutableListOf(sorted.first().stroke))
@@ -212,6 +151,6 @@ object DiagramTextGrouping {
             lastCentroid = maxOf(lastCentroid, sorted[i].centroidY)
         }
 
-        return rows.map { row -> row.sortedBy { s -> s.points.minOf { it.x } } }
+        return rows.map { row -> row.sortedBy { s -> s.minX } }
     }
 }

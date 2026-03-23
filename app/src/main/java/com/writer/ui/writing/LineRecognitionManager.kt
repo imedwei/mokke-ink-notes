@@ -11,6 +11,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+/** Build recognition context from recent cached text above [lineIndex]. */
+internal fun buildPreContext(lineTextCache: Map<Int, String>, lineIndex: Int): String {
+    return lineTextCache.entries
+        .filter { it.key < lineIndex && it.value.isNotBlank() && it.value != "[?]" }
+        .sortedBy { it.key }
+        .joinToString(" ") { it.value }
+        .takeLast(20)
+}
+
 /** Callback interface for LineRecognitionManager to communicate with its host. */
 interface RecognitionManagerHost {
     val lineTextCache: MutableMap<Int, String>
@@ -35,7 +44,10 @@ class LineRecognitionManager(
     }
 
     /** Track which lines are currently being recognized (avoid duplicates). */
-    val recognizingLines = mutableSetOf<Int>()
+    internal val recognizingLines = mutableSetOf<Int>()
+
+    fun isRecognizing(lineIndex: Int): Boolean = recognizingLines.contains(lineIndex)
+    fun markRecognizing(lineIndex: Int) { recognizingLines.add(lineIndex) }
     /** Lines that need re-recognition after current recognition finishes. */
     val pendingRerecognize = mutableSetOf<Int>()
 
@@ -124,14 +136,8 @@ class LineRecognitionManager(
         host.onHeadingDetected(text)
     }
 
-    fun buildPreContext(lineIndex: Int): String {
-        val previousLines = host.lineTextCache.keys.filter { it < lineIndex }.sorted()
-        if (previousLines.isEmpty()) return ""
-        val lastText = previousLines.map { host.lineTextCache[it] ?: "" }
-            .filter { it.isNotEmpty() && it != "[?]" }
-            .joinToString(" ")
-        return lastText.takeLast(20)
-    }
+    fun buildPreContext(lineIndex: Int): String =
+        buildPreContext(host.lineTextCache, lineIndex)
 
     fun reset() {
         recognizingLines.clear()
