@@ -29,7 +29,7 @@ class DwellDisambiguationTest {
     companion object {
         private const val DENSITY = 1.875f
         private val LS get() = HandwritingCanvasView.LINE_SPACING
-        private const val DWELL_RADIUS = 15f  // ARROW_DWELL_RADIUS_PX
+        private val DWELL_RADIUS get() = ScreenMetrics.dp(8f)
         private const val DRAWING_THRESHOLD = 0.5f
     }
 
