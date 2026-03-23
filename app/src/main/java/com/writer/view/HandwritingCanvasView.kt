@@ -5,6 +5,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.DashPathEffect
 import android.graphics.PointF
 import android.graphics.Rect
 
@@ -85,7 +86,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
     /** Document model reference for magnetic snap access. */
     var documentModel: DocumentModel? = null
 
-    // Dwell indicator state (arrow start-dwell inside diagram areas)
+    // Dwell indicator state (inside diagram → arrow tail; outside → freeform zone)
     private var dwellJob: Runnable? = null
     private var dwellIndicatorShown = false
     private var dwellDotCenter: PointF? = null
@@ -94,6 +95,13 @@ class HandwritingCanvasView @JvmOverloads constructor(
         color = Color.DKGRAY
         style = Paint.Style.FILL
         isAntiAlias = true
+    }
+
+    private val freeformPreviewPaint = Paint().apply {
+        color = CanvasTheme.DIAGRAM_BORDER_COLOR
+        strokeWidth = 3f
+        style = Paint.Style.STROKE
+        pathEffect = DashPathEffect(floatArrayOf(20f, 14f), 0f)
     }
 
     /** When true, all pen input is blocked and annotations are rendered. */
@@ -117,7 +125,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
     var onRawStrokeCapture: ((points: List<StrokePoint>) -> Unit)? = null
 
     /** Called when a stroke inside a diagram extends beyond its bounds, to expand the area. */
-    var onDiagramStrokeOverflow: ((minY: Float, maxY: Float) -> Unit)? = null
+    var onDiagramStrokeOverflow: ((strokeId: String, minY: Float, maxY: Float) -> Unit)? = null
 
     // Scratch-out callback (inside diagram areas: erase overlapping strokes)
     var onScratchOut: ((scratchPoints: List<StrokePoint>, left: Float, top: Float, right: Float, bottom: Float) -> Unit)? = null
@@ -172,8 +180,8 @@ class HandwritingCanvasView @JvmOverloads constructor(
             currentDiagramBounds = getDiagramBounds(docPt.y)
             currentStrokePoints.add(docPt)
             initStrokeBounds(currentStrokePoints.last())
-            // Start arrow dwell detection only inside diagram areas
-            if (currentDiagramBounds != null) startDwellJob()
+            // Start dwell detection: inside diagram → arrow tail; outside → freeform zone
+            startDwellJob()
         }
 
         override fun onRawDrawingTouchPointMoveReceived(tp: TouchPoint) {
@@ -306,7 +314,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
                 currentPath.moveTo(x, y)
                 currentStrokePoints.add(StrokePoint(x, y, pressure, timestamp))
                 initStrokeBounds(currentStrokePoints.last())
-                if (currentDiagramBounds != null) startDwellJob()
+                startDwellJob()
                 drawToSurface()
                 return true
             }
@@ -438,11 +446,6 @@ class HandwritingCanvasView @JvmOverloads constructor(
             dwellDotCenter = null
             dwellIndicatorShown = false
 
-            // If stroke extends beyond diagram bounds, expand the diagram area
-            val (diagTopY, diagBottomY) = currentDiagramBounds!!
-            if (strokeMinY < diagTopY || strokeMaxY > diagBottomY) {
-                onDiagramStrokeOverflow?.invoke(strokeMinY, strokeMaxY)
-            }
 
             // Save raw points before checkShapeSnap overwrites currentStrokePoints
             val rawPoints = currentStrokePoints.toList()
@@ -457,6 +460,9 @@ class HandwritingCanvasView @JvmOverloads constructor(
                 return
             }
 
+            // Determine the FINAL stroke (snapped or raw) before overflow check,
+            // so overflow uses the actual stroke bounds that will be in the document.
+            val finalStroke: InkStroke
             if (snapData != null) {
                 // Two-phase commit: emit raw stroke first, then replace with snapped
                 val rawStroke = InkStroke(
@@ -475,6 +481,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
                 completedStrokes.remove(rawStroke)
                 completedStrokes.add(snappedStroke)
                 onStrokeReplaced?.invoke(rawStroke.strokeId, snappedStroke)  // → saves snapshot N+1, replaces → state N+2
+                finalStroke = snappedStroke
             } else {
                 val stroke = InkStroke(
                     points = currentStrokePoints.toList(),
@@ -483,6 +490,16 @@ class HandwritingCanvasView @JvmOverloads constructor(
                 )
                 completedStrokes.add(stroke)
                 onStrokeCompleted?.invoke(stroke)
+                finalStroke = stroke
+            }
+
+            // Check overflow AFTER snapping, using the final stroke's actual bounds.
+            // This ensures the snapped geometry (which may differ from raw) is used.
+            val (diagTopY, diagBottomY) = currentDiagramBounds!!
+            val finalMinY = finalStroke.points.minOf { it.y }
+            val finalMaxY = finalStroke.points.maxOf { it.y }
+            if (finalMinY < diagTopY || finalMaxY > diagBottomY) {
+                onDiagramStrokeOverflow?.invoke(finalStroke.strokeId, finalMinY, finalMaxY)
             }
             currentStrokePoints.clear()
             currentPath.reset()
@@ -495,7 +512,10 @@ class HandwritingCanvasView @JvmOverloads constructor(
             }
         } else {
             // OUTSIDE DIAGRAM AREA
-            if (checkPostStrokeScratchOut()) return
+            if (checkPostStrokeScratchOut()) {
+    
+                return
+            }
 
             // Check for shape-intent: dwell at end → shape detection → auto-create diagram
             val snapData = checkShapeSnap()
@@ -531,6 +551,27 @@ class HandwritingCanvasView @JvmOverloads constructor(
                 pauseRawDrawing()
                 drawToSurface()
                 resumeRawDrawing()
+            } else if (dwellIndicatorShown) {
+                // Start-dwell without shape → create freeform diagram zone
+                val stroke = InkStroke(
+                    points = currentStrokePoints.toList(),
+                    isGeometric = false,
+                    strokeType = StrokeType.FREEHAND
+                )
+                completedStrokes.add(stroke)
+                onStrokeCompleted?.invoke(stroke)
+                onDiagramShapeDetected?.invoke(stroke)
+                dwellDotCenter = null
+                dwellIndicatorShown = false
+                currentStrokePoints.clear()
+                currentPath.reset()
+                currentDiagramBounds = null
+
+                // Show dashed border, then clear preview state
+                pauseRawDrawing()
+                drawToSurface()
+                resumeRawDrawing()
+    
             } else {
                 val stroke = InkStroke(points = currentStrokePoints.toList())
                 completedStrokes.add(stroke)
@@ -538,6 +579,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
                 currentStrokePoints.clear()
                 currentPath.reset()
                 currentDiagramBounds = null
+    
             }
         }
     }
@@ -797,9 +839,11 @@ class HandwritingCanvasView @JvmOverloads constructor(
             if (dx * dx + dy * dy < ARROW_DWELL_RADIUS_PX * ARROW_DWELL_RADIUS_PX) {
                 dwellIndicatorShown = true
                 dwellDotCenter = PointF(first.x, first.y)
-                if (!useOnyxSdk) {
-                    drawToSurface()
-                }
+                // Draw indicator to surface; on Boox the SDK overlay may obscure it
+                // mid-stroke, but the dwell state is preserved for finishStroke().
+                // Do NOT pause/resume SDK here — it triggers onBeginRawDrawing
+                // which resets the stroke + dwell state.
+                drawToSurface()
             }
         }
         dwellJob = job
@@ -884,9 +928,16 @@ class HandwritingCanvasView @JvmOverloads constructor(
             canvas.drawPath(currentPath, strokePaint)
         }
 
-        // Draw dwell indicator dot (arrow start-dwell inside diagram areas)
+        // Draw dwell indicator dot (start-dwell)
         dwellDotCenter?.let { dot ->
             canvas.drawCircle(dot.x, dot.y, CanvasTheme.DEFAULT_STROKE_WIDTH * 3f, dwellDotPaint)
+        }
+
+        // Draw dashed borders around all diagram areas
+        for (area in diagramAreas) {
+            val topY = TOP_MARGIN + area.startLineIndex * LINE_SPACING
+            val bottomY = TOP_MARGIN + (area.startLineIndex + area.heightInLines) * LINE_SPACING
+            canvas.drawRect(0f, topY, canvasRight, bottomY, freeformPreviewPaint)
         }
 
         canvas.restore()

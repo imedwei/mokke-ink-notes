@@ -9,6 +9,7 @@ import com.writer.model.InkStroke
 import com.writer.model.StrokePoint
 import com.writer.model.StrokeType
 import com.writer.model.maxY
+import com.writer.model.shiftY
 import com.writer.view.ScratchOutDetection
 import com.writer.recognition.TextRecognizer
 import com.writer.recognition.LineSegmenter
@@ -117,7 +118,7 @@ class WritingCoordinator(
         }
         textView.onTextTap = { lineIndex -> scrollToLine(lineIndex) }
         inkCanvas.onDiagramShapeDetected = { stroke -> onDiagramShapeDetected(stroke) }
-        inkCanvas.onDiagramStrokeOverflow = { minY, maxY -> onDiagramStrokeOverflow(minY, maxY) }
+        inkCanvas.onDiagramStrokeOverflow = { strokeId, minY, maxY -> onDiagramStrokeOverflow(strokeId, minY, maxY) }
         inkCanvas.onScratchOut = { scratchPoints, left, top, right, bottom ->
             onScratchOut(scratchPoints, left, top, right, bottom)
         }
@@ -158,6 +159,28 @@ class WritingCoordinator(
     private fun isDiagramLine(lineIdx: Int): Boolean =
         documentModel.diagramAreas.any { it.containsLine(lineIdx) }
 
+    /** Check if a line has pre-existing strokes (not inside any diagram area). */
+    private fun hasTextStrokesOnLine(lineIdx: Int, excluding: InkStroke? = null): Boolean =
+        documentModel.activeStrokes.any {
+            it !== excluding &&
+            !isDiagramLine(lineSegmenter.getStrokeLineIndex(it)) &&
+            lineSegmenter.getStrokeLineIndex(it) == lineIdx
+        }
+
+    /**
+     * Find the nearest line with pre-existing text strokes in the given direction.
+     * Returns the line index, or null if none found within [limit] lines.
+     */
+    private fun nearestTextLine(fromLine: Int, direction: Int, limit: Int = 3): Int? {
+        var line = fromLine
+        repeat(limit) {
+            line += direction
+            if (line < 0) return null
+            if (hasTextStrokesOnLine(line)) return line
+        }
+        return null
+    }
+
     private fun onStrokeCompleted(stroke: InkStroke) {
         textRefreshJob?.cancel()
         if (gestureHandler.tryHandle(stroke)) {
@@ -176,6 +199,32 @@ class WritingCoordinator(
             if (stroke.strokeType == StrokeType.FREEHAND) {
                 val area = documentModel.diagramAreas.find { it.containsLine(lineIdx) }
                 if (area != null) recognizeDiagramArea(area)
+            }
+            return
+        }
+
+        // Sticky zone: if a geometric (shape-snapped) stroke lands adjacent to a diagram
+        // area, expand it. Freehand strokes do NOT trigger sticky expansion — they're
+        // likely text and should stay outside the diagram.
+        val adjacentArea = documentModel.diagramAreas.find {
+            lineIdx == it.startLineIndex - 1 || lineIdx == it.endLineIndex + 1
+        }
+        if (adjacentArea != null && stroke.isGeometric && !hasTextStrokesOnLine(lineIdx, excluding = stroke)) {
+            val newStart = minOf(adjacentArea.startLineIndex, lineIdx)
+            val newEnd = maxOf(adjacentArea.endLineIndex, lineIdx)
+            documentModel.diagramAreas.remove(adjacentArea)
+            val expanded = adjacentArea.copy(
+                startLineIndex = newStart,
+                heightInLines = newEnd - newStart + 1
+            )
+            documentModel.diagramAreas.add(expanded)
+            inkCanvas.diagramAreas = documentModel.diagramAreas.toList()
+            for (line in newStart..newEnd) {
+                lineTextCache.remove(line)
+            }
+            Log.i(TAG, "Sticky zone: expanded diagram ${adjacentArea.startLineIndex}-${adjacentArea.endLineIndex} → $newStart-$newEnd")
+            if (stroke.strokeType == StrokeType.FREEHAND) {
+                recognizeDiagramArea(expanded)
             }
             return
         }
@@ -742,9 +791,10 @@ class WritingCoordinator(
         val topLine = lineSegmenter.getLineIndex(minY)
         val bottomLine = lineSegmenter.getLineIndex(maxY)
 
-        // Exact bounding box — no padding
-        var mergeStart = topLine
-        var mergeHeight = bottomLine - topLine + 1
+        // 1-line padding on each side to fully contain shapes.
+        // No strokes are moved — scroll adjusts so diagram stays on screen.
+        var mergeStart = (topLine - 1).coerceAtLeast(0)
+        var mergeHeight = (bottomLine + 1) - mergeStart + 1
 
         // Merge with adjacent diagram area above
         val above = documentModel.diagramAreas.find { it.endLineIndex + 1 >= mergeStart && it.endLineIndex < mergeStart + mergeHeight }
@@ -788,7 +838,7 @@ class WritingCoordinator(
      * Called when a stroke inside a diagram area extends beyond its bounds.
      * Expands the diagram area to cover the stroke's Y range.
      */
-    private fun onDiagramStrokeOverflow(strokeMinY: Float, strokeMaxY: Float) {
+    private fun onDiagramStrokeOverflow(overflowStrokeId: String, strokeMinY: Float, strokeMaxY: Float) {
         val strokeTopLine = lineSegmenter.getLineIndex(strokeMinY)
         val strokeBottomLine = lineSegmenter.getLineIndex(strokeMaxY)
 
@@ -798,24 +848,101 @@ class WritingCoordinator(
             strokeTopLine <= it.endLineIndex && strokeBottomLine >= it.startLineIndex
         } ?: return
 
-        val newStart = minOf(area.startLineIndex, strokeTopLine)
-        val newEnd = maxOf(area.endLineIndex, strokeBottomLine)
+        val ls = HandwritingCanvasView.LINE_SPACING
+        val linesAbove = maxOf(0, area.startLineIndex - strokeTopLine + 1)  // +1 for padding
+        val linesBelow = maxOf(0, strokeBottomLine - area.endLineIndex + 1)
 
-        if (newStart == area.startLineIndex && newEnd == area.endLineIndex) return // no change
+        if (linesAbove == 0 && linesBelow == 0) return
 
-        documentModel.diagramAreas.remove(area)
-        val expanded = area.copy(
-            startLineIndex = newStart,
-            heightInLines = newEnd - newStart + 1
+        val diagramTopY = lineSegmenter.getLineY(area.startLineIndex)
+
+        // Upward expansion: shift diagram strokes and the overflow stroke DOWN.
+        // Text above stays in place.
+        // Use centroid (getStrokeLineIndex) to classify — avoids catching text
+        // descenders that barely cross the diagram boundary.
+        // The overflow stroke is identified by matching its Y bounds.
+        if (linesAbove > 0) {
+            val shiftPx = linesAbove * ls
+            val shifted = documentModel.activeStrokes.map { stroke ->
+                val strokeLine = lineSegmenter.getStrokeLineIndex(stroke)
+                val isInsideDiagram = strokeLine >= area.startLineIndex
+                val isOverflowStroke = stroke.strokeId == overflowStrokeId
+                if (isInsideDiagram || isOverflowStroke) stroke.shiftY(shiftPx) else stroke
+            }
+            documentModel.activeStrokes.clear()
+            documentModel.activeStrokes.addAll(shifted)
+
+            // Shift diagram areas at or below
+            val shiftedAreas = documentModel.diagramAreas.map { other ->
+                if (other.startLineIndex >= area.startLineIndex)
+                    other.copy(startLineIndex = other.startLineIndex + linesAbove)
+                else other
+            }
+            documentModel.diagramAreas.clear()
+            documentModel.diagramAreas.addAll(shiftedAreas)
+
+            // Shift text cache
+            val shiftedCache = lineTextCache.entries.associate { (line, text) ->
+                (if (line >= area.startLineIndex) line + linesAbove else line) to text
+            }
+            lineTextCache.clear()
+            lineTextCache.putAll(shiftedCache)
+
+            // Scroll so diagram appears at same screen position
+            inkCanvas.scrollOffsetY += shiftPx
+        }
+
+        // Downward expansion: shift strokes below the diagram DOWN,
+        // but NOT the overflow stroke (it stays — it's part of the diagram).
+        // Use centroid to classify. Overflow stroke identified by Y bounds.
+        if (linesBelow > 0) {
+            val shiftPx = linesBelow * ls
+            val postEndLine = area.endLineIndex + linesAbove  // adjusted for upward shift
+            val shifted = documentModel.activeStrokes.map { stroke ->
+                val strokeLine = lineSegmenter.getStrokeLineIndex(stroke)
+                val isOverflowStroke = stroke.strokeId == overflowStrokeId
+                if (strokeLine > postEndLine && !isOverflowStroke)
+                    stroke.shiftY(shiftPx) else stroke
+            }
+            documentModel.activeStrokes.clear()
+            documentModel.activeStrokes.addAll(shifted)
+
+            val shiftedAreas = documentModel.diagramAreas.map { other ->
+                if (other.startLineIndex > postEndLine)
+                    other.copy(startLineIndex = other.startLineIndex + linesBelow)
+                else other
+            }
+            documentModel.diagramAreas.clear()
+            documentModel.diagramAreas.addAll(shiftedAreas)
+
+            val shiftedCache = lineTextCache.entries.associate { (line, text) ->
+                (if (line > postEndLine) line + linesBelow else line) to text
+            }
+            lineTextCache.clear()
+            lineTextCache.putAll(shiftedCache)
+        }
+
+        // Expand diagram: keep original startLineIndex, grow height.
+        // After upward shift, the area moved to startLineIndex + linesAbove.
+        // We expand it back to the original startLineIndex.
+        val shiftedArea = documentModel.diagramAreas.find {
+            it.startLineIndex == area.startLineIndex + linesAbove
+        } ?: return
+        documentModel.diagramAreas.remove(shiftedArea)
+        val expanded = DiagramArea(
+            startLineIndex = area.startLineIndex,
+            heightInLines = area.heightInLines + linesAbove + linesBelow
         )
         documentModel.diagramAreas.add(expanded)
-        inkCanvas.diagramAreas = documentModel.diagramAreas.toList()
 
-        // Invalidate text cache for newly covered lines
-        for (line in newStart..newEnd) {
+        // Update canvas
+        inkCanvas.loadStrokes(documentModel.activeStrokes.toList())
+        inkCanvas.diagramAreas = documentModel.diagramAreas.toList()
+        for (line in expanded.startLineIndex..expanded.endLineIndex) {
             lineTextCache.remove(line)
         }
-        Log.i(TAG, "Expanded diagram area: ${area.startLineIndex}-${area.endLineIndex} → $newStart-$newEnd")
+        Log.i(TAG, "Expanded diagram: ${area.startLineIndex}-${area.endLineIndex} → " +
+            "${expanded.startLineIndex}-${expanded.endLineIndex} (↓above=$linesAbove ↓below=$linesBelow)")
     }
 
     // --- Undo / Redo ---
