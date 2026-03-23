@@ -22,6 +22,7 @@ import com.onyx.android.sdk.pen.RawInputCallback
 import com.onyx.android.sdk.pen.TouchHelper
 import com.onyx.android.sdk.pen.data.TouchPointList
 import com.writer.model.DiagramArea
+import com.writer.ui.writing.DiagramStrokeClassifier
 import com.writer.model.DocumentModel
 import com.writer.model.InkStroke
 import com.writer.model.StrokePoint
@@ -188,6 +189,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
             val docPt = tp.toDocStrokePoint()
             currentStrokePoints.add(docPt)
             updateStrokeBounds(currentStrokePoints.last())
+            checkDwellCancellation()
         }
 
         override fun onRawDrawingTouchPointListReceived(tpl: TouchPointList) {
@@ -331,6 +333,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
                 currentPath.lineTo(x, y)
                 currentStrokePoints.add(StrokePoint(x, y, pressure, timestamp))
                 updateStrokeBounds(currentStrokePoints.last())
+                checkDwellCancellation()
                 drawToSurface()
                 return true
             }
@@ -551,26 +554,39 @@ class HandwritingCanvasView @JvmOverloads constructor(
                 drawToSurface()
                 resumeRawDrawing()
             } else if (dwellIndicatorShown) {
-                // Start-dwell without shape → create freeform diagram zone
+                // Start-dwell without shape → check if stroke looks like drawing
+                // (layer 2 disambiguation: reject text-like strokes even with dwell)
                 val stroke = InkStroke(
                     points = currentStrokePoints.toList(),
                     isGeometric = false,
                     strokeType = StrokeType.FREEHAND
                 )
-                completedStrokes.add(stroke)
-                onStrokeCompleted?.invoke(stroke)
-                onDiagramShapeDetected?.invoke(stroke)
-                dwellDotCenter = null
-                dwellIndicatorShown = false
-                currentStrokePoints.clear()
-                currentPath.reset()
-                currentDiagramBounds = null
-
-                // Show dashed border, then clear preview state
-                pauseRawDrawing()
-                drawToSurface()
-                resumeRawDrawing()
-    
+                val drawingScore = DiagramStrokeClassifier.classifyStroke(
+                    stroke, LINE_SPACING, includeConnector = false
+                )
+                if (drawingScore >= 0.5f) {
+                    // Drawing-like stroke with dwell → create freeform diagram zone
+                    completedStrokes.add(stroke)
+                    onStrokeCompleted?.invoke(stroke)
+                    onDiagramShapeDetected?.invoke(stroke)
+                    dwellDotCenter = null
+                    dwellIndicatorShown = false
+                    currentStrokePoints.clear()
+                    currentPath.reset()
+                    currentDiagramBounds = null
+                    pauseRawDrawing()
+                    drawToSurface()
+                    resumeRawDrawing()
+                } else {
+                    // Text-like stroke despite dwell → treat as normal text
+                    completedStrokes.add(stroke)
+                    onStrokeCompleted?.invoke(stroke)
+                    dwellDotCenter = null
+                    dwellIndicatorShown = false
+                    currentStrokePoints.clear()
+                    currentPath.reset()
+                    currentDiagramBounds = null
+                }
             } else {
                 val stroke = InkStroke(points = currentStrokePoints.toList())
                 completedStrokes.add(stroke)
@@ -847,6 +863,24 @@ class HandwritingCanvasView @JvmOverloads constructor(
         }
         dwellJob = job
         handler.postDelayed(job, ARROW_DWELL_MS)
+    }
+
+    /** Cancel dwell if the pen has moved significantly from the first point. */
+    private fun checkDwellCancellation() {
+        val first = currentStrokePoints.firstOrNull() ?: return
+        val last = currentStrokePoints.lastOrNull() ?: return
+        val dx = last.x - first.x
+        val dy = last.y - first.y
+        val distSq = dx * dx + dy * dy
+        // Cancel pending timer if pen moved beyond dwell radius
+        if (dwellJob != null && distSq > ARROW_DWELL_RADIUS_PX * ARROW_DWELL_RADIUS_PX) {
+            cancelDwellJob()
+        }
+        // Clear already-fired dwell if pen moved beyond 2× radius
+        if (dwellIndicatorShown && distSq > ARROW_DWELL_RADIUS_PX * ARROW_DWELL_RADIUS_PX * 4) {
+            dwellIndicatorShown = false
+            dwellDotCenter = null
+        }
     }
 
     private fun cancelDwellJob() {

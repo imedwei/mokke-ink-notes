@@ -43,8 +43,10 @@ object DiagramStrokeClassifier {
 
     /**
      * Compute a drawing score for a single stroke (0.0 = text, 1.0 = drawing).
+     * @param includeConnector whether to include the connector heuristic (wide+flat).
+     *        Set to false for dwell disambiguation — cursive text is wide+flat but not a connector.
      */
-    fun classifyStroke(stroke: InkStroke, lineSpacing: Float): Float {
+    fun classifyStroke(stroke: InkStroke, lineSpacing: Float, includeConnector: Boolean = true): Float {
         if (stroke.points.size < 2) return 0f
 
         val w = stroke.xRange
@@ -69,8 +71,8 @@ object DiagramStrokeClassifier {
             }
         }
 
-        // C: Large size
-        if (max(w, h) > SIZE_THRESHOLD * lineSpacing) {
+        // C: Large vertical size (height matters, not width — text is naturally wide)
+        if (h > SIZE_THRESHOLD * lineSpacing) {
             score += 0.3f
         }
 
@@ -84,8 +86,9 @@ object DiagramStrokeClassifier {
             }
         }
 
-        // E: Connector (existing heuristic, auto-drawing)
-        if (w > CONNECTOR_WIDTH * lineSpacing && h < CONNECTOR_HEIGHT_RATIO * w) {
+        // E: Connector (wide + flat → auto-drawing). Skipped for dwell disambiguation
+        // because cursive text is also wide+flat.
+        if (includeConnector && w > CONNECTOR_WIDTH * lineSpacing && h < CONNECTOR_HEIGHT_RATIO * w) {
             score = 1.0f
         }
 
