@@ -23,3 +23,14 @@ local.properties
 
 # Local environment config (not committed — copy and adapt per machine)
 .envrc
+
+# Claude Code local artifacts
+.claude/settings.local.json
+.claude/reviews/
+.claude/plans/
+
+# Codanna local config
+.codannaignore
+
+# Temporary debugging artifacts (screenshots, bug reports)
+/tmp/
