@@ -44,6 +44,12 @@ class RecognizedTextView @JvmOverloads constructor(
         private val BULLET_HANG_INDENT    get() = ScreenMetrics.dp(54f).toInt()
         private const val BULLET_PREFIX   = "\u2022  "
         private val HEADING_SPACING_AFTER get() = ScreenMetrics.dp(6f)
+        private val BOTTOM_PADDING        get() = ScreenMetrics.dp(5f)
+
+        // Gutter tap zone thresholds (multiples of GUTTER_WIDTH from top)
+        private const val GUTTER_LOGO_ZONE  = 1.2f
+        private const val GUTTER_UNDO_ZONE  = 2.4f
+        private const val GUTTER_REDO_ZONE  = 3.6f
     }
 
     private val textPaint = TextPaint().apply {
@@ -173,6 +179,12 @@ class RecognizedTextView @JvmOverloads constructor(
 
     /** Called when the user taps the "I" logo. */
     var onLogoTap: (() -> Unit)? = null
+
+    /** Called when the user taps the undo button in the gutter. */
+    var onUndoTap: (() -> Unit)? = null
+
+    /** Called when the user taps the redo button in the gutter. */
+    var onRedoTap: (() -> Unit)? = null
 
     /** Called when the user taps on a text segment. Passes the written lineIndex. */
     var onTextTap: ((Int) -> Unit)? = null

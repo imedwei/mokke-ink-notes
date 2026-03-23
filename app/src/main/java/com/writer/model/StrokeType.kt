@@ -1,0 +1,44 @@
+package com.writer.model
+
+enum class StrokeType {
+    FREEHAND,
+    LINE,
+    ARROW_HEAD,          // arrowhead at end (→)
+    ARROW_TAIL,          // arrowhead at start (←)
+    ARROW_BOTH,          // bidirectional (↔)
+    ELBOW,
+    ELBOW_ARROW_HEAD,
+    ELBOW_ARROW_TAIL,
+    ELBOW_ARROW_BOTH,
+    ARC,
+    ARC_ARROW_HEAD,
+    ARC_ARROW_TAIL,
+    ARC_ARROW_BOTH,
+    ELLIPSE,
+    RECTANGLE,
+    ROUNDED_RECTANGLE,
+    TRIANGLE,
+    DIAMOND;
+
+    /** True for LINE, ARROW_HEAD, ARROW_TAIL, ARROW_BOTH — strokes rendered as a single segment. */
+    val isArrowOrLine: Boolean get() = this == LINE || this == ARROW_HEAD || this == ARROW_TAIL || this == ARROW_BOTH
+
+    /** True for any connector type (line, elbow, arc) — strokes where segments between points should be checked for overlap. */
+    val isConnector: Boolean get() = isArrowOrLine || isElbow || isArc
+
+    /** True for ELBOW and its arrow variants. */
+    val isElbow: Boolean get() = this == ELBOW || this == ELBOW_ARROW_HEAD || this == ELBOW_ARROW_TAIL || this == ELBOW_ARROW_BOTH
+
+    /** True for ARC and its arrow variants. */
+    val isArc: Boolean get() = this == ARC || this == ARC_ARROW_HEAD || this == ARC_ARROW_TAIL || this == ARC_ARROW_BOTH
+
+    /** True if this stroke type has an arrowhead at the tip (end). */
+    val hasArrowAtTip: Boolean get() = this == ARROW_HEAD || this == ARROW_BOTH ||
+        this == ELBOW_ARROW_HEAD || this == ELBOW_ARROW_BOTH ||
+        this == ARC_ARROW_HEAD || this == ARC_ARROW_BOTH
+
+    /** True if this stroke type has an arrowhead at the tail (start). */
+    val hasArrowAtTail: Boolean get() = this == ARROW_TAIL || this == ARROW_BOTH ||
+        this == ELBOW_ARROW_TAIL || this == ELBOW_ARROW_BOTH ||
+        this == ARC_ARROW_TAIL || this == ARC_ARROW_BOTH
+}
