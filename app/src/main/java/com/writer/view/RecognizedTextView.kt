@@ -18,9 +18,9 @@ import android.util.AttributeSet
 import android.view.MotionEvent
 import android.view.View
 import com.writer.model.InkStroke
-import com.writer.ui.writing.WritingCoordinator.DiagramDisplay
-import com.writer.ui.writing.WritingCoordinator.DiagramTextLabel
-import com.writer.ui.writing.WritingCoordinator.TextSegment
+import com.writer.ui.writing.DiagramDisplay
+import com.writer.ui.writing.DiagramTextLabel
+import com.writer.ui.writing.TextSegment
 
 /**
  * Displays recognized text as flowing word-wrapped paragraphs.

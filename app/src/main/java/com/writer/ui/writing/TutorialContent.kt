@@ -30,10 +30,10 @@ data class TutorialData(
     val annotations: List<AnnotationStroke>,
     val textAnnotations: List<TextAnnotation>,
     val scrollOffsetY: Float,
-    val textParagraphs: List<List<WritingCoordinator.TextSegment>>,
+    val textParagraphs: List<List<TextSegment>>,
     val canvasContentHeight: Float = 0f,
     val diagramAreas: List<DiagramArea> = emptyList(),
-    val diagramDisplays: List<WritingCoordinator.DiagramDisplay> = emptyList()
+    val diagramDisplays: List<DiagramDisplay> = emptyList()
 )
 
 object TutorialContent {
@@ -245,22 +245,22 @@ object TutorialContent {
         // --- Text paragraphs for the text view ---
         val textParagraphs = listOf(
             listOf(
-                WritingCoordinator.TextSegment("Shopping List", dimmed = false, lineIndex = 0, heading = true)
+                TextSegment("Shopping List", dimmed = false, lineIndex = 0, heading = true)
             ),
             listOf(
-                WritingCoordinator.TextSegment("Eggs", dimmed = false, lineIndex = 1, listItem = true)
+                TextSegment("Eggs", dimmed = false, lineIndex = 1, listItem = true)
             ),
             listOf(
-                WritingCoordinator.TextSegment("Bread", dimmed = false, lineIndex = 2, listItem = true)
+                TextSegment("Bread", dimmed = false, lineIndex = 2, listItem = true)
             ),
             listOf(
-                WritingCoordinator.TextSegment("The quick brown fox", dimmed = false, lineIndex = 3),
-                WritingCoordinator.TextSegment("jumps over the dog", dimmed = false, lineIndex = 4)
+                TextSegment("The quick brown fox", dimmed = false, lineIndex = 3),
+                TextSegment("jumps over the dog", dimmed = false, lineIndex = 4)
             )
         )
 
         // Diagram display for the text view (smiley rendered inline)
-        val diagramDisplay = WritingCoordinator.DiagramDisplay(
+        val diagramDisplay = DiagramDisplay(
             startLineIndex = 6,
             strokes = smileyStrokes,
             canvasWidth = writingWidth.toFloat(),
