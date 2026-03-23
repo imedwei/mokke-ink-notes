@@ -1,3 +1,4 @@
 # Test fixture JSON files: treat as binary for cleaner diffs and mark as
 # linguist-generated so they don't count toward language statistics.
 app/src/androidTest/assets/fixtures/*.json binary linguist-generated
+app/src/test/resources/fixtures/*.json binary linguist-generated

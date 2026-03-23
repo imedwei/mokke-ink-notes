@@ -42,6 +42,23 @@ Repeat steps 1-4 for each piece. After all pieces are complete:
 6. **Final test run**: `./gradlew testDebugUnitTest` — confirm everything still passes after review fixes.
 7. **Push**: Push to both local and remote feature/fix/dev branch.
 
+## Device Debugging
+
+Screenshots and bug reports are saved to `tmp/` (gitignored).
+
+```bash
+# Capture screenshot from device
+adb exec-out screencap -p > tmp/screenshot.png
+
+# Find latest bug report path
+adb logcat -d | grep "Bug report generated" | tail -1
+
+# Pull bug report (use double quotes to prevent git bash path mangling)
+adb exec-out "cat /storage/emulated/0/Android/data/com.writer.dev/files/Documents/bug-reports/bug-report-TIMESTAMP.json" > tmp/bug-report.json
+```
+
+The app generates bug reports via the menu (hamburger → Bug Report). Reports contain device info, recent stroke history, processing events, and document state.
+
 ## PR Workflow
 
 Before creating a PR, run the self-review cycle locally:
