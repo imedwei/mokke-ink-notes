@@ -53,7 +53,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
         // Top margin before the first line
         val TOP_MARGIN get() = ScreenMetrics.topMargin
         // Arrow dwell detection: radius and time for start/end dwell
-        private const val ARROW_DWELL_RADIUS_PX = 15f   // ~8 dp
+        private val ARROW_DWELL_RADIUS get() = ScreenMetrics.dp(8f)
         // Magnetic snap: max distance in line-spacings to snap arrow to node
         private const val MAGNET_THRESHOLD_SPANS = 1.5f
         private const val ARROW_DWELL_MS = 500L
@@ -636,7 +636,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
         // Without the dwell, the stroke is treated as freehand.
         val last = currentStrokePoints.last()
         val hasEndDwell = ArrowDwellDetection.hasDwellAtEnd(
-            currentStrokePoints, last.x, last.y, ARROW_DWELL_RADIUS_PX, ARROW_DWELL_MS
+            currentStrokePoints, last.x, last.y, ARROW_DWELL_RADIUS, ARROW_DWELL_MS
         )
         if (!hasEndDwell) return null
 
@@ -664,7 +664,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
         val snappedPoints: List<StrokePoint> = when (result) {
             is ShapeSnapDetection.SnapResult.Line -> {
                 val tipDwell = ArrowDwellDetection.hasDwellAtEnd(
-                    currentStrokePoints, result.x2, result.y2, ARROW_DWELL_RADIUS_PX, ARROW_DWELL_MS
+                    currentStrokePoints, result.x2, result.y2, ARROW_DWELL_RADIUS, ARROW_DWELL_MS
                 )
                 strokeType = ArrowDwellDetection.classifyArrow(tipDwell, tailDwell)
                 isGeometric = true
@@ -678,7 +678,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
             is ShapeSnapDetection.SnapResult.Arrow -> return null
             is ShapeSnapDetection.SnapResult.Elbow -> {
                 val tipDwell = ArrowDwellDetection.hasDwellAtEnd(
-                    currentStrokePoints, result.x2, result.y2, ARROW_DWELL_RADIUS_PX, ARROW_DWELL_MS
+                    currentStrokePoints, result.x2, result.y2, ARROW_DWELL_RADIUS, ARROW_DWELL_MS
                 )
                 strokeType = ArrowDwellDetection.classifyElbow(tipDwell, tailDwell)
                 isGeometric = true
@@ -692,7 +692,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
             }
             is ShapeSnapDetection.SnapResult.Arc -> {
                 val tipDwell = ArrowDwellDetection.hasDwellAtEnd(
-                    currentStrokePoints, result.x2, result.y2, ARROW_DWELL_RADIUS_PX, ARROW_DWELL_MS
+                    currentStrokePoints, result.x2, result.y2, ARROW_DWELL_RADIUS, ARROW_DWELL_MS
                 )
                 strokeType = ArrowDwellDetection.classifyArc(tipDwell, tailDwell)
                 isGeometric = false
@@ -774,7 +774,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
             }
             is ShapeSnapDetection.SnapResult.Curve -> {
                 val tipDwell = ArrowDwellDetection.hasDwellAtEnd(
-                    currentStrokePoints, last.x, last.y, ARROW_DWELL_RADIUS_PX, ARROW_DWELL_MS
+                    currentStrokePoints, last.x, last.y, ARROW_DWELL_RADIUS, ARROW_DWELL_MS
                 )
                 strokeType = ArrowDwellDetection.classifyArc(tipDwell, tailDwell)
                 isGeometric = false
@@ -783,7 +783,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
             }
             is ShapeSnapDetection.SnapResult.SelfLoop -> {
                 val tipDwell = ArrowDwellDetection.hasDwellAtEnd(
-                    currentStrokePoints, last.x, last.y, ARROW_DWELL_RADIUS_PX, ARROW_DWELL_MS
+                    currentStrokePoints, last.x, last.y, ARROW_DWELL_RADIUS, ARROW_DWELL_MS
                 )
                 strokeType = ArrowDwellDetection.classifyArc(tipDwell, tailDwell)
                 isGeometric = false
@@ -851,7 +851,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
             val last = pts.lastOrNull() ?: return@Runnable
             val dx = last.x - first.x
             val dy = last.y - first.y
-            if (dx * dx + dy * dy < ARROW_DWELL_RADIUS_PX * ARROW_DWELL_RADIUS_PX) {
+            if (dx * dx + dy * dy < ARROW_DWELL_RADIUS * ARROW_DWELL_RADIUS) {
                 dwellIndicatorShown = true
                 dwellDotCenter = PointF(first.x, first.y)
                 // Draw indicator to surface; on Boox the SDK overlay may obscure it
@@ -873,11 +873,11 @@ class HandwritingCanvasView @JvmOverloads constructor(
         val dy = last.y - first.y
         val distSq = dx * dx + dy * dy
         // Cancel pending timer if pen moved beyond dwell radius
-        if (dwellJob != null && distSq > ARROW_DWELL_RADIUS_PX * ARROW_DWELL_RADIUS_PX) {
+        if (dwellJob != null && distSq > ARROW_DWELL_RADIUS * ARROW_DWELL_RADIUS) {
             cancelDwellJob()
         }
         // Clear already-fired dwell if pen moved beyond 2× radius
-        if (dwellIndicatorShown && distSq > ARROW_DWELL_RADIUS_PX * ARROW_DWELL_RADIUS_PX * 4) {
+        if (dwellIndicatorShown && distSq > ARROW_DWELL_RADIUS * ARROW_DWELL_RADIUS * 4) {
             dwellIndicatorShown = false
             dwellDotCenter = null
         }
