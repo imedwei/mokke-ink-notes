@@ -27,6 +27,7 @@ import com.writer.storage.DocumentStorage
 import com.writer.view.HandwritingCanvasView
 import com.writer.view.RecognizedTextView
 import com.writer.view.TouchFilter
+import com.writer.view.ScreenMetrics
 import kotlinx.coroutines.launch
 
 class WritingActivity : AppCompatActivity() {
@@ -126,7 +127,11 @@ class WritingActivity : AppCompatActivity() {
             getCoordinator = { coordinator },
             getPendingRestore = { pendingRestore },
             clearPendingRestore = { pendingRestore = null },
-            onClosed = { recognizedTextView.onLogoTap = { showMenu() } }
+            onClosed = {
+                recognizedTextView.onLogoTap = { showMenu() }
+                recognizedTextView.onUndoTap = { coordinator?.undo() }
+                recognizedTextView.onRedoTap = { coordinator?.redo() }
+            }
         )
 
         // Migrate old single-file storage if needed, then determine current document
@@ -162,17 +167,36 @@ class WritingActivity : AppCompatActivity() {
 
         // Tap "I" logo to open menu
         recognizedTextView.onLogoTap = { showMenu() }
+        recognizedTextView.onUndoTap = { coordinator?.undo() }
+        recognizedTextView.onRedoTap = { coordinator?.redo() }
 
-        // Pick the best available recognizer synchronously (initialized later in coroutine)
+        // Pick the best available recognizer synchronously (initialized later in coroutine).
+        // OnyxHwrTextRecognizer binds to a system service using applicationContext, so holding
+        // it in the activity is safe (no activity leak). GoogleMLKitTextRecognizer is stateless
+        // and does not retain a context reference.
         recognizer = TextRecognizerFactory.create(this)
 
         // Create coordinator early so cached text can be displayed before model loads
         startCoordinator()
 
-        // Capture default heights after initial layout, then wire up the divider drag
+        // Capture default heights after initial layout, then wire up the divider drag.
+        // Override the XML weight-based split with an adaptive calculation so that
+        // all supported screen sizes get a proportional canvas/text split.
         recognizedTextView.post {
-            defaultTextHeight = recognizedTextView.height
-            defaultCanvasHeight = inkCanvas.height
+            val totalHeight = recognizedTextView.height + inkCanvas.height
+            defaultCanvasHeight = ScreenMetrics.computeDefaultCanvasHeight(totalHeight)
+            defaultTextHeight = totalHeight - defaultCanvasHeight
+
+            val textParams = recognizedTextView.layoutParams as LinearLayout.LayoutParams
+            textParams.height = defaultTextHeight
+            textParams.weight = 0f
+            recognizedTextView.layoutParams = textParams
+
+            val canvasParams = inkCanvas.layoutParams as LinearLayout.LayoutParams
+            canvasParams.height = defaultCanvasHeight
+            canvasParams.weight = 0f
+            inkCanvas.layoutParams = canvasParams
+
             setupSplitDrag(splitLayout, splitDivider)
 
             // Restore cached text and scroll position immediately (no recognizer needed)

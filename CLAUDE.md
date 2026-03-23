@@ -14,7 +14,7 @@ JAVA_HOME="/c/Program Files/Android/Android Studio/jbr" ./gradlew assembleDebug
 ### Install to tablet
 
 ```bash
-"/c/Users/Durham/AppData/Local/Android/Sdk/platform-tools/adb.exe" install -r app/build/outputs/apk/debug/app-debug.apk
+./gradlew installDebug
 ```
 
 ### Tests

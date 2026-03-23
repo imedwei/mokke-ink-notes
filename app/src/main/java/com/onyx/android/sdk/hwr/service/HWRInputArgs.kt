@@ -44,6 +44,13 @@ class HWRInputArgs() : Parcelable {
     }
 
     override fun writeToParcel(parcel: Parcel, flags: Int) {
+        // Write the class-name string that the Boox ksync service expects as a
+        // manual envelope. The service's own AIDL uses HWRInputData (not this class)
+        // and its unmarshalling code reads a leading class-name string before the
+        // fields. We cannot use writeParcelable() here because the receiving side
+        // deserializes with its own classloader keyed on this exact string, not on
+        // the Parcelable CREATOR of our class. The field order and class-name must
+        // match the service's expectations byte-for-byte.
         parcel.writeString("com.onyx.android.sdk.hwr.bean.HWRInputData")
         parcel.writeString(lang)
         parcel.writeString(contentType)
@@ -58,6 +65,9 @@ class HWRInputArgs() : Parcelable {
         parcel.writeByte(if (isIncremental) 1 else 0)
         val localPfd = pfd
         if (localPfd != null) {
+            // Same manual envelope: the service reads a class-name string before
+            // calling ParcelFileDescriptor's own readFromParcel, so we must write
+            // the expected class name rather than using writeParcelable().
             parcel.writeString("android.os.ParcelFileDescriptor")
             localPfd.writeToParcel(parcel, flags)
         } else {

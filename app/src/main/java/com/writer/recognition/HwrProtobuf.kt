@@ -25,7 +25,11 @@ object HwrProtobuf {
     fun buildProtobuf(
         line: InkLine, viewWidth: Float, viewHeight: Float, lang: String = "en_US"
     ): ByteArray {
-        val out = ByteArrayOutputStream()
+        // Pre-compute expected size: ~48 bytes per pointer event (tag + length-delimited
+        // sub-message with 4 fixed32 fields + 2 varints), plus ~60 bytes of header fields.
+        val totalPoints = line.strokes.sumOf { it.points.size }
+        val estimatedSize = 60 + totalPoints * 48
+        val out = ByteArrayOutputStream(estimatedSize)
 
         writeTag(out, 1, 2); writeString(out, lang)
         writeTag(out, 2, 2); writeString(out, "Text")

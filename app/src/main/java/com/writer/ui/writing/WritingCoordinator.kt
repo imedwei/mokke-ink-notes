@@ -4,8 +4,12 @@ import android.util.Log
 import com.writer.model.DiagramArea
 import com.writer.model.DocumentModel
 import com.writer.model.InkStroke
+import com.writer.model.minX
+import com.writer.model.maxX
+import com.writer.model.minY
 import com.writer.model.maxY
 import com.writer.model.shiftY
+import com.writer.view.ScratchOutDetection
 import com.writer.recognition.TextRecognizer
 import com.writer.recognition.LineSegmenter
 import com.writer.recognition.StrokeClassifier
@@ -121,6 +125,12 @@ class WritingCoordinator(
         inkCanvas.onUndoGestureEnd = {
             undoManager.endScrub()
         }
+        inkCanvas.onScratchOut = { left, top, right, bottom ->
+            onScratchOut(left, top, right, bottom)
+        }
+        inkCanvas.onStrokeReplaced = { oldStrokeId, newStroke ->
+            onStrokeReplaced(oldStrokeId, newStroke)
+        }
     }
 
     fun stop() {
@@ -139,6 +149,8 @@ class WritingCoordinator(
         inkCanvas.onUndoGestureStart = null
         inkCanvas.onUndoGestureStep = null
         inkCanvas.onUndoGestureEnd = null
+        inkCanvas.onScratchOut = null
+        inkCanvas.onStrokeReplaced = null
     }
 
     fun reset() {
@@ -193,6 +205,32 @@ class WritingCoordinator(
         if (lineIdx > highestLineIndex) {
             highestLineIndex = lineIdx
         }
+    }
+
+    private fun onStrokeReplaced(oldStrokeId: String, newStroke: InkStroke) {
+        saveUndoSnapshot()  // captures state with raw stroke (state N+1)
+        documentModel.activeStrokes.removeAll { it.strokeId == oldStrokeId }
+        documentModel.activeStrokes.add(newStroke)
+        Log.i(TAG, "Stroke replaced: $oldStrokeId → ${newStroke.strokeId} (${newStroke.strokeType})")
+    }
+
+    private fun onScratchOut(left: Float, top: Float, right: Float, bottom: Float) {
+        val overlapping = documentModel.activeStrokes.filter { stroke ->
+            stroke.points.any { pt -> pt.x in left..right && pt.y in top..bottom }
+                || stroke.strokeType.isConnector
+                    && ScratchOutDetection.strokeIntersectsRect(stroke.points, left, top, right, bottom)
+        }
+        if (overlapping.isEmpty()) return
+
+        saveUndoSnapshot()
+
+        val idsToRemove = overlapping.map { it.strokeId }.toSet()
+        documentModel.activeStrokes.removeAll { it.strokeId in idsToRemove }
+
+        inkCanvas.removeStrokes(idsToRemove)
+        inkCanvas.drawToSurface()
+
+        Log.i(TAG, "Scratch-out erase: removed ${overlapping.size} strokes in [$left,$top,$right,$bottom]")
     }
 
     // --- Recognition ---
