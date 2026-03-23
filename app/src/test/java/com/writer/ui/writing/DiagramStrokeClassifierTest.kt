@@ -165,8 +165,9 @@ class DiagramStrokeClassifierTest {
 
     // ── Drawing contagion ────────────────────────────────────────────────────
 
-    @Test fun freehandAdjacentToGeometricShape_becomesDrawing() {
-        // Small freehand stroke near a geometric rectangle
+    @Test fun freehandAdjacentToGeometricShape_staysText() {
+        // Small freehand stroke near a geometric rectangle — text labels near
+        // shapes are common and should NOT become drawing via contagion
         val textStroke = makeTextStroke(155f, 350f)  // adjacent to the shape
         val shape = makeGeometricRect(100f, 300f, 50f, 80f)
 
@@ -176,8 +177,8 @@ class DiagramStrokeClassifierTest {
             lineSpacing = LS
         )
 
-        assertTrue("Freehand adjacent to shape should become drawing (contagion)", drawing.size == 1)
-        assertTrue("No text candidates", text.isEmpty())
+        assertTrue("Freehand adjacent to shape should stay text", text.size == 1)
+        assertTrue("No drawing strokes", drawing.isEmpty())
     }
 
     @Test fun freehandAdjacentToTallDrawingStroke_becomesDrawing() {
@@ -211,11 +212,9 @@ class DiagramStrokeClassifierTest {
         assertTrue("Text stroke ID preserved", text[0].strokeId == textStroke.strokeId)
     }
 
-    @Test fun textInsideShape_staysText_whenNoDrawingContagion() {
-        // Text stroke whose centroid is inside a shape, but it's the only
-        // freehand stroke — no drawing contagion from the shape alone
-        // because the shape is geometric, triggering contagion.
-        // This tests that shapes DO trigger contagion (by design).
+    @Test fun textInsideShape_staysText() {
+        // Text stroke inside a shape — this is a common diagram label
+        // (e.g., "Start" inside a rectangle). Shapes must NOT trigger contagion.
         val shape = makeGeometricRect(80f, 280f, 100f, 60f)
         val textInside = makeTextStroke(100f, 300f)
 
@@ -225,8 +224,8 @@ class DiagramStrokeClassifierTest {
             lineSpacing = LS
         )
 
-        // Shape adjacency triggers contagion — text near shapes is drawing
-        assertTrue("Text near shape becomes drawing via contagion", drawing.size == 1)
+        assertTrue("Text inside shape should stay text", text.size == 1)
+        assertTrue("No drawing strokes", drawing.isEmpty())
     }
 
     @Test fun isolatedTextGroup_notAffectedByDistantShape() {
@@ -251,8 +250,8 @@ class DiagramStrokeClassifierTest {
         val shape1 = makeGeometricRect(100f, 200f, 80f, 60f)
         val shape2 = makeGeometricRect(300f, 200f, 80f, 60f)
 
-        // Text label far from shapes (diagram title at top)
-        val titleText = makeTextStroke(200f, 100f)
+        // Text label far from drawings and shapes (diagram title well above)
+        val titleText = makeTextStroke(200f, 10f)
 
         // Freehand arrow between shapes (tall, near shapes)
         val arrow = makeTallStroke(190f, 210f, LS * 1.8f)
@@ -266,10 +265,10 @@ class DiagramStrokeClassifierTest {
             lineSpacing = LS
         )
 
-        // Arrow is drawing (tall). Annotation near shape1 gets contagion.
-        // Title text is far from shapes — might stay text depending on distance.
+        // Arrow is drawing (tall). Annotation near shape stays text (shapes don't
+        // trigger contagion). But if annotation is near the arrow, contagion applies.
         assertTrue("Arrow should be drawing", drawing.any { it.strokeId == arrow.strokeId })
-        assertTrue("Annotation near shape should be drawing (contagion)",
-            drawing.any { it.strokeId == annotation.strokeId })
+        // Title text stays text (far from drawing strokes)
+        assertTrue("Title text should be text", text.any { it.strokeId == titleText.strokeId })
     }
 }
