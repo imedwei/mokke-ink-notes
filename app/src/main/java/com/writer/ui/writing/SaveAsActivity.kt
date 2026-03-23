@@ -13,7 +13,6 @@ import com.writer.model.InkStroke
 import com.writer.model.minX
 import com.writer.model.maxX
 import com.writer.recognition.TextRecognizerFactory
-import com.writer.ui.writing.GestureHandler
 import com.writer.view.HandwritingNameInput
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
