@@ -10,8 +10,10 @@ import android.app.Activity
 import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.PopupWindow
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
@@ -42,6 +44,11 @@ class WritingActivity : AppCompatActivity() {
     private lateinit var inkCanvas: HandwritingCanvasView
     private lateinit var recognizedTextView: RecognizedTextView
 
+    // Floating gutter overlay
+    private lateinit var gutterOverlay: View
+    private lateinit var menuButton: TextView
+    private lateinit var undoButton: ImageView
+    private lateinit var redoButton: ImageView
     private lateinit var documentModel: DocumentModel
     private lateinit var recognizer: TextRecognizer
     private var coordinator: WritingCoordinator? = null
@@ -114,6 +121,18 @@ class WritingActivity : AppCompatActivity() {
         val splitLayout = findViewById<com.writer.view.SplitLayout>(R.id.splitLayout)
         val splitDivider = findViewById<View>(R.id.splitDivider)
 
+        // Floating gutter overlay
+        gutterOverlay = findViewById(R.id.gutterOverlay)
+        menuButton = findViewById(R.id.menuButton)
+        undoButton = findViewById(R.id.undoButton)
+        redoButton = findViewById(R.id.redoButton)
+
+        undoButton.imageAlpha = 77
+        redoButton.imageAlpha = 77
+        menuButton.setOnClickListener { showMenu() }
+        undoButton.setOnClickListener { debounceUndoRedo { coordinator?.undo(); updateUndoRedoButtons() } }
+        redoButton.setOnClickListener { debounceUndoRedo { coordinator?.redo(); updateUndoRedoButtons() } }
+
         val touchFilter = TouchFilter()
         inkCanvas.touchFilter = touchFilter
         recognizedTextView.touchFilter = touchFilter
@@ -127,11 +146,7 @@ class WritingActivity : AppCompatActivity() {
             getCoordinator = { coordinator },
             getPendingRestore = { pendingRestore },
             clearPendingRestore = { pendingRestore = null },
-            onClosed = {
-                recognizedTextView.onLogoTap = { showMenu() }
-                recognizedTextView.onUndoTap = { coordinator?.undo() }
-                recognizedTextView.onRedoTap = { coordinator?.redo() }
-            }
+            onClosed = {}
         )
 
         // Migrate old single-file storage if needed, then determine current document
@@ -146,9 +161,11 @@ class WritingActivity : AppCompatActivity() {
         pendingRestore = DocumentStorage.load(this, currentDocumentName)
         restoreDocumentVisuals()
 
-        // Wire pen state from canvas to text view (for floating icon auto-hide)
+        // Update undo/redo buttons when pen lifts (new strokes may have been added)
         inkCanvas.onPenStateChanged = { active ->
-            recognizedTextView.onPenStateChanged(active)
+            if (!active) {
+                gutterOverlay.post { updateUndoRedoButtons() }
+            }
         }
 
         // Text view scroll drives canvas scroll (complementary views)
@@ -164,11 +181,6 @@ class WritingActivity : AppCompatActivity() {
             inkCanvas.drawToSurface()
             inkCanvas.onManualScroll?.invoke()
         }
-
-        // Tap "I" logo to open menu
-        recognizedTextView.onLogoTap = { showMenu() }
-        recognizedTextView.onUndoTap = { coordinator?.undo() }
-        recognizedTextView.onRedoTap = { coordinator?.redo() }
 
         // Pick the best available recognizer synchronously (initialized later in coroutine).
         // OnyxHwrTextRecognizer binds to a system service using applicationContext, so holding
@@ -291,6 +303,7 @@ class WritingActivity : AppCompatActivity() {
             }
         )
         coordinator?.onHeadingDetected = { heading -> autoRenameFromHeading(heading) }
+        coordinator?.onUndoRedoStateChanged = { updateUndoRedoButtons() }
         coordinator?.start()
 
     }
@@ -304,6 +317,30 @@ class WritingActivity : AppCompatActivity() {
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
             .putString(PREF_CURRENT_DOC, newName).apply()
         Log.i(TAG, "Auto-renamed document: \"$oldName\" → \"$newName\"")
+    }
+
+    private var lastUndoRedoTapMs = 0L
+    private val UNDO_REDO_DEBOUNCE_MS = 300L
+
+    /** Debounce undo/redo taps to prevent accidental double-taps. */
+    private inline fun debounceUndoRedo(action: () -> Unit) {
+        val now = System.currentTimeMillis()
+        if (now - lastUndoRedoTapMs < UNDO_REDO_DEBOUNCE_MS) return
+        lastUndoRedoTapMs = now
+        action()
+    }
+
+    /** Update undo/redo button visibility based on availability.
+     *  Wraps in pause/resume to force e-ink refresh (Onyx SDK suppresses
+     *  Android View invalidation while raw drawing is enabled). */
+    fun updateUndoRedoButtons() {
+        val canUndo = coordinator?.canUndo() == true
+        val canRedo = coordinator?.canRedo() == true
+        undoButton.imageAlpha = if (canUndo) 255 else 77
+        redoButton.imageAlpha = if (canRedo) 255 else 77
+        inkCanvas.pauseRawDrawing()
+        inkCanvas.drawToSurface()
+        inkCanvas.resumeRawDrawing()
     }
 
     // --- Document operations ---

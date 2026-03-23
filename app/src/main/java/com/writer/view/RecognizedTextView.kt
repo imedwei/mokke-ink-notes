@@ -46,10 +46,6 @@ class RecognizedTextView @JvmOverloads constructor(
         private const val BULLET_PREFIX   = "\u2022  "
         private val HEADING_SPACING_AFTER get() = ScreenMetrics.dp(6f)
 
-        // Gutter tap zone thresholds (multiples of GUTTER_WIDTH from top)
-        private const val GUTTER_LOGO_ZONE  = 1.2f
-        private const val GUTTER_UNDO_ZONE  = 2.4f
-        private const val GUTTER_REDO_ZONE  = 3.6f
     }
 
     private val textPaint = TextPaint().apply {
@@ -183,15 +179,6 @@ class RecognizedTextView @JvmOverloads constructor(
     /** Called when a scroll gesture ends (finger lifted). */
     var onScrollEnd: (() -> Unit)? = null
 
-    /** Called when the user taps the "I" logo. */
-    var onLogoTap: (() -> Unit)? = null
-
-    /** Called when the user taps the undo button in the gutter. */
-    var onUndoTap: (() -> Unit)? = null
-
-    /** Called when the user taps the redo button in the gutter. */
-    var onRedoTap: (() -> Unit)? = null
-
     /** Called when the user taps on a text segment. Passes the written lineIndex. */
     var onTextTap: ((Int) -> Unit)? = null
 
@@ -209,13 +196,7 @@ class RecognizedTextView @JvmOverloads constructor(
             invalidate()
         }
 
-    // Floating icon visibility (auto-hides during writing)
-    private var iconVisible = true
     private val iconSize get() = ScreenMetrics.dp(56f)
-    private val iconShowRunnable = Runnable {
-        iconVisible = true
-        invalidate()
-    }
 
     // Text tap tracking
     private var textTapDownX = 0f
@@ -228,19 +209,6 @@ class RecognizedTextView @JvmOverloads constructor(
     // Finger scroll state
     private var fingerScrollActive = false
     private var fingerScrollLastY = 0f
-
-    /** Called by WritingActivity when pen state changes on the canvas. */
-    fun onPenStateChanged(active: Boolean) {
-        handler.removeCallbacks(iconShowRunnable)
-        if (active) {
-            if (iconVisible) {
-                iconVisible = false
-                invalidate()
-            }
-        } else {
-            handler.postDelayed(iconShowRunnable, 300L)
-        }
-    }
 
     fun setParagraphs(paragraphs: List<List<TextSegment>>) {
         setContent(paragraphs, emptyList())
@@ -405,11 +373,6 @@ class RecognizedTextView @JvmOverloads constructor(
         // Can't rebuild without paragraph data; next setParagraphs call will handle it
     }
 
-    override fun onDetachedFromWindow() {
-        super.onDetachedFromWindow()
-        handler.removeCallbacks(iconShowRunnable)
-    }
-
     // --- Touch handling ---
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -429,15 +392,6 @@ class RecognizedTextView @JvmOverloads constructor(
                 onCloseTutorialTap?.invoke()
                 return true
             }
-        }
-
-        // Floating icon tap detection
-        if (iconVisible && event.action == MotionEvent.ACTION_DOWN && isInIconArea(event.x, event.y)) {
-            return true
-        }
-        if (iconVisible && event.action == MotionEvent.ACTION_UP && isInIconArea(event.x, event.y)) {
-            onLogoTap?.invoke()
-            return true
         }
 
         // Stylus/mouse in text area → detect taps to scroll canvas to that line
@@ -526,11 +480,6 @@ class RecognizedTextView @JvmOverloads constructor(
                     return false
                 }
 
-                // Floating icon tap
-                if (iconVisible && isInIconArea(event.x, event.y)) {
-                    return true
-                }
-
                 // Tutorial close button
                 if (tutorialMode && event.y < closeButtonHeight) {
                     return true
@@ -577,10 +526,6 @@ class RecognizedTextView @JvmOverloads constructor(
                 return true
             }
             MotionEvent.ACTION_UP -> {
-                if (iconVisible && isInIconArea(event.x, event.y)) {
-                    onLogoTap?.invoke()
-                    return true
-                }
                 if (tutorialMode && event.y < closeButtonHeight) {
                     onCloseTutorialTap?.invoke()
                     return true
@@ -600,11 +545,6 @@ class RecognizedTextView @JvmOverloads constructor(
             }
         }
         return false
-    }
-
-    /** Check if touch coordinates are within the floating icon tap target. */
-    private fun isInIconArea(x: Float, y: Float): Boolean {
-        return x >= width - iconSize && y <= iconSize
     }
 
     /** Resolve a tap at screen coordinates (x, y) to a written lineIndex. */
@@ -685,13 +625,6 @@ class RecognizedTextView @JvmOverloads constructor(
             }
 
             canvas.restore()
-        }
-
-        // Draw floating "I" icon in top-right corner
-        if (iconVisible) {
-            val iconCenterX = width - iconSize / 2f
-            val logoY = iconSize * 0.7f
-            canvas.drawText("I", iconCenterX, logoY, logoPaint)
         }
 
         if (tutorialMode) {

@@ -1,32 +1,86 @@
 <?xml version="1.0" encoding="utf-8"?>
-<com.writer.view.SplitLayout
+<FrameLayout
     xmlns:android="http://schemas.android.com/apk/res/android"
-    android:id="@+id/splitLayout"
     android:layout_width="match_parent"
-    android:layout_height="match_parent"
-    android:orientation="vertical"
-    android:background="@color/white">
+    android:layout_height="match_parent">
 
-    <!-- Recognized text area — 25% of space, bottom-aligned -->
-    <com.writer.view.RecognizedTextView
-        android:id="@+id/recognizedTextView"
+    <com.writer.view.SplitLayout
+        android:id="@+id/splitLayout"
         android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="1"
-        android:background="@color/white" />
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:background="@color/white">
 
-    <!-- Divider between text and canvas (visual only, drag handled by SplitLayout) -->
-    <View
-        android:id="@+id/splitDivider"
-        android:layout_width="match_parent"
-        android:layout_height="1dp"
-        android:background="#AAAAAA" />
+        <!-- Recognized text area — 25% of space, bottom-aligned -->
+        <com.writer.view.RecognizedTextView
+            android:id="@+id/recognizedTextView"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:background="@color/white" />
 
-    <!-- Ink canvas — 75% of space -->
-    <com.writer.view.HandwritingCanvasView
-        android:id="@+id/inkCanvas"
-        android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="3" />
+        <!-- Divider between text and canvas (visual only, drag handled by SplitLayout) -->
+        <View
+            android:id="@+id/splitDivider"
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="#AAAAAA" />
 
-</com.writer.view.SplitLayout>
+        <!-- Ink canvas — 75% of space -->
+        <com.writer.view.HandwritingCanvasView
+            android:id="@+id/inkCanvas"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="3" />
+
+    </com.writer.view.SplitLayout>
+
+    <!-- Floating gutter overlay: menu + undo + redo (top-right, independent of views) -->
+    <LinearLayout
+        android:id="@+id/gutterOverlay"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|end"
+        android:orientation="vertical"
+        android:gravity="center_horizontal"
+        android:paddingTop="8dp"
+        android:paddingEnd="8dp"
+        android:elevation="1dp">
+
+        <TextView
+            android:id="@+id/menuButton"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:gravity="center"
+            android:text="I"
+            android:textSize="28sp"
+            android:textStyle="bold"
+            android:fontFamily="cursive"
+            android:textColor="@android:color/black"
+            android:background="?android:attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Menu" />
+
+        <ImageView
+            android:id="@+id/undoButton"
+            android:layout_marginTop="16dp"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:padding="6dp"
+            android:src="@drawable/ic_undo"
+            android:background="?android:attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Undo"
+            />
+
+        <ImageView
+            android:id="@+id/redoButton"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:padding="6dp"
+            android:src="@drawable/ic_redo"
+            android:background="?android:attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Redo"
+            />
+
+    </LinearLayout>
+
+</FrameLayout>

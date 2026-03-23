@@ -38,6 +38,7 @@ class WritingCoordinator(
     private val strokeClassifier = StrokeClassifier(lineSegmenter)
     private val paragraphBuilder = ParagraphBuilder(strokeClassifier)
     private val undoManager = UndoManager()
+    private val undoCoalescer = UndoCoalescer(undoManager)
 
     private val gestureHandler = GestureHandler(
         documentModel = documentModel,
@@ -49,7 +50,7 @@ class WritingCoordinator(
             }
             displayManager.displayHiddenLines()
         },
-        onBeforeMutation = { saveUndoSnapshot() }
+        onBeforeMutation = { saveSnapshot(UndoCoalescer.ActionType.GESTURE_CONSUMED) }
     )
 
     // Eager recognition: cache of recognized text per line index.
@@ -64,6 +65,8 @@ class WritingCoordinator(
     var userRenamed = false
     // Callback to notify activity when heading-based rename should happen
     var onHeadingDetected: ((String) -> Unit)? = null
+    // Callback to notify activity when undo/redo availability changes
+    var onUndoRedoStateChanged: (() -> Unit)? = null
     // Diagram lifecycle manager (created in start())
     private lateinit var diagramManager: DiagramManager
     // Display manager (created in start())
@@ -169,6 +172,8 @@ class WritingCoordinator(
         displayManager.reset()
         recognitionManager.reset()
         diagramManager.reset()
+        undoManager.clear()
+        undoCoalescer.reset()
         lineTextCache.clear()
         highestLineIndex = -1
         currentLineIndex = -1
@@ -184,7 +189,7 @@ class WritingCoordinator(
             return
         }
 
-        saveUndoSnapshot()
+        saveSnapshot(UndoCoalescer.ActionType.STROKE_ADDED, lineSegmenter.getStrokeLineIndex(stroke))
         documentModel.activeStrokes.add(stroke)
         eventLog.recordEvent(lastStrokeIndex, StrokeEventLog.EventType.ADDED, "line=${lineSegmenter.getStrokeLineIndex(stroke)}")
 
@@ -250,7 +255,7 @@ class WritingCoordinator(
     }
 
     private fun onStrokeReplaced(oldStrokeId: String, newStroke: InkStroke) {
-        saveUndoSnapshot()  // captures state with raw stroke (state N+1)
+        saveSnapshot(UndoCoalescer.ActionType.STROKE_REPLACED)  // captures state with raw stroke (state N+1)
         documentModel.activeStrokes.removeAll { it.strokeId == oldStrokeId }
         documentModel.activeStrokes.add(newStroke)
         eventLog.recordEvent(lastStrokeIndex, StrokeEventLog.EventType.REPLACED, newStroke.strokeType.name)
@@ -293,7 +298,7 @@ class WritingCoordinator(
         }
         if (overlapping.isEmpty()) return
 
-        saveUndoSnapshot()
+        saveSnapshot(UndoCoalescer.ActionType.SCRATCH_OUT)
 
         val idsToRemove = overlapping.map { it.strokeId }.toSet()
         documentModel.activeStrokes.removeAll { it.strokeId in idsToRemove }
@@ -408,16 +413,20 @@ class WritingCoordinator(
 
     // --- Undo / Redo ---
 
-    private fun saveUndoSnapshot() {
-        undoManager.saveSnapshot(UndoManager.Snapshot(
-            strokes = documentModel.activeStrokes.toList(),
-            scrollOffsetY = inkCanvas.scrollOffsetY,
-            lineTextCache = lineTextCache.toMap(),
-            diagramAreas = documentModel.diagramAreas.toList()
-        ))
+    private fun saveSnapshot(
+        action: UndoCoalescer.ActionType,
+        lineIndex: Int = -1
+    ) {
+        undoCoalescer.maybeSave(action, lineIndex, currentSnapshot())
+        onUndoRedoStateChanged?.invoke()
     }
 
     private fun applySnapshot(snapshot: UndoManager.Snapshot) {
+        // Compute which strokes changed so we can scroll to them if off-screen
+        val oldStrokeIds = documentModel.activeStrokes.map { it.strokeId }.toSet()
+        val newStrokeIds = snapshot.strokes.map { it.strokeId }.toSet()
+        val changedIds = (oldStrokeIds - newStrokeIds) + (newStrokeIds - oldStrokeIds)
+
         documentModel.activeStrokes.clear()
         documentModel.activeStrokes.addAll(snapshot.strokes)
         documentModel.diagramAreas.clear()
@@ -426,7 +435,25 @@ class WritingCoordinator(
         rebuildDiagramNodes(snapshot.strokes)
         inkCanvas.diagramAreas = snapshot.diagramAreas
         inkCanvas.loadStrokes(snapshot.strokes)
-        inkCanvas.scrollOffsetY = snapshot.scrollOffsetY
+
+        // Keep current scroll position, but scroll to show changed strokes if off-screen
+        val currentScroll = inkCanvas.scrollOffsetY
+        if (changedIds.isNotEmpty()) {
+            // Find bounds of changed strokes (in both old and new sets)
+            val changedStrokes = (snapshot.strokes.filter { it.strokeId in changedIds })
+            if (changedStrokes.isNotEmpty()) {
+                val minY = changedStrokes.minOf { it.minY }
+                val maxY = changedStrokes.maxOf { it.maxY }
+                val visibleTop = currentScroll
+                val visibleBottom = currentScroll + inkCanvas.height
+                if (minY < visibleTop || maxY > visibleBottom) {
+                    // Scroll so the changed region is centered in view
+                    val centerY = (minY + maxY) / 2f
+                    inkCanvas.scrollOffsetY = (centerY - inkCanvas.height / 2f).coerceAtLeast(0f)
+                }
+            }
+        }
+
         inkCanvas.drawToSurface()
         lineTextCache.clear()
         lineTextCache.putAll(snapshot.lineTextCache)
@@ -441,11 +468,15 @@ class WritingCoordinator(
         diagramAreas = documentModel.diagramAreas.toList()
     )
 
+    fun canUndo(): Boolean = undoManager.canUndo()
+    fun canRedo(): Boolean = undoManager.canRedo()
+
     fun undo() {
         val snapshot = undoManager.undo(currentSnapshot()) ?: return
         inkCanvas.pauseRawDrawing()
         applySnapshot(snapshot)
         inkCanvas.resumeRawDrawing()
+        onUndoRedoStateChanged?.invoke()
         Log.i(TAG, "Undo: restored ${snapshot.strokes.size} strokes")
     }
 
@@ -454,6 +485,7 @@ class WritingCoordinator(
         inkCanvas.pauseRawDrawing()
         applySnapshot(snapshot)
         inkCanvas.resumeRawDrawing()
+        onUndoRedoStateChanged?.invoke()
         Log.i(TAG, "Redo: restored ${snapshot.strokes.size} strokes")
     }
 
