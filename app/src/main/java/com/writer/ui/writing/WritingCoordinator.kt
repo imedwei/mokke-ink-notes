@@ -381,23 +381,22 @@ class WritingCoordinator(
 
         val ls = HandwritingCanvasView.LINE_SPACING
 
-        // Filter out freehand strokes that look like unsnapped connectors:
-        // wide and flat (width > 2 LS and height < 30% of width)
-        val textStrokes = freehandStrokes.filter { s ->
-            val w = s.points.maxOf { it.x } - s.points.minOf { it.x }
-            val h = s.points.maxOf { it.y } - s.points.minOf { it.y }
-            w < ls * 2 || h > w * 0.3f
-        }
-        if (textStrokes.isEmpty()) {
-            diagramTextCache.remove(area.startLineIndex)
-            return
-        }
-
-        // Collect geometric (shape) strokes for containment-based grouping
+        // Collect geometric (shape) strokes for classification context
         val shapeStrokes = documentModel.activeStrokes.filter { stroke ->
             stroke.strokeType != StrokeType.FREEHAND &&
                 !stroke.strokeType.isConnector &&
                 area.containsLine(lineSegmenter.getStrokeLineIndex(stroke))
+        }
+
+        // Classify freehand strokes as text candidates or drawing strokes.
+        // Uses per-stroke heuristics (height, complexity, size, closure) and
+        // group-level contagion (freehand near drawings/shapes → drawing).
+        val (textStrokes, _) = DiagramStrokeClassifier.partition(
+            freehandStrokes, shapeStrokes, ls
+        )
+        if (textStrokes.isEmpty()) {
+            diagramTextCache.remove(area.startLineIndex)
+            return
         }
 
         val groups = DiagramTextGrouping.groupByProximity(textStrokes, ls, shapeStrokes)
