@@ -27,6 +27,21 @@ JAVA_HOME="/c/Program Files/Android/Android Studio/jbr" ./gradlew assembleDebug
 ./gradlew allTests
 ```
 
+## Development Workflow
+
+Break implementation tasks into small, independently testable pieces. For each piece, follow this cycle:
+
+1. **Write tests first**: Create unit tests that define the expected behavior before writing any implementation code. Run them to confirm they fail for the right reasons.
+2. **Implement**: Write the minimum code to make the tests pass.
+3. **Run all tests**: `./gradlew testDebugUnitTest` — ensure no regressions.
+4. **Commit**: Commit the piece to the feature/fix/dev branch.
+
+Repeat steps 1-4 for each piece. After all pieces are complete:
+
+5. **Local review**: `REVIEW=$(./scripts/review-pr.sh --local --no-post)` — review the full diff and address all actionable items.
+6. **Final test run**: `./gradlew testDebugUnitTest` — confirm everything still passes after review fixes.
+7. **Push**: Push to both local and remote feature/fix/dev branch.
+
 ## PR Workflow
 
 Before creating a PR, run the self-review cycle locally:
