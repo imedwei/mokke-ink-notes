@@ -1,0 +1,294 @@
+package com.writer.ui.writing
+
+import android.util.Log
+import com.writer.model.DocumentModel
+import com.writer.model.InkStroke
+import com.writer.model.maxY
+import com.writer.view.CanvasTheme
+import com.writer.view.HandwritingCanvasView
+import com.writer.view.PreviewLayoutCalculator
+import com.writer.view.RecognizedTextView
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import com.writer.recognition.LineSegmenter
+
+/** Callback interface for DisplayManager to communicate with its host. */
+interface DisplayManagerHost {
+    val documentModel: DocumentModel
+    val diagramManager: DiagramManager?
+    val lineTextCache: Map<Int, String>
+    val highestLineIndex: Int
+    fun eagerRecognizeLine(lineIndex: Int)
+    /** Batch-recognize a line, adding/removing from recognizingLines internally. */
+    fun markRecognizing(lineIndex: Int)
+    suspend fun doRecognizeLine(lineIndex: Int): String?
+    fun isRecognizing(lineIndex: Int): Boolean
+}
+
+/** A segment of text within a paragraph, with its own dimming state. */
+data class TextSegment(val text: String, val dimmed: Boolean, val lineIndex: Int, val listItem: Boolean = false, val heading: Boolean = false)
+
+/** A text label to render inside a diagram at its original stroke position. */
+data class DiagramTextLabel(val text: String, val x: Float, val y: Float)
+
+/** Diagram display data for inline rendering in the text view. */
+data class DiagramDisplay(
+    val startLineIndex: Int,
+    val strokes: List<InkStroke>,
+    val canvasWidth: Float,
+    val heightPx: Float,
+    val offsetY: Float,
+    /** How much of the diagram's height is scrolled off the canvas (for partial rendering). */
+    val visibleHeightPx: Float = heightPx,
+    /** Recognized text labels replacing freehand strokes in the diagram. */
+    val textLabels: List<DiagramTextLabel> = emptyList()
+)
+
+class DisplayManager(
+    private val inkCanvas: HandwritingCanvasView,
+    private val textView: RecognizedTextView,
+    private val scope: CoroutineScope,
+    private val lineSegmenter: LineSegmenter,
+    private val paragraphBuilder: ParagraphBuilder,
+    private val host: DisplayManagerHost
+) {
+    companion object {
+        private const val TAG = "DisplayManager"
+        // Scroll when writing passes this fraction of canvas height from top
+        private const val SCROLL_THRESHOLD = 0.25f
+        // Delay before refreshing e-ink display after text view updates
+        private const val TEXT_REFRESH_DELAY_MS = 500L
+    }
+
+    /** Lines that have ever scrolled above the viewport (text stays rendered once shown). */
+    val everHiddenLines = mutableSetOf<Int>()
+    /** Auto-scroll animation state. */
+    var scrollAnimating = false
+        private set
+    /** Deferred e-ink refresh for text view updates. */
+    var textRefreshJob: Job? = null
+
+    fun onIdle(currentLineIndex: Int) {
+        if (currentLineIndex >= 0) {
+            host.eagerRecognizeLine(currentLineIndex)
+        }
+        checkAutoScroll(currentLineIndex)
+    }
+
+    fun checkAutoScroll(currentLineIndex: Int) {
+        if (scrollAnimating) return
+
+        val strokes = host.documentModel.activeStrokes
+        if (strokes.isEmpty()) return
+
+        val canvasHeight = inkCanvas.height.toFloat()
+        if (canvasHeight <= 0) return
+
+        val bottomLine = lineSegmenter.getBottomOccupiedLine(strokes)
+        if (bottomLine < 0) return
+
+        if (currentLineIndex != bottomLine) return
+
+        val bottomLineDocY = lineSegmenter.getLineY(bottomLine) + HandwritingCanvasView.LINE_SPACING
+        val bottomLineScreenY = bottomLineDocY - inkCanvas.scrollOffsetY
+        val targetY = canvasHeight * SCROLL_THRESHOLD
+
+        if (bottomLineScreenY < 0 || bottomLineScreenY > canvasHeight) return
+        if (bottomLineScreenY < targetY) return
+
+        val rawOffset = bottomLineDocY - targetY
+        val newOffset = inkCanvas.snapToLine(rawOffset)
+        if (newOffset > inkCanvas.scrollOffsetY) {
+            animateScroll(inkCanvas.scrollOffsetY, newOffset)
+        }
+    }
+
+    fun scrollToLine(lineIndex: Int) {
+        if (scrollAnimating) return
+
+        val canvasHeight = inkCanvas.height.toFloat()
+        if (canvasHeight <= 0) return
+
+        val lineY = lineSegmenter.getLineY(lineIndex)
+        val targetOffset = inkCanvas.snapToLine(lineY).coerceAtLeast(0f)
+
+        if (targetOffset != inkCanvas.scrollOffsetY) {
+            Log.i(TAG, "Tap-to-scroll: line $lineIndex -> offset ${targetOffset.toInt()}")
+            animateScroll(inkCanvas.scrollOffsetY, targetOffset, 500L)
+        }
+    }
+
+    fun animateScroll(fromOffset: Float, toOffset: Float, duration: Long = 1000L) {
+        scrollAnimating = true
+        Log.i(TAG, "AutoScroll: animating from ${fromOffset.toInt()} to ${toOffset.toInt()}")
+        inkCanvas.pauseRawDrawing()
+
+        val distance = toOffset - fromOffset
+
+        scope.launch {
+            val startTime = System.currentTimeMillis()
+            while (scrollAnimating) {
+                val elapsed = System.currentTimeMillis() - startTime
+                if (elapsed >= duration) break
+
+                val t = elapsed.toFloat() / duration
+                val interpolated = 1f - (1f - t) * (1f - t)
+                inkCanvas.scrollOffsetY = fromOffset + distance * interpolated
+                inkCanvas.drawToSurface()
+                displayHiddenLines()
+
+                kotlinx.coroutines.delay(33) // ~30fps
+            }
+
+            inkCanvas.scrollOffsetY = toOffset
+            inkCanvas.drawToSurface()
+            inkCanvas.resumeRawDrawing()
+            scrollAnimating = false
+            displayHiddenLines()
+        }
+    }
+
+    /** Schedule a deferred e-ink refresh so text view updates become visible.
+     *  Cancelled if a new stroke arrives, so we never interrupt active writing. */
+    fun scheduleTextRefresh() {
+        textRefreshJob?.cancel()
+        textRefreshJob = scope.launch {
+            delay(TEXT_REFRESH_DELAY_MS)
+            inkCanvas.pauseRawDrawing()
+            inkCanvas.drawToSurface()
+            inkCanvas.resumeRawDrawing()
+        }
+    }
+
+    fun displayHiddenLines() {
+        val strokesByLine = lineSegmenter.groupByLine(host.documentModel.activeStrokes)
+
+        val currentlyHidden = PreviewLayoutCalculator.currentlyHiddenLines(
+            strokesByLine.keys, inkCanvas.scrollOffsetY,
+            HandwritingCanvasView.TOP_MARGIN, HandwritingCanvasView.LINE_SPACING
+        )
+
+        val notYetVisible = PreviewLayoutCalculator.notYetVisibleLines(
+            strokesByLine.keys, inkCanvas.scrollOffsetY,
+            HandwritingCanvasView.TOP_MARGIN, HandwritingCanvasView.LINE_SPACING
+        )
+
+        everHiddenLines.addAll(currentlyHidden)
+        everHiddenLines.retainAll(strokesByLine.keys)
+
+        updateTextView(notYetVisible)
+        updateTextScrollOffset()
+
+        val uncached = everHiddenLines.filter { !host.lineTextCache.containsKey(it) && !host.isRecognizing(it) }
+        if (uncached.isNotEmpty()) {
+            for (lineIdx in uncached) {
+                host.markRecognizing(lineIdx)
+            }
+            scope.launch {
+                for (lineIdx in uncached) {
+                    host.doRecognizeLine(lineIdx)
+                }
+                val stillNotVisible = PreviewLayoutCalculator.notYetVisibleLines(
+                    strokesByLine.keys, inkCanvas.scrollOffsetY,
+                    HandwritingCanvasView.TOP_MARGIN, HandwritingCanvasView.LINE_SPACING
+                )
+                updateTextView(stillNotVisible)
+            }
+        }
+    }
+
+    private fun updateTextView(currentlyHidden: Set<Int>) {
+        val strokesByLine = lineSegmenter.groupByLine(host.documentModel.activeStrokes)
+        val writingWidth = inkCanvas.width.toFloat()
+
+        val classifiedLines = currentlyHidden.sorted()
+            .filter { !host.diagramManager!!.isDiagramLine(it) }
+            .mapNotNull { lineIdx ->
+                paragraphBuilder.classifyLine(lineIdx, host.lineTextCache[lineIdx], strokesByLine[lineIdx], writingWidth)
+            }
+
+        val grouped = paragraphBuilder.groupIntoParagraphs(classifiedLines, strokesByLine, writingWidth, host.documentModel.diagramAreas)
+
+        val paragraphs = grouped.map { group ->
+            group.map { line ->
+                TextSegment(
+                    text = line.text,
+                    dimmed = line.lineIndex !in currentlyHidden,
+                    lineIndex = line.lineIndex,
+                    listItem = line.isList,
+                    heading = line.isHeading
+                )
+            }
+        }
+
+        // Build diagram displays -- include as soon as any part scrolls off the canvas
+        val strokeMaxYByArea = host.documentModel.diagramAreas.associate { area ->
+            val areaStrokes = host.documentModel.activeStrokes.filter { stroke ->
+                area.containsLine(lineSegmenter.getStrokeLineIndex(stroke))
+            }
+            area.startLineIndex to (if (areaStrokes.isNotEmpty()) areaStrokes.maxOf { it.maxY } else null)
+        }.filterValues { it != null }.mapValues { it.value!! }
+
+        val visibilities = PreviewLayoutCalculator.diagramVisibilities(
+            areas = host.documentModel.diagramAreas,
+            scrollOffsetY = inkCanvas.scrollOffsetY,
+            topMargin = HandwritingCanvasView.TOP_MARGIN,
+            lineSpacing = HandwritingCanvasView.LINE_SPACING,
+            strokeMaxYByArea = strokeMaxYByArea,
+            strokeWidthPadding = CanvasTheme.DEFAULT_STROKE_WIDTH
+        )
+
+        val areaByStartLine = host.documentModel.diagramAreas.associateBy { it.startLineIndex }
+        val diagrams = visibilities.map { vis ->
+            val area = areaByStartLine[vis.startLineIndex]
+            val areaStrokes = if (area != null) {
+                host.documentModel.activeStrokes.filter { stroke ->
+                    area.containsLine(lineSegmenter.getStrokeLineIndex(stroke))
+                }
+            } else emptyList()
+
+            // Use diagram text cache for recognized spatial groups
+            val textGroups = host.diagramManager!!.getTextGroups(vis.startLineIndex)
+            val hiddenIds = textGroups.flatMap { it.strokeIds }.toSet()
+            val displayStrokes = areaStrokes.filter { it.strokeId !in hiddenIds }
+            val textLabels = textGroups.map { group ->
+                DiagramTextLabel(text = group.text, x = group.centerX, y = group.centerY)
+            }
+            DiagramDisplay(
+                startLineIndex = vis.startLineIndex,
+                strokes = displayStrokes,
+                canvasWidth = writingWidth,
+                heightPx = vis.fullHeight,
+                offsetY = vis.areaTop,
+                visibleHeightPx = vis.visibleHeight,
+                textLabels = textLabels
+            )
+        }
+
+        textView.setContent(paragraphs, diagrams)
+    }
+
+    /** Called when the text view is scrolled via overscroll. */
+    fun onManualTextScroll(textOverscroll: Float) {
+        textView.textContentScroll = textOverscroll
+        textView.invalidate()
+    }
+
+    private fun updateTextScrollOffset() {
+        // Content is flush with the divider -- preview and canvas are complementary
+        textView.textScrollOffset = 0f
+    }
+
+    fun stop() {
+        scrollAnimating = false
+        textRefreshJob?.cancel()
+    }
+
+    fun reset() {
+        scrollAnimating = false
+        textRefreshJob?.cancel()
+        everHiddenLines.clear()
+    }
+}
