@@ -460,8 +460,6 @@ class HandwritingCanvasView @JvmOverloads constructor(
                 return
             }
 
-            // Determine the FINAL stroke (snapped or raw) before overflow check,
-            // so overflow uses the actual stroke bounds that will be in the document.
             val finalStroke: InkStroke
             if (snapData != null) {
                 // Two-phase commit: emit raw stroke first, then replace with snapped
@@ -471,7 +469,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
                     strokeType = StrokeType.FREEHAND
                 )
                 completedStrokes.add(rawStroke)
-                onStrokeCompleted?.invoke(rawStroke)  // → saves snapshot N, adds raw stroke → state N+1
+                onStrokeCompleted?.invoke(rawStroke)
 
                 val snappedStroke = InkStroke(
                     points = currentStrokePoints.toList(),
@@ -480,7 +478,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
                 )
                 completedStrokes.remove(rawStroke)
                 completedStrokes.add(snappedStroke)
-                onStrokeReplaced?.invoke(rawStroke.strokeId, snappedStroke)  // → saves snapshot N+1, replaces → state N+2
+                onStrokeReplaced?.invoke(rawStroke.strokeId, snappedStroke)
                 finalStroke = snappedStroke
             } else {
                 val stroke = InkStroke(
@@ -493,13 +491,14 @@ class HandwritingCanvasView @JvmOverloads constructor(
                 finalStroke = stroke
             }
 
-            // Check overflow AFTER snapping, using the final stroke's actual bounds.
-            // This ensures the snapped geometry (which may differ from raw) is used.
+            // Expand diagram if any stroke (raw or snapped) crosses the boundary.
+            // Use the union of raw bounds and final stroke bounds to catch both
+            // freehand overflow and snapped geometry that extends further.
             val (diagTopY, diagBottomY) = currentDiagramBounds!!
-            val finalMinY = finalStroke.points.minOf { it.y }
-            val finalMaxY = finalStroke.points.maxOf { it.y }
-            if (finalMinY < diagTopY || finalMaxY > diagBottomY) {
-                onDiagramStrokeOverflow?.invoke(finalStroke.strokeId, finalMinY, finalMaxY)
+            val overflowMinY = minOf(strokeMinY, finalStroke.points.minOf { it.y })
+            val overflowMaxY = maxOf(strokeMaxY, finalStroke.points.maxOf { it.y })
+            if (overflowMinY < diagTopY || overflowMaxY > diagBottomY) {
+                onDiagramStrokeOverflow?.invoke(finalStroke.strokeId, overflowMinY, overflowMaxY)
             }
             currentStrokePoints.clear()
             currentPath.reset()
