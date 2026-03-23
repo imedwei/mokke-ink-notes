@@ -6,6 +6,10 @@ import com.writer.model.DocumentModel
 import com.writer.model.InkStroke
 import com.writer.model.StrokePoint
 import com.writer.model.StrokeType
+import com.writer.model.minX
+import com.writer.model.minY
+import com.writer.model.maxX
+import com.writer.model.maxY
 import com.writer.view.ScratchOutDetection
 import com.writer.recognition.TextRecognizer
 import com.writer.recognition.LineSegmenter
@@ -42,7 +46,7 @@ class WritingCoordinator(
             for (line in invalidatedLines) {
                 lineTextCache.remove(line)
             }
-            displayManager?.displayHiddenLines()
+            displayManager.displayHiddenLines()
         },
         onBeforeMutation = { saveUndoSnapshot() }
     )
@@ -60,11 +64,11 @@ class WritingCoordinator(
     // Callback to notify activity when heading-based rename should happen
     var onHeadingDetected: ((String) -> Unit)? = null
     // Diagram lifecycle manager (created in start())
-    private var diagramManager: DiagramManager? = null
+    private lateinit var diagramManager: DiagramManager
     // Display manager (created in start())
-    private var displayManager: DisplayManager? = null
+    private lateinit var displayManager: DisplayManager
     // Line recognition manager (created in start())
-    private var recognitionManager: LineRecognitionManager? = null
+    private lateinit var recognitionManager: LineRecognitionManager
 
     /** Always-on ring buffer for bug report capture. */
     val eventLog = StrokeEventLog()
@@ -72,7 +76,7 @@ class WritingCoordinator(
      *  Safe as a single field because stylus input is single-touch on the main thread. */
     private var lastStrokeIndex = -1
 
-    override fun onDiagramAreasChanged() = displayManager!!.displayHiddenLines()
+    override fun onDiagramAreasChanged() = displayManager.displayHiddenLines()
     override fun getLineTextCache() = lineTextCache
 
     fun start() {
@@ -97,12 +101,12 @@ class WritingCoordinator(
         val recognitionHost = object : RecognitionManagerHost {
             override val lineTextCache: MutableMap<Int, String> get() = this@WritingCoordinator.lineTextCache
             override val userRenamed: Boolean get() = this@WritingCoordinator.userRenamed
-            override val everHiddenLines: Set<Int> get() = displayManager!!.everHiddenLines
+            override val everHiddenLines: Set<Int> get() = displayManager.getEverHiddenLinesSnapshot()
             override fun onHeadingDetected(heading: String) { this@WritingCoordinator.onHeadingDetected?.invoke(heading) }
-            override fun isDiagramLine(lineIndex: Int): Boolean = diagramManager!!.isDiagramLine(lineIndex)
+            override fun isDiagramLine(lineIndex: Int): Boolean = diagramManager.isDiagramLine(lineIndex)
             override fun onRecognitionComplete(lineIndex: Int) {
-                displayManager!!.displayHiddenLines()
-                displayManager!!.scheduleTextRefresh()
+                displayManager.displayHiddenLines()
+                displayManager.scheduleTextRefresh()
             }
         }
         recognitionManager = LineRecognitionManager(
@@ -112,13 +116,13 @@ class WritingCoordinator(
 
         val displayHost = object : DisplayManagerHost {
             override val documentModel: DocumentModel get() = this@WritingCoordinator.documentModel
-            override val diagramManager: DiagramManager? get() = this@WritingCoordinator.diagramManager
+            override val diagramManager: DiagramManager get() = this@WritingCoordinator.diagramManager
             override val lineTextCache: Map<Int, String> get() = this@WritingCoordinator.lineTextCache
             override val highestLineIndex: Int get() = this@WritingCoordinator.highestLineIndex
-            override fun eagerRecognizeLine(lineIndex: Int) = recognitionManager!!.eagerRecognizeLine(lineIndex)
-            override fun markRecognizing(lineIndex: Int) { recognitionManager!!.recognizingLines.add(lineIndex) }
-            override suspend fun doRecognizeLine(lineIndex: Int): String? = recognitionManager!!.doRecognizeLine(lineIndex)
-            override fun isRecognizing(lineIndex: Int): Boolean = recognitionManager!!.recognizingLines.contains(lineIndex)
+            override fun eagerRecognizeLine(lineIndex: Int) = recognitionManager.eagerRecognizeLine(lineIndex)
+            override fun markRecognizing(lineIndex: Int) { recognitionManager.markRecognizing(lineIndex) }
+            override suspend fun doRecognizeLine(lineIndex: Int): String? = recognitionManager.doRecognizeLine(lineIndex)
+            override fun isRecognizing(lineIndex: Int): Boolean = recognitionManager.isRecognizing(lineIndex)
         }
         displayManager = DisplayManager(inkCanvas, textView, scope, lineSegmenter, paragraphBuilder, displayHost)
 
@@ -127,18 +131,18 @@ class WritingCoordinator(
             lastStrokeIndex = eventLog.recordStroke(points)
         }
         inkCanvas.onStrokeCompleted = { stroke -> onStrokeCompleted(stroke) }
-        inkCanvas.onIdleTimeout = { displayManager!!.onIdle(currentLineIndex) }
+        inkCanvas.onIdleTimeout = { displayManager.onIdle(currentLineIndex) }
         inkCanvas.onManualScroll = {
             // Clamp text overscroll so text doesn't scroll completely out of view
             val maxOverscroll = (textView.totalTextHeight - textView.height).coerceAtLeast(0).toFloat()
             if (inkCanvas.textOverscroll > maxOverscroll) {
                 inkCanvas.textOverscroll = maxOverscroll
             }
-            displayManager!!.displayHiddenLines()
+            displayManager.displayHiddenLines()
         }
-        textView.onTextTap = { lineIndex -> displayManager!!.scrollToLine(lineIndex) }
-        inkCanvas.onDiagramShapeDetected = { stroke -> diagramManager!!.onShapeDetected(stroke) }
-        inkCanvas.onDiagramStrokeOverflow = { strokeId, minY, maxY -> diagramManager!!.onStrokeOverflow(strokeId, minY, maxY) }
+        textView.onTextTap = { lineIndex -> displayManager.scrollToLine(lineIndex) }
+        inkCanvas.onDiagramShapeDetected = { stroke -> diagramManager.onShapeDetected(stroke) }
+        inkCanvas.onDiagramStrokeOverflow = { strokeId, minY, maxY -> diagramManager.onStrokeOverflow(strokeId, minY, maxY) }
         inkCanvas.onScratchOut = { scratchPoints, left, top, right, bottom ->
             onScratchOut(scratchPoints, left, top, right, bottom)
         }
@@ -148,8 +152,8 @@ class WritingCoordinator(
     }
 
     fun stop() {
-        displayManager?.stop()
-        diagramManager?.stop()
+        displayManager.stop()
+        diagramManager.stop()
         inkCanvas.onStrokeCompleted = null
         inkCanvas.onIdleTimeout = null
         inkCanvas.onManualScroll = null
@@ -161,9 +165,9 @@ class WritingCoordinator(
     }
 
     fun reset() {
-        displayManager?.reset()
-        recognitionManager?.reset()
-        diagramManager?.reset()
+        displayManager.reset()
+        recognitionManager.reset()
+        diagramManager.reset()
         lineTextCache.clear()
         highestLineIndex = -1
         currentLineIndex = -1
@@ -173,7 +177,7 @@ class WritingCoordinator(
     }
 
     private fun onStrokeCompleted(stroke: InkStroke) {
-        displayManager!!.textRefreshJob?.cancel()
+        displayManager.textRefreshJob?.cancel()
         if (gestureHandler.tryHandle(stroke)) {
             eventLog.recordEvent(lastStrokeIndex, StrokeEventLog.EventType.GESTURE_CONSUMED)
             return
@@ -186,10 +190,10 @@ class WritingCoordinator(
         val lineIdx = lineSegmenter.getStrokeLineIndex(stroke)
 
         // Diagram strokes: recognize freehand by spatial groups, not by line
-        if (diagramManager!!.isDiagramLine(lineIdx)) {
+        if (diagramManager.isDiagramLine(lineIdx)) {
             if (stroke.strokeType == StrokeType.FREEHAND) {
                 val area = documentModel.diagramAreas.find { it.containsLine(lineIdx) }
-                if (area != null) diagramManager!!.recognizeDiagramArea(area)
+                if (area != null) diagramManager.recognizeDiagramArea(area)
             }
             return
         }
@@ -200,7 +204,7 @@ class WritingCoordinator(
         val adjacentArea = documentModel.diagramAreas.find {
             lineIdx == it.startLineIndex - 1 || lineIdx == it.endLineIndex + 1
         }
-        if (adjacentArea != null && stroke.isGeometric && !diagramManager!!.hasTextStrokesOnLine(lineIdx, excluding = stroke)) {
+        if (adjacentArea != null && stroke.isGeometric && !diagramManager.hasTextStrokesOnLine(lineIdx, excluding = stroke)) {
             val newStart = minOf(adjacentArea.startLineIndex, lineIdx)
             val newEnd = maxOf(adjacentArea.endLineIndex, lineIdx)
             documentModel.diagramAreas.remove(adjacentArea)
@@ -215,7 +219,7 @@ class WritingCoordinator(
             }
             Log.i(TAG, "Sticky zone: expanded diagram ${adjacentArea.startLineIndex}-${adjacentArea.endLineIndex} → $newStart-$newEnd")
             if (stroke.strokeType == StrokeType.FREEHAND) {
-                diagramManager!!.recognizeDiagramArea(expanded)
+                diagramManager.recognizeDiagramArea(expanded)
             }
             return
         }
@@ -226,17 +230,17 @@ class WritingCoordinator(
         // Only trigger recognition when the user moves to a DIFFERENT line
         if (lineIdx != currentLineIndex) {
             if (currentLineIndex >= 0) {
-                recognitionManager!!.eagerRecognizeLine(currentLineIndex)
+                recognitionManager.eagerRecognizeLine(currentLineIndex)
             }
             currentLineIndex = lineIdx
         }
 
         // If editing a line that has rendered text, re-recognize immediately
-        if (lineIdx in displayManager!!.everHiddenLines) {
+        if (displayManager.isEverHidden(lineIdx)) {
             Log.i(TAG, "Stroke on rendered line $lineIdx, triggering re-recognition")
-            recognitionManager!!.recognizeRenderedLine(lineIdx)
+            recognitionManager.recognizeRenderedLine(lineIdx)
         } else {
-            Log.d(TAG, "Stroke on line $lineIdx (not in everHiddenLines=${displayManager!!.everHiddenLines})")
+            Log.d(TAG, "Stroke on line $lineIdx (not in everHiddenLines=${displayManager.getEverHiddenLinesSnapshot()})")
         }
 
         if (lineIdx > highestLineIndex) {
@@ -253,10 +257,7 @@ class WritingCoordinator(
         // Track shape nodes for magnetic arrow snapping
         if (!newStroke.strokeType.isConnector && newStroke.strokeType != StrokeType.FREEHAND) {
             val bounds = android.graphics.RectF(
-                newStroke.points.minOf { it.x },
-                newStroke.points.minOf { it.y },
-                newStroke.points.maxOf { it.x },
-                newStroke.points.maxOf { it.y }
+                newStroke.minX, newStroke.minY, newStroke.maxX, newStroke.maxY
             )
             documentModel.diagram.nodes[newStroke.strokeId] = DiagramNode(
                 strokeId = newStroke.strokeId,
@@ -289,7 +290,7 @@ class WritingCoordinator(
         inkCanvas.drawToSurface()
 
         // Delegate diagram cache invalidation and shrinking to DiagramManager
-        diagramManager!!.onStrokesErased(idsToRemove, overlapping)
+        diagramManager.onStrokesErased(idsToRemove, overlapping)
 
         eventLog.recordEvent(lastStrokeIndex, StrokeEventLog.EventType.SCRATCH_OUT,
             "erased=${idsToRemove.joinToString(",")}")
@@ -304,20 +305,20 @@ class WritingCoordinator(
         if (strokesByLine.isEmpty()) return
         // Recognize diagram areas immediately on load (no debounce)
         for (area in documentModel.diagramAreas) {
-            diagramManager!!.recognizeDiagramArea(area, immediate = true)
+            diagramManager.recognizeDiagramArea(area, immediate = true)
         }
         scope.launch {
             for (lineIndex in strokesByLine.keys.sorted()) {
                 // Re-recognize lines that failed ("[?]") or were never cached
                 val cached = lineTextCache[lineIndex]
                 if (cached != null && cached != "[?]") continue
-                if (recognitionManager!!.recognizingLines.contains(lineIndex)) continue
-                recognitionManager!!.recognizingLines.add(lineIndex)
+                if (recognitionManager.isRecognizing(lineIndex)) continue
+                recognitionManager.markRecognizing(lineIndex)
                 lineTextCache.remove(lineIndex)
-                val text = recognitionManager!!.doRecognizeLine(lineIndex)
+                val text = recognitionManager.doRecognizeLine(lineIndex)
                 if (text != null) {
                     Log.d(TAG, "Post-load recognized line $lineIndex: \"$text\"")
-                    displayManager!!.displayHiddenLines()
+                    displayManager.displayHiddenLines()
                 }
             }
         }
@@ -327,7 +328,7 @@ class WritingCoordinator(
 
     /** Called when the text view is scrolled via overscroll. */
     fun onManualTextScroll() {
-        displayManager!!.onManualTextScroll(inkCanvas.textOverscroll)
+        displayManager.onManualTextScroll(inkCanvas.textOverscroll)
     }
 
     // --- Markdown export ---
@@ -338,7 +339,7 @@ class WritingCoordinator(
         val strokesByLine = lineSegmenter.groupByLine(documentModel.activeStrokes)
         val writingWidth = inkCanvas.width.toFloat()
 
-        val classifiedLines = lineTextCache.keys.sorted().filter { !diagramManager!!.isDiagramLine(it) }.mapNotNull { lineIdx ->
+        val classifiedLines = lineTextCache.keys.sorted().filter { !diagramManager.isDiagramLine(it) }.mapNotNull { lineIdx ->
             paragraphBuilder.classifyLine(lineIdx, lineTextCache[lineIdx], strokesByLine[lineIdx], writingWidth)
         }
 
@@ -376,6 +377,22 @@ class WritingCoordinator(
         return blocks.sortedBy { it.lineIndex }.joinToString("\n\n") { it.text }
     }
 
+    // --- Diagram node rebuild ---
+
+    private fun rebuildDiagramNodes(strokes: List<InkStroke>) {
+        documentModel.diagram.nodes.clear()
+        for (stroke in strokes) {
+            if (!stroke.strokeType.isConnector && stroke.strokeType != StrokeType.FREEHAND) {
+                val bounds = android.graphics.RectF(
+                    stroke.minX, stroke.minY, stroke.maxX, stroke.maxY
+                )
+                documentModel.diagram.nodes[stroke.strokeId] = DiagramNode(
+                    strokeId = stroke.strokeId, shapeType = stroke.strokeType, bounds = bounds
+                )
+            }
+        }
+    }
+
     // --- Undo / Redo ---
 
     private fun saveUndoSnapshot() {
@@ -392,28 +409,16 @@ class WritingCoordinator(
         documentModel.activeStrokes.addAll(snapshot.strokes)
         documentModel.diagramAreas.clear()
         documentModel.diagramAreas.addAll(snapshot.diagramAreas)
-        diagramManager?.clearTextCache()
-        // Rebuild diagram model nodes from restored strokes
-        documentModel.diagram.nodes.clear()
-        for (stroke in snapshot.strokes) {
-            if (!stroke.strokeType.isConnector && stroke.strokeType != StrokeType.FREEHAND) {
-                val bounds = android.graphics.RectF(
-                    stroke.points.minOf { it.x }, stroke.points.minOf { it.y },
-                    stroke.points.maxOf { it.x }, stroke.points.maxOf { it.y }
-                )
-                documentModel.diagram.nodes[stroke.strokeId] = DiagramNode(
-                    strokeId = stroke.strokeId, shapeType = stroke.strokeType, bounds = bounds
-                )
-            }
-        }
+        diagramManager.clearTextCache()
+        rebuildDiagramNodes(snapshot.strokes)
         inkCanvas.diagramAreas = snapshot.diagramAreas
         inkCanvas.loadStrokes(snapshot.strokes)
         inkCanvas.scrollOffsetY = snapshot.scrollOffsetY
         inkCanvas.drawToSurface()
         lineTextCache.clear()
         lineTextCache.putAll(snapshot.lineTextCache)
-        displayManager!!.everHiddenLines.clear()
-        displayManager!!.displayHiddenLines()
+        displayManager.clearEverHiddenLines()
+        displayManager.displayHiddenLines()
     }
 
     private fun currentSnapshot() = UndoManager.Snapshot(
@@ -482,7 +487,7 @@ class WritingCoordinator(
             strokes = inkCanvas.getStrokes(),
             scrollOffsetY = inkCanvas.scrollOffsetY,
             lineTextCache = lineTextCache.toMap(),
-            everHiddenLines = displayManager?.everHiddenLines?.toSet() ?: emptySet(),
+            everHiddenLines = displayManager.getEverHiddenLinesSnapshot(),
             highestLineIndex = highestLineIndex,
             currentLineIndex = currentLineIndex,
             userRenamed = userRenamed,
@@ -492,26 +497,14 @@ class WritingCoordinator(
 
     fun restoreState(data: DocumentData) {
         lineTextCache.putAll(data.lineTextCache)
-        displayManager!!.everHiddenLines.addAll(data.everHiddenLines)
+        displayManager.addEverHiddenLines(data.everHiddenLines)
         highestLineIndex = data.highestLineIndex
         currentLineIndex = data.currentLineIndex
         userRenamed = data.userRenamed
         documentModel.diagramAreas.clear()
         documentModel.diagramAreas.addAll(data.diagramAreas)
         inkCanvas.diagramAreas = data.diagramAreas
-        // Rebuild diagram model nodes from loaded strokes
-        documentModel.diagram.nodes.clear()
-        for (stroke in documentModel.activeStrokes) {
-            if (!stroke.strokeType.isConnector && stroke.strokeType != StrokeType.FREEHAND) {
-                val bounds = android.graphics.RectF(
-                    stroke.points.minOf { it.x }, stroke.points.minOf { it.y },
-                    stroke.points.maxOf { it.x }, stroke.points.maxOf { it.y }
-                )
-                documentModel.diagram.nodes[stroke.strokeId] = DiagramNode(
-                    strokeId = stroke.strokeId, shapeType = stroke.strokeType, bounds = bounds
-                )
-            }
-        }
-        displayManager!!.displayHiddenLines()
+        rebuildDiagramNodes(documentModel.activeStrokes)
+        displayManager.displayHiddenLines()
     }
 }

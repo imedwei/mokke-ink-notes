@@ -17,7 +17,7 @@ import com.writer.recognition.LineSegmenter
 /** Callback interface for DisplayManager to communicate with its host. */
 interface DisplayManagerHost {
     val documentModel: DocumentModel
-    val diagramManager: DiagramManager?
+    val diagramManager: DiagramManager
     val lineTextCache: Map<Int, String>
     val highestLineIndex: Int
     fun eagerRecognizeLine(lineIndex: Int)
@@ -63,7 +63,12 @@ class DisplayManager(
     }
 
     /** Lines that have ever scrolled above the viewport (text stays rendered once shown). */
-    val everHiddenLines = mutableSetOf<Int>()
+    internal val everHiddenLines = mutableSetOf<Int>()
+
+    fun clearEverHiddenLines() { everHiddenLines.clear() }
+    fun addEverHiddenLines(lines: Set<Int>) { everHiddenLines.addAll(lines) }
+    fun getEverHiddenLinesSnapshot(): Set<Int> = everHiddenLines.toSet()
+    fun isEverHidden(lineIndex: Int): Boolean = lineIndex in everHiddenLines
     /** Auto-scroll animation state. */
     var scrollAnimating = false
         private set
@@ -178,7 +183,7 @@ class DisplayManager(
         everHiddenLines.addAll(currentlyHidden)
         everHiddenLines.retainAll(strokesByLine.keys)
 
-        updateTextView(notYetVisible)
+        updateTextView(notYetVisible, strokesByLine)
         updateTextScrollOffset()
 
         val uncached = everHiddenLines.filter { !host.lineTextCache.containsKey(it) && !host.isRecognizing(it) }
@@ -190,21 +195,21 @@ class DisplayManager(
                 for (lineIdx in uncached) {
                     host.doRecognizeLine(lineIdx)
                 }
+                val freshStrokesByLine = lineSegmenter.groupByLine(host.documentModel.activeStrokes)
                 val stillNotVisible = PreviewLayoutCalculator.notYetVisibleLines(
-                    strokesByLine.keys, inkCanvas.scrollOffsetY,
+                    freshStrokesByLine.keys, inkCanvas.scrollOffsetY,
                     HandwritingCanvasView.TOP_MARGIN, HandwritingCanvasView.LINE_SPACING
                 )
-                updateTextView(stillNotVisible)
+                updateTextView(stillNotVisible, freshStrokesByLine)
             }
         }
     }
 
-    private fun updateTextView(currentlyHidden: Set<Int>) {
-        val strokesByLine = lineSegmenter.groupByLine(host.documentModel.activeStrokes)
+    private fun updateTextView(currentlyHidden: Set<Int>, strokesByLine: Map<Int, List<InkStroke>>) {
         val writingWidth = inkCanvas.width.toFloat()
 
         val classifiedLines = currentlyHidden.sorted()
-            .filter { !host.diagramManager!!.isDiagramLine(it) }
+            .filter { !host.diagramManager.isDiagramLine(it) }
             .mapNotNull { lineIdx ->
                 paragraphBuilder.classifyLine(lineIdx, host.lineTextCache[lineIdx], strokesByLine[lineIdx], writingWidth)
             }
@@ -250,7 +255,7 @@ class DisplayManager(
             } else emptyList()
 
             // Use diagram text cache for recognized spatial groups
-            val textGroups = host.diagramManager!!.getTextGroups(vis.startLineIndex)
+            val textGroups = host.diagramManager.getTextGroups(vis.startLineIndex)
             val hiddenIds = textGroups.flatMap { it.strokeIds }.toSet()
             val displayStrokes = areaStrokes.filter { it.strokeId !in hiddenIds }
             val textLabels = textGroups.map { group ->

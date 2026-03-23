@@ -2,6 +2,10 @@ package com.writer.view
 
 import com.writer.model.InkStroke
 import com.writer.model.StrokePoint
+import com.writer.model.minX
+import com.writer.model.maxX
+import com.writer.model.minY
+import com.writer.model.maxY
 import kotlin.math.abs
 
 /**
@@ -235,10 +239,10 @@ object ScratchOutDetection {
         // region (expanded by coverage radius). Avoids expensive intersection checks
         // against distant strokes.
         val candidates = existingStrokes.filter { stroke ->
-            val sMinX = stroke.points.minOf { it.x }
-            val sMaxX = stroke.points.maxOf { it.x }
-            val sMinY = stroke.points.minOf { it.y }
-            val sMaxY = stroke.points.maxOf { it.y }
+            val sMinX = stroke.minX
+            val sMaxX = stroke.maxX
+            val sMinY = stroke.minY
+            val sMaxY = stroke.maxY
             sMaxX >= scratchMinX - radius && sMinX <= scratchMaxX + radius &&
                 sMaxY >= scratchMinY - radius && sMinY <= scratchMaxY + radius
         }

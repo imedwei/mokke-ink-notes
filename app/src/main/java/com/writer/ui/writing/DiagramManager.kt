@@ -6,6 +6,10 @@ import com.writer.model.DocumentModel
 import com.writer.model.InkLine
 import com.writer.model.InkStroke
 import com.writer.model.StrokeType
+import com.writer.model.minX
+import com.writer.model.minY
+import com.writer.model.maxX
+import com.writer.model.maxY
 import com.writer.model.shiftY
 import com.writer.recognition.LineSegmenter
 import com.writer.recognition.TextRecognizer
@@ -117,8 +121,8 @@ class DiagramManager(
         }
 
         // Compute tight bounds from remaining strokes + 1-line padding
-        val minLine = remainingStrokes.minOf { lineSegmenter.getLineIndex(it.points.minOf { p -> p.y }) }
-        val maxLine = remainingStrokes.maxOf { lineSegmenter.getLineIndex(it.points.maxOf { p -> p.y }) }
+        val minLine = remainingStrokes.minOf { lineSegmenter.getLineIndex(it.minY) }
+        val maxLine = remainingStrokes.maxOf { lineSegmenter.getLineIndex(it.maxY) }
         val newStart = (minLine - 1).coerceAtLeast(area.startLineIndex)
         val newEnd = (maxLine + 1).coerceAtMost(area.endLineIndex)
 
@@ -287,14 +291,8 @@ class DiagramManager(
         }
     }
 
-    private fun buildPreContext(lineIndex: Int, lineTextCache: Map<Int, String>): String {
-        val previousLines = lineTextCache.keys.filter { it < lineIndex }.sorted()
-        if (previousLines.isEmpty()) return ""
-        val lastText = previousLines.map { lineTextCache[it] ?: "" }
-            .filter { it.isNotEmpty() && it != "[?]" }
-            .joinToString(" ")
-        return lastText.takeLast(20)
-    }
+    private fun buildPreContext(lineIndex: Int, lineTextCache: Map<Int, String>): String =
+        com.writer.ui.writing.buildPreContext(lineTextCache, lineIndex)
 
     /**
      * Called when a shape is detected outside a diagram area.
@@ -304,8 +302,8 @@ class DiagramManager(
      */
     fun onShapeDetected(stroke: InkStroke): Pair<Float, Float>? {
         val lineTextCache = host.getLineTextCache()
-        val minY = stroke.points.minOf { it.y }
-        val maxY = stroke.points.maxOf { it.y }
+        val minY = stroke.minY
+        val maxY = stroke.maxY
         val topLine = lineSegmenter.getLineIndex(minY)
         val bottomLine = lineSegmenter.getLineIndex(maxY)
 
