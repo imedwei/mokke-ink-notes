@@ -187,4 +187,83 @@ class ScratchOutFocusedTest {
             ScratchOutDetection.isFocusedScratchOut(scratch, all)
         )
     }
+
+    // ── Small dot erasure ────────────────────────────────────────────────────
+
+    @Test
+    fun `isFocusedScratchOut detects small dot target`() {
+        // 1-point dot
+        val dot = stroke(300f to 400f)
+        val scratch = zigzagAt(300f, 400f)
+        assertTrue(
+            "Scratch-out over a 1-point dot should be focused",
+            ScratchOutDetection.isFocusedScratchOut(scratch, listOf(dot))
+        )
+    }
+
+    @Test
+    fun `isFocusedScratchOut detects 2-point dot target`() {
+        val dot = stroke(300f to 400f, 301f to 401f)
+        val scratch = zigzagAt(300f, 400f)
+        assertTrue(
+            "Scratch-out over a 2-point dot should be focused",
+            ScratchOutDetection.isFocusedScratchOut(scratch, listOf(dot))
+        )
+    }
+
+    /**
+     * Simulate the overlap check from WritingCoordinator.onScratchOut:
+     * for small strokes (< 5 points), use proximity; for larger ones, use intersection.
+     */
+    private fun findOverlapping(
+        scratchPoints: List<StrokePoint>,
+        strokes: List<InkStroke>
+    ): List<InkStroke> {
+        val radius = ScreenMetrics.dp(ScratchOutDetection.COVERAGE_RADIUS_DP)
+        val radiusSq = radius * radius
+        return strokes.filter { stroke ->
+            if (stroke.points.size < 5) {
+                stroke.points.any { tp ->
+                    scratchPoints.any { sp ->
+                        val dx = sp.x - tp.x; val dy = sp.y - tp.y
+                        dx * dx + dy * dy <= radiusSq
+                    }
+                }
+            } else {
+                ScratchOutDetection.strokesIntersect(scratchPoints, stroke.points)
+            }
+        }
+    }
+
+    @Test
+    fun `overlap check finds 1-point dot via proximity`() {
+        val dot = stroke(300f to 400f)
+        val scratch = zigzagAt(300f, 400f)
+        val overlapping = findOverlapping(scratch, listOf(dot))
+        assertTrue("1-point dot should be found by proximity overlap", overlapping.isNotEmpty())
+    }
+
+    @Test
+    fun `overlap check finds 2-point dot via proximity`() {
+        val dot = stroke(300f to 400f, 302f to 401f)
+        val scratch = zigzagAt(300f, 400f)
+        val overlapping = findOverlapping(scratch, listOf(dot))
+        assertTrue("2-point dot should be found by proximity overlap", overlapping.isNotEmpty())
+    }
+
+    @Test
+    fun `overlap check does not find distant dot`() {
+        val dot = stroke(300f to 400f)
+        val scratch = zigzagAt(600f, 600f) // far away
+        val overlapping = findOverlapping(scratch, listOf(dot))
+        assertTrue("Distant dot should NOT be found", overlapping.isEmpty())
+    }
+
+    @Test
+    fun `overlap check finds normal stroke via intersection`() {
+        val word = stroke(250f to 300f, 350f to 300f)
+        val scratch = zigzagAt(300f, 300f)
+        val overlapping = findOverlapping(scratch, listOf(word))
+        assertTrue("Normal stroke should be found by intersection", overlapping.isNotEmpty())
+    }
 }
