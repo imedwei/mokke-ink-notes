@@ -268,14 +268,36 @@ object ScratchOutDetection {
         val targetPoints = intersecting.flatMap { it.points }
         if (targetPoints.size < 5) return true
 
+        // Grid-based spatial index: O(n + m) instead of O(n*m).
+        // Cell size = radius. For each scratch point, check its cell + 8 neighbors
+        // and do exact distance checks on the (few) target points in those cells.
+        val cellSize = radius
+        val grid = HashMap<Long, MutableList<StrokePoint>>()
+        fun cellKey(x: Int, y: Int) = x.toLong() shl 32 or (y.toLong() and 0xFFFFFFFFL)
+        for (tp in targetPoints) {
+            val cx = (tp.x / cellSize).toInt()
+            val cy = (tp.y / cellSize).toInt()
+            grid.getOrPut(cellKey(cx, cy)) { mutableListOf() }.add(tp)
+        }
+
         var nearCount = 0
         for (sp in scratchPoints) {
-            val isNear = targetPoints.any { tp ->
-                val dx = sp.x - tp.x
-                val dy = sp.y - tp.y
-                dx * dx + dy * dy <= radiusSq
+            val cx = (sp.x / cellSize).toInt()
+            val cy = (sp.y / cellSize).toInt()
+            var found = false
+            outer@ for (dx in -1..1) {
+                for (dy in -1..1) {
+                    val cell = grid[cellKey(cx + dx, cy + dy)] ?: continue
+                    for (tp in cell) {
+                        val ddx = sp.x - tp.x; val ddy = sp.y - tp.y
+                        if (ddx * ddx + ddy * ddy <= radiusSq) {
+                            found = true
+                            break@outer
+                        }
+                    }
+                }
             }
-            if (isNear) nearCount++
+            if (found) nearCount++
         }
 
         val coverage = nearCount.toFloat() / scratchPoints.size

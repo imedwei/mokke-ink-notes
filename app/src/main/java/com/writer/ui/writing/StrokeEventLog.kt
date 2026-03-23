@@ -57,6 +57,8 @@ class StrokeEventLog(private val maxStrokes: Int = 50) {
     private val strokes = ArrayDeque<RawStrokeEntry>()
     private val events = ArrayDeque<ProcessingEvent>()
     private var nextIndex = 0
+    /** Minimum valid stroke index — events below this are stale and filtered on snapshot. */
+    private var minValidIndex = 0
 
     /**
      * Record a raw stroke before any processing.
@@ -78,11 +80,10 @@ class StrokeEventLog(private val maxStrokes: Int = 50) {
 
         strokes.addLast(entry)
 
-        // Evict oldest if over capacity
+        // Evict oldest if over capacity — O(1) per eviction
         while (strokes.size > maxStrokes) {
             val evicted = strokes.removeFirst()
-            // Remove events for evicted strokes
-            events.removeAll { it.strokeIndex == evicted.index }
+            minValidIndex = evicted.index + 1
         }
 
         return index
@@ -109,9 +110,14 @@ class StrokeEventLog(private val maxStrokes: Int = 50) {
 
     /** Freeze the current ring buffer state into a serializable snapshot. */
     fun snapshot(): Snapshot {
+        // Lazily filter stale events (for evicted strokes) at snapshot time
+        // instead of O(n) removal on every eviction.
+        val validEvents = events.filter {
+            it.strokeIndex < 0 || it.strokeIndex >= minValidIndex
+        }
         return Snapshot(
             strokes = strokes.toList(),
-            events = events.toList()
+            events = validEvents
         )
     }
 
@@ -126,5 +132,6 @@ class StrokeEventLog(private val maxStrokes: Int = 50) {
         strokes.clear()
         events.clear()
         nextIndex = 0
+        minValidIndex = 0
     }
 }

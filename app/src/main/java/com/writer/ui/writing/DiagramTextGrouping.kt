@@ -96,12 +96,33 @@ object DiagramTextGrouping {
         }
         fun union(a: Int, b: Int) { parent[find(a)] = find(b) }
 
+        // Grid-based spatial index: cell size = maxGap.
+        // Each bbox is inserted into all cells it overlaps (expanded by maxGap).
+        // Boxes in the same cell are candidates for union — O(n) average.
+        val cellSize = maxGap.coerceAtLeast(1f)
+        val grid = HashMap<Long, MutableList<Int>>()
+        fun cellKey(cx: Int, cy: Int) = cx.toLong() shl 32 or (cy.toLong() and 0xFFFFFFFFL)
+
         for (i in boxes.indices) {
-            for (j in i + 1 until boxes.size) {
-                val xDist = maxOf(0f, maxOf(boxes[i].minX - boxes[j].maxX, boxes[j].minX - boxes[i].maxX))
-                val yDist = maxOf(0f, maxOf(boxes[i].minY - boxes[j].maxY, boxes[j].minY - boxes[i].maxY))
-                if (xDist <= maxGap && yDist <= maxGap) {
-                    union(i, j)
+            val b = boxes[i]
+            val cxMin = ((b.minX - maxGap) / cellSize).toInt()
+            val cxMax = ((b.maxX + maxGap) / cellSize).toInt()
+            val cyMin = ((b.minY - maxGap) / cellSize).toInt()
+            val cyMax = ((b.maxY + maxGap) / cellSize).toInt()
+            for (cx in cxMin..cxMax) {
+                for (cy in cyMin..cyMax) {
+                    val key = cellKey(cx, cy)
+                    val cell = grid.getOrPut(key) { mutableListOf() }
+                    // Check proximity with existing entries in this cell
+                    for (j in cell) {
+                        if (find(i) == find(j)) continue  // already merged
+                        val xDist = maxOf(0f, maxOf(boxes[i].minX - boxes[j].maxX, boxes[j].minX - boxes[i].maxX))
+                        val yDist = maxOf(0f, maxOf(boxes[i].minY - boxes[j].maxY, boxes[j].minY - boxes[i].maxY))
+                        if (xDist <= maxGap && yDist <= maxGap) {
+                            union(i, j)
+                        }
+                    }
+                    cell.add(i)
                 }
             }
         }
