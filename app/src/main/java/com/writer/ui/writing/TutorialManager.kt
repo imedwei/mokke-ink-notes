@@ -102,9 +102,8 @@ class TutorialManager(
         inkCanvas.tutorialMode = true
         inkCanvas.drawToSurface()
 
-        // Wire close tutorial taps (both the button and the W logo)
+        // Wire close tutorial tap
         textView.onCloseTutorialTap = { close() }
-        textView.onLogoTap = { close() }
 
         isActive = true
     }
