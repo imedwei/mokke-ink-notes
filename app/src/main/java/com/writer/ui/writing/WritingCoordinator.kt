@@ -309,10 +309,13 @@ class WritingCoordinator(
         for (id in idsToRemove) { documentModel.diagram.nodes.remove(id) }
 
         inkCanvas.removeStrokes(idsToRemove)
-        inkCanvas.drawToSurface()
 
-        // Delegate diagram cache invalidation and shrinking to DiagramManager
-        diagramManager.onStrokesErased(idsToRemove, overlapping)
+        // Delegate diagram cache invalidation and shrinking to DiagramManager.
+        // If it redraws (diagram shrink), skip our own drawToSurface to avoid double-draw.
+        val diagramRedrew = diagramManager.onStrokesErased(idsToRemove, overlapping)
+        if (!diagramRedrew) {
+            inkCanvas.drawToSurface()
+        }
 
         eventLog.recordEvent(lastStrokeIndex, StrokeEventLog.EventType.SCRATCH_OUT,
             "erased=${idsToRemove.joinToString(",")}", elapsedMs = inkCanvas.lastFinishStrokeMs)
