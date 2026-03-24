@@ -428,4 +428,55 @@ class ScratchOutDetectionTest {
         }
         return pts
     }
+
+    // ── Closed-loop scratch-out (start ≈ end) ──────────────────────────────
+    //
+    // When a scratch-out returns near its starting point, the simple
+    // closeDist < 0.2*diagonal check classifies it as a "closed loop"
+    // (shape drawn around content), causing detect() to reject it.
+    // ScratchOutDetection.isClosedLoop() uses the path-length/diagonal
+    // ratio to distinguish genuine shape outlines from zigzag scratch-outs.
+
+    @Test fun `isClosedLoop rejects zigzag scratch-out where start near end`() {
+        // Scratch-out: closeDist=25, diagonal=191, pathLength=1236
+        // pathRatio = 1236/191 = 6.5 → zigzag, NOT a shape outline
+        assertFalse(
+            "Zigzag scratch-out with start≈end should NOT be classified as closed loop",
+            ScratchOutDetection.isClosedLoop(closeDist = 25f, diagonal = 191f, pathLength = 1236f)
+        )
+    }
+
+    @Test fun `isClosedLoop accepts genuine shape outline`() {
+        // Circle-like shape: closeDist=10, diagonal=100, pathLength=320
+        // pathRatio = 320/100 = 3.2 → shape outline
+        assertTrue(
+            "Shape outline should be classified as closed loop",
+            ScratchOutDetection.isClosedLoop(closeDist = 10f, diagonal = 100f, pathLength = 320f)
+        )
+    }
+
+    @Test fun `scratch-out with start near end detected when using isClosedLoop`() {
+        // Real bug: scratch-out zigzag where start ≈ end was rejected because
+        // checkPostStrokeScratchOut used simple closeDist check instead of
+        // isClosedLoop (which accounts for path-length/diagonal ratio).
+        //
+        // Simulated: 7 reversals, ends near start (net advance = 15px)
+        val xs = zigzag(startX = 80f, segmentWidth = 95f, segments = 8)
+        // xs = [80, 175, 80, 175, 80, 175, 80, 175, 80]
+        // closeDist=0, diagonal≈95, pathLength=760
+        // pathRatio = 760/95 = 8.0 → zigzag, not a closed loop
+        val closeDist = kotlin.math.abs(xs.last() - xs.first())
+        val diagonal = xs.max() - xs.min()
+        val pathLength = (1 until xs.size).sumOf {
+            kotlin.math.abs(xs[it] - xs[it - 1]).toDouble()
+        }.toFloat()
+
+        val isClosedLoop = ScratchOutDetection.isClosedLoop(closeDist, diagonal, pathLength)
+        assertFalse("Zigzag should not be a closed loop", isClosedLoop)
+
+        assertTrue(
+            "Scratch-out with start≈end should be detected when isClosedLoop is correct",
+            ScratchOutDetection.detect(xs, yRange = 20f, lineSpacing = LS, isClosedLoop = isClosedLoop)
+        )
+    }
 }
