@@ -171,25 +171,47 @@ class HandwritingCanvasView @JvmOverloads constructor(
         holder.addCallback(this)
     }
 
+    // --- Shared stroke lifecycle methods (used by SDK callbacks, fallback touch, and tests) ---
+
+    /** Begin a new stroke: set pen active, clear state, start dwell detection. */
+    fun beginStroke(firstPoint: StrokePoint) {
+        touchFilter?.penActive = true
+        onPenStateChanged?.invoke(true)
+        handler.removeCallbacks(idleRunnable)
+        currentStrokePoints.clear()
+        currentDiagramBounds = getDiagramBounds(firstPoint.y)
+        currentStrokePoints.add(firstPoint)
+        initStrokeBounds(currentStrokePoints.last())
+        startDwellJob()
+    }
+
+    /** Add a point to the current stroke and update tracking. */
+    fun addStrokePoint(point: StrokePoint) {
+        currentStrokePoints.add(point)
+        updateStrokeBounds(currentStrokePoints.last())
+        checkDwellCancellation()
+    }
+
+    /** End the current stroke: cancel dwell, fire callbacks, process. */
+    fun endStroke(lastPoint: StrokePoint) {
+        cancelDwellJob()
+        touchFilter?.let {
+            it.penActive = false
+            it.penUpTimestamp = android.os.SystemClock.uptimeMillis()
+        }
+        onPenStateChanged?.invoke(false)
+        currentStrokePoints.add(lastPoint)
+        finishStroke()
+        handler.postDelayed(idleRunnable, IDLE_TIMEOUT_MS)
+    }
+
     private val onyxCallback = object : RawInputCallback() {
         override fun onBeginRawDrawing(b: Boolean, tp: TouchPoint) {
-            touchFilter?.penActive = true
-            onPenStateChanged?.invoke(true)
-            handler.removeCallbacks(idleRunnable)
-            currentStrokePoints.clear()
-            val docPt = tp.toDocStrokePoint()
-            currentDiagramBounds = getDiagramBounds(docPt.y)
-            currentStrokePoints.add(docPt)
-            initStrokeBounds(currentStrokePoints.last())
-            // Start dwell detection: inside diagram → arrow tail; outside → freeform zone
-            startDwellJob()
+            beginStroke(tp.toDocStrokePoint())
         }
 
         override fun onRawDrawingTouchPointMoveReceived(tp: TouchPoint) {
-            val docPt = tp.toDocStrokePoint()
-            currentStrokePoints.add(docPt)
-            updateStrokeBounds(currentStrokePoints.last())
-            checkDwellCancellation()
+            addStrokePoint(tp.toDocStrokePoint())
         }
 
         override fun onRawDrawingTouchPointListReceived(tpl: TouchPointList) {
@@ -197,17 +219,8 @@ class HandwritingCanvasView @JvmOverloads constructor(
         }
 
         override fun onEndRawDrawing(b: Boolean, tp: TouchPoint) {
-            cancelDwellJob()
-            touchFilter?.let {
-                it.penActive = false
-                it.penUpTimestamp = android.os.SystemClock.uptimeMillis()
-            }
-            onPenStateChanged?.invoke(false)
             Log.d(TAG, "onEndRawDrawing: ${currentStrokePoints.size} points")
-            val docPt = tp.toDocStrokePoint()
-            currentStrokePoints.add(docPt)
-            finishStroke()
-            handler.postDelayed(idleRunnable, IDLE_TIMEOUT_MS)
+            endStroke(tp.toDocStrokePoint())
         }
 
         override fun onBeginRawErasing(b: Boolean, tp: TouchPoint) {}
@@ -307,16 +320,9 @@ class HandwritingCanvasView @JvmOverloads constructor(
 
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
-                touchFilter?.penActive = true
-                onPenStateChanged?.invoke(true)
-                handler.removeCallbacks(idleRunnable)
-                currentStrokePoints.clear()
                 currentPath.reset()
-                currentDiagramBounds = getDiagramBounds(y)
                 currentPath.moveTo(x, y)
-                currentStrokePoints.add(StrokePoint(x, y, pressure, timestamp))
-                initStrokeBounds(currentStrokePoints.last())
-                startDwellJob()
+                beginStroke(StrokePoint(x, y, pressure, timestamp))
                 drawToSurface()
                 return true
             }
@@ -327,27 +333,16 @@ class HandwritingCanvasView @JvmOverloads constructor(
                     val hp = event.getHistoricalPressure(i)
                     val ht = event.getHistoricalEventTime(i)
                     currentPath.lineTo(hx, hy)
-                    currentStrokePoints.add(StrokePoint(hx, hy, hp, ht))
-                    updateStrokeBounds(currentStrokePoints.last())
+                    addStrokePoint(StrokePoint(hx, hy, hp, ht))
                 }
                 currentPath.lineTo(x, y)
-                currentStrokePoints.add(StrokePoint(x, y, pressure, timestamp))
-                updateStrokeBounds(currentStrokePoints.last())
-                checkDwellCancellation()
+                addStrokePoint(StrokePoint(x, y, pressure, timestamp))
                 drawToSurface()
                 return true
             }
             MotionEvent.ACTION_UP -> {
-                cancelDwellJob()
-                touchFilter?.let {
-                    it.penActive = false
-                    it.penUpTimestamp = android.os.SystemClock.uptimeMillis()
-                }
-                onPenStateChanged?.invoke(false)
                 currentPath.lineTo(x, y)
-                currentStrokePoints.add(StrokePoint(x, y, pressure, timestamp))
-                finishStroke()
-                handler.postDelayed(idleRunnable, IDLE_TIMEOUT_MS)
+                endStroke(StrokePoint(x, y, pressure, timestamp))
                 drawToSurface()
                 return true
             }
@@ -430,11 +425,17 @@ class HandwritingCanvasView @JvmOverloads constructor(
         return false
     }
 
+    /** Elapsed time of the last finishStroke() call in ms, for performance testing. */
+    var lastFinishStrokeMs: Long = 0L
+        private set
+
     private fun finishStroke() {
         if (currentStrokePoints.size < 2) {
             resetStrokeState()
             return
         }
+
+        val t0 = android.os.SystemClock.elapsedRealtime()
 
         // Raw capture: record stroke before any processing (scratch-out, shape snap, etc.)
         onRawStrokeCapture?.invoke(currentStrokePoints.toList())
@@ -444,6 +445,8 @@ class HandwritingCanvasView @JvmOverloads constructor(
         } else {
             finishTextStroke()
         }
+
+        lastFinishStrokeMs = android.os.SystemClock.elapsedRealtime() - t0
     }
 
     /** Post-stroke pipeline for strokes INSIDE a diagram area. */
@@ -572,6 +575,20 @@ class HandwritingCanvasView @JvmOverloads constructor(
         pauseRawDrawing()
         drawToSurface()
         resumeRawDrawing()
+    }
+
+    /**
+     * Inject a complete stroke for testing. Calls the same [beginStroke],
+     * [addStrokePoint], [endStroke] methods used by the SDK callbacks and
+     * the fallback touch path — no duplicated logic. Must be called on the UI thread.
+     */
+    fun injectStrokeForTest(points: List<StrokePoint>) {
+        if (points.size < 2) return
+        beginStroke(points.first())
+        for (i in 1 until points.size - 1) {
+            addStrokePoint(points[i])
+        }
+        endStroke(points.last())
     }
 
     // --- Diagram area helpers ---
