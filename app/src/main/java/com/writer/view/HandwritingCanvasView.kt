@@ -27,6 +27,8 @@ import com.writer.model.DocumentModel
 import com.writer.model.InkStroke
 import com.writer.model.StrokePoint
 import com.writer.model.StrokeType
+import com.writer.model.minX
+import com.writer.model.maxX
 import com.writer.model.minY
 import com.writer.model.maxY
 import kotlin.math.cos
@@ -103,6 +105,43 @@ class HandwritingCanvasView @JvmOverloads constructor(
         strokeWidth = 3f
         style = Paint.Style.STROKE
         pathEffect = DashPathEffect(floatArrayOf(20f, 14f), 0f)
+    }
+
+    // --- Space insert mode ---
+    /** When true, the canvas shows line boundary handles and accepts drag to insert/remove space. */
+    var spaceInsertMode = false
+        set(value) {
+            field = value
+            spaceInsertDragActive = false
+            spaceInsertAnchorLine = -1
+            spaceInsertDragStartY = 0f
+            if (value) {
+                pauseRawDrawing()
+                drawToSurface()
+            } else {
+                drawToSurface()
+                resumeRawDrawing()
+            }
+        }
+    private var spaceInsertDragActive = false
+    private var spaceInsertAnchorLine = -1
+    private var spaceInsertDragStartY = 0f
+    private var spaceInsertDragCurrentY = 0f
+    private var spaceInsertMaxUpPx = 0f  // max allowed upward shift (clamped at content)
+    /** Called when the user completes a space-insert drag. (anchorLine, linesInserted) — negative = removed. */
+    var onSpaceInsert: ((anchorLine: Int, lines: Int) -> Unit)? = null
+
+    private val spaceInsertLinePaint = Paint().apply {
+        color = CanvasTheme.DIAGRAM_BORDER_COLOR
+        strokeWidth = 2f
+        style = Paint.Style.STROKE
+        pathEffect = DashPathEffect(floatArrayOf(16f, 12f), 0f)
+    }
+
+    private val spaceInsertBarrierPaint = Paint().apply {
+        color = Color.parseColor("#CC0000")
+        strokeWidth = 4f
+        style = Paint.Style.STROKE
     }
 
     /** When true, all pen input is blocked and annotations are rendered. */
@@ -300,6 +339,9 @@ class HandwritingCanvasView @JvmOverloads constructor(
     override fun onTouchEvent(event: MotionEvent): Boolean {
         val toolType = event.getToolType(0)
 
+        // Space insert mode: intercept ALL input (finger + stylus) for drag handling
+        if (spaceInsertMode) return handleSpaceInsertTouch(event)
+
         // Finger touches: filter through palm rejection, allow vertical scroll
         if (toolType == MotionEvent.TOOL_TYPE_FINGER) {
             handler.removeCallbacks(idleRunnable)
@@ -423,6 +465,69 @@ class HandwritingCanvasView @JvmOverloads constructor(
             }
         }
         return false
+    }
+
+    /**
+     * Handle touch events during space-insert mode. Either finger or stylus works.
+     * Touch anywhere on the canvas to set the anchor line (nearest line boundary),
+     * then drag down to insert space or up to remove space.
+     */
+    private fun handleSpaceInsertTouch(event: MotionEvent): Boolean {
+        val docY = event.y + scrollOffsetY
+        when (event.action) {
+            MotionEvent.ACTION_DOWN -> {
+                // Anchor = the line the user touches. Content at and below this line will shift.
+                val lineIndex = ((docY - TOP_MARGIN) / LINE_SPACING).toInt().coerceAtLeast(0)
+                spaceInsertAnchorLine = lineIndex
+                spaceInsertDragStartY = event.y
+                spaceInsertDragCurrentY = event.y
+                spaceInsertDragActive = true
+
+                // If anchor is inside a diagram, scan from the diagram's top edge
+                val containingDiagram = diagramAreas.find { it.containsLine(lineIndex) }
+                val scanFrom = containingDiagram?.startLineIndex ?: lineIndex
+
+                // Compute max allowed upward shift by counting empty lines above scanFrom
+                val occupiedLines = completedStrokes.map { s ->
+                    ((s.minY + s.maxY) / 2f - TOP_MARGIN) / LINE_SPACING
+                }.map { it.toInt().coerceAtLeast(0) }.toSet()
+                var emptyAbove = 0
+                for (i in 1..scanFrom) {
+                    val checkLine = scanFrom - i
+                    if (checkLine in occupiedLines) break
+                    if (diagramAreas.any { it.containsLine(checkLine) }) break
+                    emptyAbove++
+                }
+                spaceInsertMaxUpPx = emptyAbove * LINE_SPACING
+                Log.d(TAG, "Space insert: anchor=$lineIndex emptyAbove=$emptyAbove maxUp=${spaceInsertMaxUpPx}px")
+                drawToSurface()
+                return true
+            }
+            MotionEvent.ACTION_MOVE -> {
+                if (!spaceInsertDragActive) return true
+                spaceInsertDragCurrentY = event.y
+                drawToSurface()
+                return true
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                if (!spaceInsertDragActive) {
+                    spaceInsertMode = false
+                    return true
+                }
+                spaceInsertDragActive = false
+                val dragDeltaY = event.y - spaceInsertDragStartY
+                val linesDelta = (dragDeltaY / LINE_SPACING).toInt()
+                Log.d(TAG, "Space insert: drag=${dragDeltaY}px lines=$linesDelta anchor=${spaceInsertAnchorLine}")
+
+                if (linesDelta != 0) {
+                    onSpaceInsert?.invoke(spaceInsertAnchorLine, linesDelta)
+                }
+
+                spaceInsertMode = false
+                return true
+            }
+        }
+        return true
     }
 
     /** Elapsed time of the last finishStroke() call in ms, for performance testing. */
@@ -945,9 +1050,30 @@ class HandwritingCanvasView @JvmOverloads constructor(
         // Only draw strokes within the visible viewport
         val viewTop = scrollOffsetY
         val viewBottom = scrollOffsetY + height
+
+        // During space-insert drag, compute preview offset for strokes at/below anchor.
+        // Clamp upward shift to the max allowed (empty lines above anchor).
+        val rawShiftPx = if (spaceInsertMode && spaceInsertDragActive && spaceInsertAnchorLine >= 0) {
+            spaceInsertDragCurrentY - spaceInsertDragStartY
+        } else 0f
+        val previewShiftPx = rawShiftPx.coerceAtLeast(-spaceInsertMaxUpPx)
+        val isClamped = rawShiftPx < -spaceInsertMaxUpPx
+        val anchorY = if (spaceInsertAnchorLine >= 0) {
+            TOP_MARGIN + spaceInsertAnchorLine * LINE_SPACING
+        } else Float.MAX_VALUE
+
         for (stroke in completedStrokes) {
-            if (stroke.maxY >= viewTop && stroke.minY <= viewBottom) {
-                drawStroke(canvas, stroke)
+            val strokeCenterY = (stroke.minY + stroke.maxY) / 2f
+            val shift = if (spaceInsertMode && spaceInsertDragActive && strokeCenterY >= anchorY) previewShiftPx else 0f
+            if (stroke.maxY + shift >= viewTop && stroke.minY + shift <= viewBottom) {
+                if (shift != 0f) {
+                    canvas.save()
+                    canvas.translate(0f, shift)
+                    drawStroke(canvas, stroke)
+                    canvas.restore()
+                } else {
+                    drawStroke(canvas, stroke)
+                }
             }
         }
 
@@ -961,11 +1087,75 @@ class HandwritingCanvasView @JvmOverloads constructor(
             canvas.drawCircle(dot.x, dot.y, CanvasTheme.DEFAULT_STROKE_WIDTH * 3f, dwellDotPaint)
         }
 
-        // Draw dashed borders around all diagram areas
+        // Draw borders around all diagram areas (shifted during space-insert preview).
+        // Use solid borders in space-insert mode to distinguish from dashed line markers.
         for (area in diagramAreas) {
-            val topY = TOP_MARGIN + area.startLineIndex * LINE_SPACING
-            val bottomY = TOP_MARGIN + (area.startLineIndex + area.heightInLines) * LINE_SPACING
-            canvas.drawRect(0f, topY, canvasRight, bottomY, freeformPreviewPaint)
+            val areaShift = if (spaceInsertMode && spaceInsertDragActive &&
+                (area.startLineIndex >= spaceInsertAnchorLine || area.containsLine(spaceInsertAnchorLine))
+            ) previewShiftPx else 0f
+            val topY = TOP_MARGIN + area.startLineIndex * LINE_SPACING + areaShift
+            val bottomY = TOP_MARGIN + (area.startLineIndex + area.heightInLines) * LINE_SPACING + areaShift
+            if (spaceInsertMode) {
+                canvas.drawRect(0f, topY, canvasRight, bottomY, diagramBorderPaint)
+            } else {
+                canvas.drawRect(0f, topY, canvasRight, bottomY, freeformPreviewPaint)
+            }
+        }
+
+        // Draw space-insert mode: dashed line boundaries (skip inside diagram areas)
+        if (spaceInsertMode) {
+            var handleY = TOP_MARGIN + LINE_SPACING
+            while (handleY < maxDocY) {
+                // Skip dashed lines inside diagram areas — the solid border is sufficient
+                val lineIdx = ((handleY - TOP_MARGIN) / LINE_SPACING).toInt()
+                val insideDiagram = diagramAreas.any { lineIdx >= it.startLineIndex && lineIdx < it.startLineIndex + it.heightInLines }
+                if (!insideDiagram) {
+                    canvas.drawLine(0f, handleY, canvasRight, handleY, spaceInsertLinePaint)
+                }
+                handleY += LINE_SPACING
+            }
+            // Highlight the anchor line during drag
+            if (spaceInsertDragActive && spaceInsertAnchorLine >= 0) {
+                val aY = TOP_MARGIN + spaceInsertAnchorLine * LINE_SPACING
+                spaceInsertLinePaint.strokeWidth = 4f
+                canvas.drawLine(0f, aY, canvasRight, aY, spaceInsertLinePaint)
+                spaceInsertLinePaint.strokeWidth = 2f
+
+                // When clamped at content, highlight the barrier line and blocking strokes
+                if (isClamped) {
+                    val emptyAbove = (spaceInsertMaxUpPx / LINE_SPACING).toInt()
+                    val barrierLine = spaceInsertAnchorLine - emptyAbove - 1
+                    if (barrierLine >= 0) {
+                        val barrierY = TOP_MARGIN + (barrierLine + 1) * LINE_SPACING
+                        canvas.drawLine(0f, barrierY, canvasRight, barrierY, spaceInsertBarrierPaint)
+
+                        // Highlight all blocking content on the barrier line with one circle
+                        val barrierTopY = TOP_MARGIN + barrierLine * LINE_SPACING
+                        val barrierBottomY = barrierTopY + LINE_SPACING
+                        var bMinX = Float.MAX_VALUE; var bMaxX = Float.MIN_VALUE
+                        var bMinY = Float.MAX_VALUE; var bMaxY = Float.MIN_VALUE
+                        var hasContent = false
+                        for (stroke in completedStrokes) {
+                            val centerY = (stroke.minY + stroke.maxY) / 2f
+                            if (centerY >= barrierTopY && centerY < barrierBottomY) {
+                                bMinX = minOf(bMinX, stroke.minX)
+                                bMaxX = maxOf(bMaxX, stroke.maxX)
+                                bMinY = minOf(bMinY, stroke.minY)
+                                bMaxY = maxOf(bMaxY, stroke.maxY)
+                                hasContent = true
+                            }
+                        }
+                        if (hasContent) {
+                            val pad = ScreenMetrics.dp(6f)
+                            val cornerR = ScreenMetrics.dp(4f)
+                            canvas.drawRoundRect(
+                                bMinX - pad, bMinY - pad, bMaxX + pad, bMaxY + pad,
+                                cornerR, cornerR, spaceInsertBarrierPaint
+                            )
+                        }
+                    }
+                }
+            }
         }
 
         canvas.restore()

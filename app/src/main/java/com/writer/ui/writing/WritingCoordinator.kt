@@ -349,6 +349,35 @@ class WritingCoordinator(
         }
     }
 
+    // --- Space insert/remove ---
+
+    /** Insert [lines] blank lines at [anchorLine], shifting content below down. */
+    fun insertSpace(anchorLine: Int, lines: Int) {
+        saveSnapshot(UndoCoalescer.ActionType.SPACE_INSERTED)
+        SpaceInsertMode.insertSpace(documentModel, lineSegmenter, anchorLine, lines)
+        // Invalidate text cache for affected lines
+        lineTextCache.keys.filter { it >= anchorLine }.forEach { lineTextCache.remove(it) }
+        inkCanvas.loadStrokes(documentModel.activeStrokes.toList())
+        inkCanvas.diagramAreas = documentModel.diagramAreas.toList()
+        displayManager.clearEverHiddenLines()
+        displayManager.displayHiddenLines()
+        Log.i(TAG, "Insert space: $lines lines at anchor=$anchorLine")
+    }
+
+    /** Remove up to [lines] empty lines at [anchorLine]. Returns actual lines removed. */
+    fun removeSpace(anchorLine: Int, lines: Int): Int {
+        saveSnapshot(UndoCoalescer.ActionType.SPACE_INSERTED)
+        val removed = SpaceInsertMode.removeSpace(documentModel, lineSegmenter, anchorLine, lines)
+        if (removed == 0) return 0
+        lineTextCache.keys.filter { it >= anchorLine }.forEach { lineTextCache.remove(it) }
+        inkCanvas.loadStrokes(documentModel.activeStrokes.toList())
+        inkCanvas.diagramAreas = documentModel.diagramAreas.toList()
+        displayManager.clearEverHiddenLines()
+        displayManager.displayHiddenLines()
+        Log.i(TAG, "Remove space: $removed lines at anchor=$anchorLine")
+        return removed
+    }
+
     // --- Text display sync ---
 
     /** Called when the text view is scrolled via overscroll. */

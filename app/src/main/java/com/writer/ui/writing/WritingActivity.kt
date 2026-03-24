@@ -129,11 +129,23 @@ class WritingActivity : AppCompatActivity() {
         undoButton = findViewById(R.id.undoButton)
         redoButton = findViewById(R.id.redoButton)
 
+        val spaceInsertButton = findViewById<ImageView>(R.id.spaceInsertButton)
+
         undoButton.imageAlpha = 77
         redoButton.imageAlpha = 77
         menuButton.setOnClickListener { showMenu() }
         undoButton.setOnClickListener { debounceUndoRedo { coordinator?.undo(); updateUndoRedoButtons() } }
         redoButton.setOnClickListener { debounceUndoRedo { coordinator?.redo(); updateUndoRedoButtons() } }
+        spaceInsertButton.setOnClickListener { inkCanvas.spaceInsertMode = !inkCanvas.spaceInsertMode }
+
+        inkCanvas.onSpaceInsert = { anchorLine, lines ->
+            if (lines > 0) {
+                coordinator?.insertSpace(anchorLine, lines)
+            } else if (lines < 0) {
+                coordinator?.removeSpace(anchorLine, -lines)
+            }
+            updateUndoRedoButtons()
+        }
 
         val touchFilter = TouchFilter()
         inkCanvas.touchFilter = touchFilter
