@@ -465,8 +465,9 @@ class DiagramManager(
     /**
      * Handle strokes being erased (from scratch-out): invalidate diagram text cache
      * for affected areas and shrink diagram areas that contained erased strokes.
+     * @return true if the canvas was redrawn (caller should skip its own drawToSurface)
      */
-    fun onStrokesErased(idsToRemove: Set<String>, erasedStrokes: List<InkStroke>) {
+    fun onStrokesErased(idsToRemove: Set<String>, erasedStrokes: List<InkStroke>): Boolean {
         // Invalidate diagram text cache for any affected diagram areas
         for (area in documentModel.diagramAreas) {
             val cachedGroups = diagramTextCache[area.startLineIndex] ?: continue
@@ -476,11 +477,14 @@ class DiagramManager(
         }
 
         // Shrink diagram areas that contained erased strokes
+        var redrew = false
         val affectedStartLines = erasedStrokes.map { lineSegmenter.getStrokeLineIndex(it) }.toSet()
         for (startLine in affectedStartLines) {
             val area = documentModel.diagramAreas.find { it.containsLine(startLine) } ?: continue
             shrinkDiagramAfterErase(area)
+            redrew = true
         }
+        return redrew
     }
 
     /** Get recognized text groups for a diagram area by start line index. */
