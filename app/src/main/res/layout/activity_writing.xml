@@ -81,6 +81,17 @@
             android:contentDescription="Redo"
             />
 
+        <ImageView
+            android:id="@+id/spaceInsertButton"
+            android:layout_marginTop="16dp"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:padding="6dp"
+            android:src="@drawable/ic_unfold_more"
+            android:background="?android:attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Insert or remove space"
+            />
+
     </LinearLayout>
 
 </FrameLayout>

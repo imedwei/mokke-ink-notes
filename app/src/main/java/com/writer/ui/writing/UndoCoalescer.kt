@@ -31,7 +31,9 @@ class UndoCoalescer(
         /** Diagram area created. Always creates snapshot (structural). */
         DIAGRAM_CREATED,
         /** Sticky zone expanded. Always creates snapshot (structural). */
-        ZONE_EXPANDED
+        ZONE_EXPANDED,
+        /** Space inserted or removed. Always creates snapshot (structural). */
+        SPACE_INSERTED
     }
 
     private var lastActionType: ActionType? = null
