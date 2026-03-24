@@ -432,11 +432,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
 
     private fun finishStroke() {
         if (currentStrokePoints.size < 2) {
-            currentStrokePoints.clear()
-            currentPath.reset()
-            currentDiagramBounds = null
-            dwellDotCenter = null
-            dwellIndicatorShown = false
+            resetStrokeState()
             return
         }
 
@@ -444,159 +440,138 @@ class HandwritingCanvasView @JvmOverloads constructor(
         onRawStrokeCapture?.invoke(currentStrokePoints.toList())
 
         if (currentDiagramBounds != null) {
-            // INSIDE DIAGRAM AREA: post-stroke shape-snap pipeline
-            val tailDwell = dwellIndicatorShown
-            dwellDotCenter = null
-            dwellIndicatorShown = false
-
-
-            // Save raw points before checkShapeSnap overwrites currentStrokePoints
-            val rawPoints = currentStrokePoints.toList()
-
-            // Shape snap before scratch-out: rectangles have X-reversals that
-            // would otherwise be consumed as scratch-out.
-            val snapData = checkShapeSnap(tailDwell)
-
-            // Only check scratch-out if no shape was snapped.
-            if (snapData == null && checkPostStrokeScratchOut()) {
-                currentDiagramBounds = null
-                return
-            }
-
-            val finalStroke: InkStroke
-            if (snapData != null) {
-                // Two-phase commit: emit raw stroke first, then replace with snapped
-                val rawStroke = InkStroke(
-                    points = rawPoints,
-                    isGeometric = false,
-                    strokeType = StrokeType.FREEHAND
-                )
-                completedStrokes.add(rawStroke)
-                onStrokeCompleted?.invoke(rawStroke)
-
-                val snappedStroke = InkStroke(
-                    points = currentStrokePoints.toList(),
-                    isGeometric = snapData.isGeometric,
-                    strokeType = snapData.strokeType
-                )
-                completedStrokes.remove(rawStroke)
-                completedStrokes.add(snappedStroke)
-                onStrokeReplaced?.invoke(rawStroke.strokeId, snappedStroke)
-                finalStroke = snappedStroke
-            } else {
-                val stroke = InkStroke(
-                    points = currentStrokePoints.toList(),
-                    isGeometric = false,
-                    strokeType = StrokeType.FREEHAND
-                )
-                completedStrokes.add(stroke)
-                onStrokeCompleted?.invoke(stroke)
-                finalStroke = stroke
-            }
-
-            // Expand diagram if any stroke (raw or snapped) crosses the boundary.
-            // Use the union of raw bounds and final stroke bounds to catch both
-            // freehand overflow and snapped geometry that extends further.
-            val (diagTopY, diagBottomY) = currentDiagramBounds!!
-            val overflowMinY = minOf(strokeMinY, finalStroke.points.minOf { it.y })
-            val overflowMaxY = maxOf(strokeMaxY, finalStroke.points.maxOf { it.y })
-            if (overflowMinY < diagTopY || overflowMaxY > diagBottomY) {
-                onDiagramStrokeOverflow?.invoke(finalStroke.strokeId, overflowMinY, overflowMaxY)
-            }
-            currentStrokePoints.clear()
-            currentPath.reset()
-            currentDiagramBounds = null
-            if (snapData != null) {
-                // Flush SDK hardware overlay showing freehand stroke, redraw clean snapped shape
-                pauseRawDrawing()
-                drawToSurface()
-                resumeRawDrawing()
-            }
+            finishDiagramStroke()
         } else {
-            // OUTSIDE DIAGRAM AREA
-            if (checkPostStrokeScratchOut()) {
-    
-                return
-            }
-
-            // Check for shape-intent: dwell at end → shape detection → auto-create diagram
-            val snapData = checkShapeSnap()
-            if (snapData != null) {
-                val rawPoints = currentStrokePoints.toList()
-
-                // Two-phase commit: emit raw stroke, then replace with snapped shape
-                val rawStroke = InkStroke(
-                    points = rawPoints,
-                    isGeometric = false,
-                    strokeType = StrokeType.FREEHAND
-                )
-                completedStrokes.add(rawStroke)
-                onStrokeCompleted?.invoke(rawStroke)
-
-                // Notify coordinator to create diagram area around the shape
-                onDiagramShapeDetected?.invoke(rawStroke)
-
-                val snappedStroke = InkStroke(
-                    points = currentStrokePoints.toList(),
-                    isGeometric = snapData.isGeometric,
-                    strokeType = snapData.strokeType
-                )
-                completedStrokes.remove(rawStroke)
-                completedStrokes.add(snappedStroke)
-                onStrokeReplaced?.invoke(rawStroke.strokeId, snappedStroke)
-
-                currentStrokePoints.clear()
-                currentPath.reset()
-                currentDiagramBounds = null
-
-                // Flush SDK hardware overlay, redraw clean snapped shape
-                pauseRawDrawing()
-                drawToSurface()
-                resumeRawDrawing()
-            } else if (dwellIndicatorShown) {
-                // Start-dwell without shape → check if stroke looks like drawing
-                // (layer 2 disambiguation: reject text-like strokes even with dwell)
-                val stroke = InkStroke(
-                    points = currentStrokePoints.toList(),
-                    isGeometric = false,
-                    strokeType = StrokeType.FREEHAND
-                )
-                val drawingScore = DiagramStrokeClassifier.classifyStroke(
-                    stroke, LINE_SPACING, includeConnector = false
-                )
-                if (drawingScore >= 0.5f) {
-                    // Drawing-like stroke with dwell → create freeform diagram zone
-                    completedStrokes.add(stroke)
-                    onStrokeCompleted?.invoke(stroke)
-                    onDiagramShapeDetected?.invoke(stroke)
-                    dwellDotCenter = null
-                    dwellIndicatorShown = false
-                    currentStrokePoints.clear()
-                    currentPath.reset()
-                    currentDiagramBounds = null
-                    pauseRawDrawing()
-                    drawToSurface()
-                    resumeRawDrawing()
-                } else {
-                    // Text-like stroke despite dwell → treat as normal text
-                    completedStrokes.add(stroke)
-                    onStrokeCompleted?.invoke(stroke)
-                    dwellDotCenter = null
-                    dwellIndicatorShown = false
-                    currentStrokePoints.clear()
-                    currentPath.reset()
-                    currentDiagramBounds = null
-                }
-            } else {
-                val stroke = InkStroke(points = currentStrokePoints.toList())
-                completedStrokes.add(stroke)
-                onStrokeCompleted?.invoke(stroke)
-                currentStrokePoints.clear()
-                currentPath.reset()
-                currentDiagramBounds = null
-    
-            }
+            finishTextStroke()
         }
+    }
+
+    /** Post-stroke pipeline for strokes INSIDE a diagram area. */
+    private fun finishDiagramStroke() {
+        val tailDwell = dwellIndicatorShown
+        dwellDotCenter = null
+        dwellIndicatorShown = false
+
+        // Shape snap before scratch-out: rectangles have X-reversals that
+        // would otherwise be consumed as scratch-out.
+        val rawPoints = currentStrokePoints.toList()
+        val snapData = checkShapeSnap(tailDwell)
+
+        if (snapData == null && checkPostStrokeScratchOut()) {
+            currentDiagramBounds = null
+            return
+        }
+
+        val finalStroke = emitStroke(rawPoints, snapData)
+
+        // Expand diagram if stroke (raw or snapped) crosses the boundary.
+        val (diagTopY, diagBottomY) = currentDiagramBounds!!
+        val overflowMinY = minOf(strokeMinY, finalStroke.points.minOf { it.y })
+        val overflowMaxY = maxOf(strokeMaxY, finalStroke.points.maxOf { it.y })
+        if (overflowMinY < diagTopY || overflowMaxY > diagBottomY) {
+            onDiagramStrokeOverflow?.invoke(finalStroke.strokeId, overflowMinY, overflowMaxY)
+        }
+
+        resetStrokeState()
+        if (snapData != null) flushAndRedraw()
+    }
+
+    /** Post-stroke pipeline for strokes OUTSIDE any diagram area. */
+    private fun finishTextStroke() {
+        if (checkPostStrokeScratchOut()) return
+
+        // Shape-intent: dwell at end → shape detection → auto-create diagram
+        val snapData = checkShapeSnap()
+        if (snapData != null) {
+            val rawPoints = currentStrokePoints.toList()
+            val rawStroke = emitStroke(rawPoints, null)
+            onDiagramShapeDetected?.invoke(rawStroke)
+
+            // Replace raw with snapped shape
+            val snappedStroke = InkStroke(
+                points = currentStrokePoints.toList(),
+                isGeometric = snapData.isGeometric,
+                strokeType = snapData.strokeType
+            )
+            completedStrokes.remove(rawStroke)
+            completedStrokes.add(snappedStroke)
+            onStrokeReplaced?.invoke(rawStroke.strokeId, snappedStroke)
+
+            resetStrokeState()
+            flushAndRedraw()
+            return
+        }
+
+        // Start-dwell without shape → check if stroke looks like drawing
+        if (dwellIndicatorShown) {
+            val stroke = InkStroke(
+                points = currentStrokePoints.toList(),
+                isGeometric = false,
+                strokeType = StrokeType.FREEHAND
+            )
+            val drawingScore = DiagramStrokeClassifier.classifyStroke(
+                stroke, LINE_SPACING, includeConnector = false
+            )
+            completedStrokes.add(stroke)
+            onStrokeCompleted?.invoke(stroke)
+            if (drawingScore >= 0.5f) {
+                onDiagramShapeDetected?.invoke(stroke)
+                resetStrokeState()
+                flushAndRedraw()
+            } else {
+                resetStrokeState()
+            }
+            return
+        }
+
+        // Plain text stroke
+        val stroke = InkStroke(points = currentStrokePoints.toList())
+        completedStrokes.add(stroke)
+        onStrokeCompleted?.invoke(stroke)
+        resetStrokeState()
+    }
+
+    /**
+     * Emit a stroke with optional shape snap (two-phase commit).
+     * If [snapData] is non-null, emits the raw freehand stroke first, then
+     * replaces it with the snapped version. Returns the final emitted stroke.
+     */
+    private fun emitStroke(rawPoints: List<StrokePoint>, snapData: SnapData?): InkStroke {
+        val rawStroke = InkStroke(
+            points = rawPoints,
+            isGeometric = false,
+            strokeType = StrokeType.FREEHAND
+        )
+        completedStrokes.add(rawStroke)
+        onStrokeCompleted?.invoke(rawStroke)
+
+        if (snapData == null) return rawStroke
+
+        val snappedStroke = InkStroke(
+            points = currentStrokePoints.toList(),
+            isGeometric = snapData.isGeometric,
+            strokeType = snapData.strokeType
+        )
+        completedStrokes.remove(rawStroke)
+        completedStrokes.add(snappedStroke)
+        onStrokeReplaced?.invoke(rawStroke.strokeId, snappedStroke)
+        return snappedStroke
+    }
+
+    /** Clear transient stroke state after processing. */
+    private fun resetStrokeState() {
+        currentStrokePoints.clear()
+        currentPath.reset()
+        currentDiagramBounds = null
+        dwellDotCenter = null
+        dwellIndicatorShown = false
+    }
+
+    /** Force e-ink refresh by cycling the Onyx raw drawing mode. */
+    private fun flushAndRedraw() {
+        pauseRawDrawing()
+        drawToSurface()
+        resumeRawDrawing()
     }
 
     // --- Diagram area helpers ---
