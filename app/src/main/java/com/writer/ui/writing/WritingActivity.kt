@@ -330,14 +330,20 @@ class WritingActivity : AppCompatActivity() {
         action()
     }
 
+    private var lastUndoAlpha = 77
+    private var lastRedoAlpha = 77
+
     /** Update undo/redo button visibility based on availability.
-     *  Wraps in pause/resume to force e-ink refresh (Onyx SDK suppresses
-     *  Android View invalidation while raw drawing is enabled). */
+     *  Only forces e-ink refresh when the state actually changes. */
     fun updateUndoRedoButtons() {
-        val canUndo = coordinator?.canUndo() == true
-        val canRedo = coordinator?.canRedo() == true
-        undoButton.imageAlpha = if (canUndo) 255 else 77
-        redoButton.imageAlpha = if (canRedo) 255 else 77
+        val undoAlpha = if (coordinator?.canUndo() == true) 255 else 77
+        val redoAlpha = if (coordinator?.canRedo() == true) 255 else 77
+        if (undoAlpha == lastUndoAlpha && redoAlpha == lastRedoAlpha) return
+        lastUndoAlpha = undoAlpha
+        lastRedoAlpha = redoAlpha
+        undoButton.imageAlpha = undoAlpha
+        redoButton.imageAlpha = redoAlpha
+        // Force e-ink refresh: Onyx SDK suppresses View invalidation while raw drawing is active
         inkCanvas.pauseRawDrawing()
         inkCanvas.drawToSurface()
         inkCanvas.resumeRawDrawing()
