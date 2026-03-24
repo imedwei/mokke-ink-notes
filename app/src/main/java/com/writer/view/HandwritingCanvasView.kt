@@ -286,16 +286,21 @@ class HandwritingCanvasView @JvmOverloads constructor(
         tryInitOnyx()
     }
 
+    private var lastSurfaceWidth = 0
+    private var lastSurfaceHeight = 0
+    private val reinitOnyxRunnable = Runnable { reinitializeRawDrawing() }
+
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
         drawToSurface()
-        if (useOnyxSdk) {
-            try {
-                val limit = Rect()
-                getLocalVisibleRect(limit)
-                touchHelper?.setLimitRect(limit, emptyList())
-            } catch (e: Exception) {
-                Log.w(TAG, "Error updating limit rect: ${e.message}")
-            }
+        val dimensionsChanged = width != lastSurfaceWidth || height != lastSurfaceHeight
+        lastSurfaceWidth = width
+        lastSurfaceHeight = height
+        if (useOnyxSdk && dimensionsChanged) {
+            // Delay reinitialize to let the system fully settle after rotation.
+            // The Onyx SDK caches the view's screen position at TouchHelper.create()
+            // time — if we reinitialize too early, it picks up stale coordinates.
+            handler.removeCallbacks(reinitOnyxRunnable)
+            handler.postDelayed(reinitOnyxRunnable, 500L)
         }
     }
 
