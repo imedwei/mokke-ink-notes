@@ -189,6 +189,56 @@ class SpaceInsertTest {
         assertEquals(2, documentModel.diagramAreas[0].startLineIndex)
     }
 
+    @Test
+    fun `remove space with anchor inside diagram shifts containing diagram`() {
+        // Diagram on lines 3-5, empty lines 1-2, content on line 0
+        documentModel.diagramAreas.add(DiagramArea(startLineIndex = 3, heightInLines = 3))
+        documentModel.activeStrokes.add(strokeOnLine(0))
+        documentModel.activeStrokes.add(strokeOnLine(4))  // inside diagram
+
+        // Anchor inside diagram (line 4) → scans from diagram top (line 3)
+        val removed = SpaceInsertMode.removeSpace(documentModel, lineSegmenter, anchorLine = 4, linesToRemove = 3)
+
+        assertEquals(2, removed)  // lines 1-2 are empty
+        // Containing diagram shifted from line 3 to line 1
+        assertEquals(1, documentModel.diagramAreas[0].startLineIndex)
+        assertEquals(3, documentModel.diagramAreas[0].heightInLines)  // height unchanged
+        // Stroke inside diagram also shifted
+        val strokeLine = lineSegmenter.getStrokeLineIndex(documentModel.activeStrokes[1])
+        assertEquals(2, strokeLine)  // was line 4, shifted up by 2
+    }
+
+    @Test
+    fun `countEmptyLinesAbove counts correctly`() {
+        documentModel.activeStrokes.add(strokeOnLine(0))
+        // Lines 1-4 are empty
+        documentModel.activeStrokes.add(strokeOnLine(5))
+
+        val count = SpaceInsertMode.countEmptyLinesAbove(documentModel, lineSegmenter, anchorLine = 5)
+        assertEquals(4, count)
+    }
+
+    @Test
+    fun `countEmptyLinesAbove stops at content`() {
+        documentModel.activeStrokes.add(strokeOnLine(0))
+        documentModel.activeStrokes.add(strokeOnLine(3))
+        // Lines 4-5 empty
+        documentModel.activeStrokes.add(strokeOnLine(6))
+
+        val count = SpaceInsertMode.countEmptyLinesAbove(documentModel, lineSegmenter, anchorLine = 6)
+        assertEquals(2, count)  // lines 4-5 only
+    }
+
+    @Test
+    fun `countEmptyLinesAbove stops at diagram area`() {
+        documentModel.diagramAreas.add(DiagramArea(startLineIndex = 1, heightInLines = 2))
+        // Lines 3-4 empty
+        documentModel.activeStrokes.add(strokeOnLine(5))
+
+        val count = SpaceInsertMode.countEmptyLinesAbove(documentModel, lineSegmenter, anchorLine = 5)
+        assertEquals(2, count)  // lines 3-4, stops at diagram on lines 1-2
+    }
+
     // --- Undo integration ---
 
     @Test

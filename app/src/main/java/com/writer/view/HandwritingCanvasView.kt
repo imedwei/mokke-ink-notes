@@ -139,7 +139,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
     }
 
     private val spaceInsertBarrierPaint = Paint().apply {
-        color = Color.parseColor("#CC0000")
+        color = CanvasTheme.BARRIER_COLOR
         strokeWidth = 4f
         style = Paint.Style.STROKE
     }
