@@ -32,6 +32,7 @@ class WritingCoordinator(
 ) : DiagramManagerHost {
     companion object {
         private const val TAG = "WritingCoordinator"
+        private const val PERF_BUDGET_MS = 50L
     }
 
     private val lineSegmenter = LineSegmenter()
@@ -183,15 +184,18 @@ class WritingCoordinator(
     }
 
     private fun onStrokeCompleted(stroke: InkStroke) {
+        val elapsedMs = inkCanvas.lastFinishStrokeMs
         displayManager.textRefreshJob?.cancel()
         if (gestureHandler.tryHandle(stroke)) {
-            eventLog.recordEvent(lastStrokeIndex, StrokeEventLog.EventType.GESTURE_CONSUMED)
+            eventLog.recordEvent(lastStrokeIndex, StrokeEventLog.EventType.GESTURE_CONSUMED, elapsedMs = elapsedMs)
+            if (elapsedMs > PERF_BUDGET_MS) Log.w(TAG, "Slow stroke: ${elapsedMs}ms (gesture)")
             return
         }
 
         saveSnapshot(UndoCoalescer.ActionType.STROKE_ADDED, lineSegmenter.getStrokeLineIndex(stroke))
         documentModel.activeStrokes.add(stroke)
-        eventLog.recordEvent(lastStrokeIndex, StrokeEventLog.EventType.ADDED, "line=${lineSegmenter.getStrokeLineIndex(stroke)}")
+        eventLog.recordEvent(lastStrokeIndex, StrokeEventLog.EventType.ADDED, "line=${lineSegmenter.getStrokeLineIndex(stroke)}", elapsedMs = elapsedMs)
+        if (elapsedMs > PERF_BUDGET_MS) Log.w(TAG, "Slow stroke: ${elapsedMs}ms (added, line=${lineSegmenter.getStrokeLineIndex(stroke)})")
 
         val lineIdx = lineSegmenter.getStrokeLineIndex(stroke)
 
@@ -258,7 +262,7 @@ class WritingCoordinator(
         saveSnapshot(UndoCoalescer.ActionType.STROKE_REPLACED)  // captures state with raw stroke (state N+1)
         documentModel.activeStrokes.removeAll { it.strokeId == oldStrokeId }
         documentModel.activeStrokes.add(newStroke)
-        eventLog.recordEvent(lastStrokeIndex, StrokeEventLog.EventType.REPLACED, newStroke.strokeType.name)
+        eventLog.recordEvent(lastStrokeIndex, StrokeEventLog.EventType.REPLACED, newStroke.strokeType.name, elapsedMs = inkCanvas.lastFinishStrokeMs)
 
         // Track shape nodes for magnetic arrow snapping
         if (!newStroke.strokeType.isConnector && newStroke.strokeType != StrokeType.FREEHAND) {
@@ -311,7 +315,7 @@ class WritingCoordinator(
         diagramManager.onStrokesErased(idsToRemove, overlapping)
 
         eventLog.recordEvent(lastStrokeIndex, StrokeEventLog.EventType.SCRATCH_OUT,
-            "erased=${idsToRemove.joinToString(",")}")
+            "erased=${idsToRemove.joinToString(",")}", elapsedMs = inkCanvas.lastFinishStrokeMs)
         Log.i(TAG, "Scratch-out erase: removed ${overlapping.size} strokes in [$left,$top,$right,$bottom]")
     }
 

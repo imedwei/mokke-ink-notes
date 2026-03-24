@@ -58,9 +58,13 @@ object BugReport {
                         put("type", event.type.name)
                         put("detail", event.detail)
                         put("timestampMs", event.timestampMs)
+                        if (event.elapsedMs >= 0) put("elapsedMs", event.elapsedMs)
                     })
                 }
             })
+
+            // Performance summary
+            put("perfSummary", perfSummary(eventSnapshot.events))
 
             // Current document state
             put("documentState", JSONObject().apply {
@@ -90,6 +94,19 @@ object BugReport {
                     }
                 })
             })
+        }
+    }
+
+    private fun perfSummary(events: List<StrokeEventLog.ProcessingEvent>): JSONObject {
+        val timed = events.filter { it.elapsedMs >= 0 }.map { it.elapsedMs }
+        if (timed.isEmpty()) return JSONObject().apply { put("samples", 0) }
+        val sorted = timed.sorted()
+        return JSONObject().apply {
+            put("samples", sorted.size)
+            put("p50Ms", sorted[sorted.size / 2])
+            put("p95Ms", sorted[(sorted.size * 0.95).toInt().coerceAtMost(sorted.lastIndex)])
+            put("maxMs", sorted.last())
+            put("over50ms", sorted.count { it > 50 })
         }
     }
 
