@@ -46,7 +46,9 @@ class StrokeEventLog(private val maxStrokes: Int = 50) {
         val strokeIndex: Int,
         val type: EventType,
         val detail: String,
-        val timestampMs: Long
+        val timestampMs: Long,
+        /** Elapsed processing time in ms for this event, or -1 if not measured. */
+        val elapsedMs: Long = -1
     )
 
     data class Snapshot(
@@ -94,12 +96,13 @@ class StrokeEventLog(private val maxStrokes: Int = 50) {
      * @param strokeIndex the index returned by [recordStroke], or -1 for events
      *                    not tied to a specific stroke (e.g. recognition)
      */
-    fun recordEvent(strokeIndex: Int, type: EventType, detail: String = "") {
+    fun recordEvent(strokeIndex: Int, type: EventType, detail: String = "", elapsedMs: Long = -1) {
         events.addLast(ProcessingEvent(
             strokeIndex = strokeIndex,
             type = type,
             detail = detail,
-            timestampMs = System.currentTimeMillis()
+            timestampMs = System.currentTimeMillis(),
+            elapsedMs = elapsedMs
         ))
 
         // Cap events at 3x stroke capacity

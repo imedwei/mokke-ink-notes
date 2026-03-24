@@ -39,6 +39,7 @@ class WritingActivity : AppCompatActivity() {
         private const val PREFS_NAME = "writer_prefs"
         private const val PREF_CURRENT_DOC = "current_document"
         private const val PREF_SYNC_FOLDER = "sync_folder_uri"
+        private const val UNDO_REDO_DEBOUNCE_MS = 300L
     }
 
     private lateinit var inkCanvas: HandwritingCanvasView
@@ -51,7 +52,8 @@ class WritingActivity : AppCompatActivity() {
     private lateinit var redoButton: ImageView
     private lateinit var documentModel: DocumentModel
     private lateinit var recognizer: TextRecognizer
-    private var coordinator: WritingCoordinator? = null
+    @androidx.annotation.VisibleForTesting
+    internal var coordinator: WritingCoordinator? = null
     private lateinit var tutorialManager: TutorialManager
 
     // Split resize state
@@ -320,7 +322,6 @@ class WritingActivity : AppCompatActivity() {
     }
 
     private var lastUndoRedoTapMs = 0L
-    private val UNDO_REDO_DEBOUNCE_MS = 300L
 
     /** Debounce undo/redo taps to prevent accidental double-taps. */
     private inline fun debounceUndoRedo(action: () -> Unit) {
