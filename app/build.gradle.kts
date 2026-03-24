@@ -22,6 +22,9 @@ android {
         debug {
             applicationIdSuffix = ".dev"
             resValue("string", "app_name", "InkUp Dev")
+            ndk {
+                abiFilters += "arm64-v8a"
+            }
         }
         release {
             isMinifyEnabled = false
