@@ -117,7 +117,7 @@ object SpaceInsertMode {
 
         val shiftPx = emptyCount * HandwritingCanvasView.LINE_SPACING
 
-        // Shift strokes at/below scanFrom up
+        // Shift strokes at/below scanFrom up (includes strokes inside containing diagram)
         val shifted = documentModel.activeStrokes.map { stroke ->
             if (lineSegmenter.getStrokeLineIndex(stroke) >= scanFrom) {
                 stroke.shiftY(-shiftPx)
@@ -128,7 +128,9 @@ object SpaceInsertMode {
         documentModel.activeStrokes.clear()
         documentModel.activeStrokes.addAll(shifted)
 
-        // Shift diagram areas at/below scanFrom up
+        // Shift diagram areas at/below scanFrom up.
+        // Since scanFrom == containingArea.startLineIndex when anchor is inside a diagram,
+        // the >= check correctly includes the containing diagram itself.
         val shiftedAreas = documentModel.diagramAreas.map { area ->
             if (area.startLineIndex >= scanFrom) {
                 area.copy(startLineIndex = area.startLineIndex - emptyCount)

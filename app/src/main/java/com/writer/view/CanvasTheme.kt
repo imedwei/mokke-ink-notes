@@ -33,6 +33,7 @@ object CanvasTheme {
     }
 
     val DIAGRAM_BORDER_COLOR: Int = Color.parseColor("#555555")
+    val BARRIER_COLOR: Int = Color.parseColor("#CC0000")
 
     fun newDiagramBorderPaint() = Paint().apply {
         color = DIAGRAM_BORDER_COLOR
