@@ -248,29 +248,19 @@ object ScratchOutDetection {
         }
         if (candidates.isEmpty()) return false
 
-        // 1. Must intersect or be very close to at least one candidate stroke.
-        // For small targets (dots, taps with < 5 points), proximity is sufficient
-        // since segment intersection is unreliable with 1-2 point strokes.
         val radiusSq = radius * radius
-        val intersecting = candidates.filter { stroke ->
-            if (stroke.points.size < 5) {
-                // Small target: any scratch point within radius counts
-                stroke.points.any { tp ->
-                    scratchPoints.any { sp ->
-                        val dx = sp.x - tp.x; val dy = sp.y - tp.y
-                        dx * dx + dy * dy <= radiusSq
-                    }
+
+        // For small targets (< 5 total points across all candidates),
+        // use simple proximity — grid overhead isn't worthwhile.
+        val targetPoints = candidates.flatMap { it.points }
+        if (targetPoints.size < 5) {
+            return targetPoints.any { tp ->
+                scratchPoints.any { sp ->
+                    val dx = sp.x - tp.x; val dy = sp.y - tp.y
+                    dx * dx + dy * dy <= radiusSq
                 }
-            } else {
-                strokesIntersect(scratchPoints, stroke.points)
             }
         }
-        if (intersecting.isEmpty()) return false
-
-        // 2. Check coverage: what fraction of scratch-out points are near target strokes?
-        // For small targets (< 5 total points), intersection/proximity alone is sufficient.
-        val targetPoints = intersecting.flatMap { it.points }
-        if (targetPoints.size < 5) return true
 
         // Grid-based spatial index: O(n + m) instead of O(n*m).
         // Cell size = radius. For each scratch point, check its cell + 8 neighbors
