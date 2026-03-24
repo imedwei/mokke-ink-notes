@@ -308,26 +308,14 @@ object ShapeSnapDetection {
      * If the last point duplicates the first (the typical explicit-close convention),
      * it is trimmed before extending to avoid counting the start corner twice.
      */
-    // Reusable buffers for findCornerIndicesCyclic to avoid per-call allocations.
-    // ShapeSnapDetection is a singleton object, so these are effectively static.
-    // NOT thread-safe: detect() must only be called from the main thread.
-    private var cyclicBufXs = FloatArray(0)
-    private var cyclicBufYs = FloatArray(0)
-
     private fun findCornerIndicesCyclic(xs: FloatArray, ys: FloatArray, window: Int): List<Int> {
         // Strip the closing duplicate if present so the start/end corner is not detected twice.
         val lastDuplicatesFirst = dist(xs.last(), ys.last(), xs.first(), ys.first()) < 0.01f
         val n = if (lastDuplicatesFirst) xs.size - 1 else xs.size
 
         val ext = n + 2 * window
-        // Grow buffers only when needed; never shrink to avoid repeated allocation
-        // across similarly-sized strokes.
-        if (cyclicBufXs.size < ext) {
-            cyclicBufXs = FloatArray(ext)
-            cyclicBufYs = FloatArray(ext)
-        }
-        val extXs = cyclicBufXs
-        val extYs = cyclicBufYs
+        val extXs = FloatArray(ext)
+        val extYs = FloatArray(ext)
         for (i in 0 until ext) {
             when {
                 i < window     -> { extXs[i] = xs[n - window + i]; extYs[i] = ys[n - window + i] }
