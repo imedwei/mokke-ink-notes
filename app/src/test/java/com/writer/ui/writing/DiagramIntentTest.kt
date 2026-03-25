@@ -41,10 +41,10 @@ class DiagramIntentTest {
     private lateinit var lineSegmenter: LineSegmenter
 
     private fun currentSnapshot() = UndoManager.Snapshot(
-        strokes = documentModel.activeStrokes.toList(),
+        strokes = documentModel.main.activeStrokes.toList(),
         scrollOffsetY = 0f,
         lineTextCache = emptyMap(),
-        diagramAreas = documentModel.diagramAreas.toList()
+        diagramAreas = documentModel.main.diagramAreas.toList()
     )
 
     private fun saveUndoSnapshot() {
@@ -52,10 +52,10 @@ class DiagramIntentTest {
     }
 
     private fun applySnapshot(snapshot: UndoManager.Snapshot) {
-        documentModel.activeStrokes.clear()
-        documentModel.activeStrokes.addAll(snapshot.strokes)
-        documentModel.diagramAreas.clear()
-        documentModel.diagramAreas.addAll(snapshot.diagramAreas)
+        documentModel.main.activeStrokes.clear()
+        documentModel.main.activeStrokes.addAll(snapshot.strokes)
+        documentModel.main.diagramAreas.clear()
+        documentModel.main.diagramAreas.addAll(snapshot.diagramAreas)
     }
 
     private fun undo(): Boolean {
@@ -170,27 +170,27 @@ class DiagramIntentTest {
         var mergeHeight = bottomLine - mergeStart + 1
 
         // Merge with adjacent diagram area above
-        val above = documentModel.diagramAreas.find { it.endLineIndex + 1 >= mergeStart && it.endLineIndex < mergeStart + mergeHeight }
+        val above = documentModel.main.diagramAreas.find { it.endLineIndex + 1 >= mergeStart && it.endLineIndex < mergeStart + mergeHeight }
         if (above != null && above.endLineIndex + 1 >= mergeStart) {
             if (above.startLineIndex < mergeStart) {
                 mergeHeight += mergeStart - above.startLineIndex
                 mergeStart = above.startLineIndex
             }
-            documentModel.diagramAreas.remove(above)
+            documentModel.main.diagramAreas.remove(above)
         }
 
         // Merge with adjacent diagram area below
-        val below = documentModel.diagramAreas.find { it.startLineIndex <= mergeStart + mergeHeight && it.startLineIndex >= mergeStart }
+        val below = documentModel.main.diagramAreas.find { it.startLineIndex <= mergeStart + mergeHeight && it.startLineIndex >= mergeStart }
         if (below != null && below != above) {
             val belowEnd = below.startLineIndex + below.heightInLines
             if (belowEnd > mergeStart + mergeHeight) {
                 mergeHeight = belowEnd - mergeStart
             }
-            documentModel.diagramAreas.remove(below)
+            documentModel.main.diagramAreas.remove(below)
         }
 
         val newArea = DiagramArea(startLineIndex = mergeStart, heightInLines = mergeHeight)
-        documentModel.diagramAreas.add(newArea)
+        documentModel.main.diagramAreas.add(newArea)
 
         val topY = lineSegmenter.getLineY(mergeStart)
         val bottomY = lineSegmenter.getLineY(mergeStart + mergeHeight)
@@ -201,7 +201,7 @@ class DiagramIntentTest {
     private fun simulateShapeStroke(stroke: InkStroke, snappedType: StrokeType) {
         // Phase 1: raw stroke completed
         saveUndoSnapshot()
-        documentModel.activeStrokes.add(stroke)
+        documentModel.main.activeStrokes.add(stroke)
 
         // Phase 2: diagram area created
         saveUndoSnapshot()
@@ -213,8 +213,8 @@ class DiagramIntentTest {
             isGeometric = true
         )
         saveUndoSnapshot()
-        documentModel.activeStrokes.removeAll { it.strokeId == stroke.strokeId }
-        documentModel.activeStrokes.add(snappedStroke)
+        documentModel.main.activeStrokes.removeAll { it.strokeId == stroke.strokeId }
+        documentModel.main.activeStrokes.add(snappedStroke)
     }
 
     @Before
@@ -241,8 +241,8 @@ class DiagramIntentTest {
         val bounds = simulateDiagramShapeDetected(stroke)
         assertNotNull(bounds)
 
-        assertEquals("Should have 1 diagram area", 1, documentModel.diagramAreas.size)
-        val area = documentModel.diagramAreas[0]
+        assertEquals("Should have 1 diagram area", 1, documentModel.main.diagramAreas.size)
+        val area = documentModel.main.diagramAreas[0]
         // Exact bounding box: lines 3-6
         assertEquals("Start line should match shape top", 3, area.startLineIndex)
         assertTrue("Should cover line 6", area.containsLine(6))
@@ -256,7 +256,7 @@ class DiagramIntentTest {
 
         val result = ShapeSnapDetection.detect(xs, ys, LS)
         assertNull("Short text-like stroke should not be a shape", result)
-        assertEquals("No diagram areas should be created", 0, documentModel.diagramAreas.size)
+        assertEquals("No diagram areas should be created", 0, documentModel.main.diagramAreas.size)
     }
 
     @Test
@@ -272,7 +272,7 @@ class DiagramIntentTest {
         val bounds = simulateDiagramShapeDetected(stroke)
         assertNotNull(bounds)
 
-        val area = documentModel.diagramAreas[0]
+        val area = documentModel.main.diagramAreas[0]
         // Exact bounding box: lines 4-7
         assertEquals("Start should match shape top", 4, area.startLineIndex)
         assertTrue("Should contain line 7", area.containsLine(7))
@@ -289,7 +289,7 @@ class DiagramIntentTest {
 
         val bounds = simulateDiagramShapeDetected(stroke)
         assertNotNull(bounds)
-        assertEquals(1, documentModel.diagramAreas.size)
+        assertEquals(1, documentModel.main.diagramAreas.size)
     }
 
     // ── Merge logic ───────────────────────────────────────────────────────────
@@ -297,14 +297,14 @@ class DiagramIntentTest {
     @Test
     fun `diagram area merges with overlapping area above`() {
         // Existing area covers lines 0-4
-        documentModel.diagramAreas.add(DiagramArea(startLineIndex = 0, heightInLines = 5))
+        documentModel.main.diagramAreas.add(DiagramArea(startLineIndex = 0, heightInLines = 5))
 
         // Shape at lines 3-6 overlaps with existing area
         val stroke = makeRectangleStroke(startLine = 3, endLine = 6)
         simulateDiagramShapeDetected(stroke)
 
-        assertEquals("Should merge into 1 area", 1, documentModel.diagramAreas.size)
-        val area = documentModel.diagramAreas[0]
+        assertEquals("Should merge into 1 area", 1, documentModel.main.diagramAreas.size)
+        val area = documentModel.main.diagramAreas[0]
         assertEquals("Merged area should start at 0", 0, area.startLineIndex)
         assertTrue("Merged area should contain line 6", area.containsLine(6))
     }
@@ -312,28 +312,28 @@ class DiagramIntentTest {
     @Test
     fun `diagram area merges with adjacent area below`() {
         // Existing area at lines 7-9
-        documentModel.diagramAreas.add(DiagramArea(startLineIndex = 7, heightInLines = 3))
+        documentModel.main.diagramAreas.add(DiagramArea(startLineIndex = 7, heightInLines = 3))
 
         // Shape at lines 5-7 overlaps with existing area at line 7
         val stroke = makeRectangleStroke(startLine = 5, endLine = 7)
         simulateDiagramShapeDetected(stroke)
 
-        assertEquals("Should merge into 1 area", 1, documentModel.diagramAreas.size)
-        val area = documentModel.diagramAreas[0]
+        assertEquals("Should merge into 1 area", 1, documentModel.main.diagramAreas.size)
+        val area = documentModel.main.diagramAreas[0]
         assertEquals("Merged area should start at 5", 5, area.startLineIndex)
         assertTrue("Merged area should contain line 9 (original below end)", area.containsLine(9))
     }
 
     @Test
     fun `diagram area merges with areas both above and below`() {
-        documentModel.diagramAreas.add(DiagramArea(startLineIndex = 0, heightInLines = 5))
-        documentModel.diagramAreas.add(DiagramArea(startLineIndex = 6, heightInLines = 3))
+        documentModel.main.diagramAreas.add(DiagramArea(startLineIndex = 0, heightInLines = 5))
+        documentModel.main.diagramAreas.add(DiagramArea(startLineIndex = 6, heightInLines = 3))
 
         // Shape spans lines 3-7, overlapping both
         val stroke = makeRectangleStroke(startLine = 3, endLine = 7)
         simulateDiagramShapeDetected(stroke)
 
-        val totalAreas = documentModel.diagramAreas.size
+        val totalAreas = documentModel.main.diagramAreas.size
         assertTrue("Should merge to 1 or 2 areas, got $totalAreas", totalAreas <= 2)
     }
 
@@ -344,25 +344,25 @@ class DiagramIntentTest {
         val stroke = makeRectangleStroke(startLine = 3, endLine = 5)
         simulateShapeStroke(stroke, StrokeType.RECTANGLE)
 
-        assertEquals(1, documentModel.diagramAreas.size)
-        assertEquals(1, documentModel.activeStrokes.size)
-        assertEquals(StrokeType.RECTANGLE, documentModel.activeStrokes[0].strokeType)
+        assertEquals(1, documentModel.main.diagramAreas.size)
+        assertEquals(1, documentModel.main.activeStrokes.size)
+        assertEquals(StrokeType.RECTANGLE, documentModel.main.activeStrokes[0].strokeType)
 
         // Undo 1: unsnap → raw freehand (diagram still present)
         assertTrue(undo())
-        assertEquals(1, documentModel.activeStrokes.size)
-        assertEquals(StrokeType.FREEHAND, documentModel.activeStrokes[0].strokeType)
-        assertEquals(1, documentModel.diagramAreas.size)
+        assertEquals(1, documentModel.main.activeStrokes.size)
+        assertEquals(StrokeType.FREEHAND, documentModel.main.activeStrokes[0].strokeType)
+        assertEquals(1, documentModel.main.diagramAreas.size)
 
         // Undo 2: remove diagram area (stroke still present)
         assertTrue(undo())
-        assertEquals(1, documentModel.activeStrokes.size)
-        assertEquals(0, documentModel.diagramAreas.size)
+        assertEquals(1, documentModel.main.activeStrokes.size)
+        assertEquals(0, documentModel.main.diagramAreas.size)
 
         // Undo 3: remove stroke entirely
         assertTrue(undo())
-        assertEquals(0, documentModel.activeStrokes.size)
-        assertEquals(0, documentModel.diagramAreas.size)
+        assertEquals(0, documentModel.main.activeStrokes.size)
+        assertEquals(0, documentModel.main.diagramAreas.size)
     }
 
     @Test
@@ -372,21 +372,21 @@ class DiagramIntentTest {
 
         // Undo all 3 phases
         undo(); undo(); undo()
-        assertEquals(0, documentModel.activeStrokes.size)
-        assertEquals(0, documentModel.diagramAreas.size)
+        assertEquals(0, documentModel.main.activeStrokes.size)
+        assertEquals(0, documentModel.main.diagramAreas.size)
 
         // Redo phase 1: raw stroke
         assertTrue(redo())
-        assertEquals(1, documentModel.activeStrokes.size)
-        assertEquals(StrokeType.FREEHAND, documentModel.activeStrokes[0].strokeType)
+        assertEquals(1, documentModel.main.activeStrokes.size)
+        assertEquals(StrokeType.FREEHAND, documentModel.main.activeStrokes[0].strokeType)
 
         // Redo phase 2: diagram area
         assertTrue(redo())
-        assertEquals(1, documentModel.diagramAreas.size)
+        assertEquals(1, documentModel.main.diagramAreas.size)
 
         // Redo phase 3: snapped shape
         assertTrue(redo())
-        assertEquals(StrokeType.RECTANGLE, documentModel.activeStrokes[0].strokeType)
+        assertEquals(StrokeType.RECTANGLE, documentModel.main.activeStrokes[0].strokeType)
     }
 
     // ── Edge cases ────────────────────────────────────────────────────────────
@@ -424,7 +424,7 @@ class DiagramIntentTest {
         val stroke = makeRectangleStroke(startLine = 0, endLine = 1)
         simulateDiagramShapeDetected(stroke)
 
-        val area = documentModel.diagramAreas[0]
+        val area = documentModel.main.diagramAreas[0]
         assertEquals("Start line should be 0", 0, area.startLineIndex)
     }
 
@@ -436,7 +436,7 @@ class DiagramIntentTest {
         simulateDiagramShapeDetected(stroke1)
         simulateDiagramShapeDetected(stroke2)
 
-        assertEquals("Should have 2 separate diagram areas", 2, documentModel.diagramAreas.size)
+        assertEquals("Should have 2 separate diagram areas", 2, documentModel.main.diagramAreas.size)
     }
 
     @Test
@@ -444,14 +444,14 @@ class DiagramIntentTest {
         // First shape at lines 2-4 → diagram 2-4
         val stroke1 = makeRectangleStroke(startLine = 2, endLine = 4)
         simulateDiagramShapeDetected(stroke1)
-        assertEquals(1, documentModel.diagramAreas.size)
+        assertEquals(1, documentModel.main.diagramAreas.size)
 
         // Second shape at lines 4-6 → overlaps at line 4, should merge
         val stroke2 = makeRectangleStroke(startLine = 4, endLine = 6)
         simulateDiagramShapeDetected(stroke2)
 
-        assertEquals("Overlapping diagrams should merge", 1, documentModel.diagramAreas.size)
-        val area = documentModel.diagramAreas[0]
+        assertEquals("Overlapping diagrams should merge", 1, documentModel.main.diagramAreas.size)
+        val area = documentModel.main.diagramAreas[0]
         assertTrue("Merged area should contain line 2", area.containsLine(2))
         assertTrue("Merged area should contain line 6", area.containsLine(6))
     }
@@ -471,7 +471,7 @@ class DiagramIntentTest {
         val strokeTopLine = lineSegmenter.getLineIndex(strokeMinY)
         val strokeBottomLine = lineSegmenter.getLineIndex(strokeMaxY)
 
-        val area = documentModel.diagramAreas.find {
+        val area = documentModel.main.diagramAreas.find {
             strokeTopLine <= it.endLineIndex && strokeBottomLine >= it.startLineIndex
         } ?: return
 
@@ -485,14 +485,14 @@ class DiagramIntentTest {
         // Upward expansion: shift diagram strokes + overflow stroke DOWN.
         if (linesAbove > 0) {
             val shiftPx = linesAbove * ls
-            val shifted = documentModel.activeStrokes.map { stroke ->
+            val shifted = documentModel.main.activeStrokes.map { stroke ->
                 val strokeLine = lineSegmenter.getStrokeLineIndex(stroke)
                 val isInsideDiagram = strokeLine >= area.startLineIndex
                 val isOverflowStroke = stroke.strokeId == overflowStrokeId
                 if (isInsideDiagram || isOverflowStroke) stroke.shiftY(shiftPx) else stroke
             }
-            documentModel.activeStrokes.clear()
-            documentModel.activeStrokes.addAll(shifted)
+            documentModel.main.activeStrokes.clear()
+            documentModel.main.activeStrokes.addAll(shifted)
         }
 
         // Downward expansion: shift strokes below the diagram DOWN,
@@ -500,18 +500,18 @@ class DiagramIntentTest {
         if (linesBelow > 0) {
             val shiftPx = linesBelow * ls
             val postEndLine = area.endLineIndex + linesAbove
-            val shifted = documentModel.activeStrokes.map { stroke ->
+            val shifted = documentModel.main.activeStrokes.map { stroke ->
                 val strokeLine = lineSegmenter.getStrokeLineIndex(stroke)
                 val isOverflowStroke = stroke.strokeId == overflowStrokeId
                 if (strokeLine > postEndLine && !isOverflowStroke) stroke.shiftY(shiftPx) else stroke
             }
-            documentModel.activeStrokes.clear()
-            documentModel.activeStrokes.addAll(shifted)
+            documentModel.main.activeStrokes.clear()
+            documentModel.main.activeStrokes.addAll(shifted)
         }
 
         // Expand diagram: keep original startLineIndex, grow height
-        documentModel.diagramAreas.remove(area)
-        documentModel.diagramAreas.add(DiagramArea(
+        documentModel.main.diagramAreas.remove(area)
+        documentModel.main.diagramAreas.add(DiagramArea(
             startLineIndex = area.startLineIndex,
             heightInLines = area.heightInLines + linesAbove + linesBelow
         ))
@@ -519,14 +519,14 @@ class DiagramIntentTest {
 
     @Test
     fun `stroke extending below diagram expands it downward`() {
-        documentModel.diagramAreas.add(DiagramArea(startLineIndex = 3, heightInLines = 3))
+        documentModel.main.diagramAreas.add(DiagramArea(startLineIndex = 3, heightInLines = 3))
 
         val strokeMinY = TM + 4 * LS + LS * 0.5f
         val strokeMaxY = TM + 7 * LS + LS * 0.5f
         simulateOverflow(strokeMinY, strokeMaxY)
 
-        assertEquals(1, documentModel.diagramAreas.size)
-        val area = documentModel.diagramAreas[0]
+        assertEquals(1, documentModel.main.diagramAreas.size)
+        val area = documentModel.main.diagramAreas[0]
         assertEquals("Start should remain at 3", 3, area.startLineIndex)
         assertTrue("Should now contain line 7", area.containsLine(7))
     }
@@ -535,30 +535,30 @@ class DiagramIntentTest {
     fun `stroke extending above diagram shifts content down and expands`() {
         // Diagram shape on line 6
         val diagramStroke = makeTextStroke(line = 6)
-        documentModel.activeStrokes.add(diagramStroke)
-        documentModel.diagramAreas.add(DiagramArea(startLineIndex = 5, heightInLines = 4))
+        documentModel.main.activeStrokes.add(diagramStroke)
+        documentModel.main.diagramAreas.add(DiagramArea(startLineIndex = 5, heightInLines = 4))
 
         // Overflow stroke from line 3 to line 6 (crosses diagram start)
         val overflowStroke = makeLineStroke(startLine = 3, endLine = 6)
-        documentModel.activeStrokes.add(overflowStroke)
+        documentModel.main.activeStrokes.add(overflowStroke)
 
         simulateOverflow(overflowStroke.strokeId,
             strokeMinY = TM + 3 * LS + LS * 0.2f,
             strokeMaxY = TM + 6 * LS + LS * 0.5f
         )
 
-        val area = documentModel.diagramAreas[0]
+        val area = documentModel.main.diagramAreas[0]
         // Diagram keeps its original startLineIndex
         assertEquals("Diagram start stays at 5", 5, area.startLineIndex)
         // Height grew by linesAbove (5 - 3 + 1 = 3)
         assertEquals("Height should grow", 4 + 3, area.heightInLines)
 
         // Diagram stroke was shifted down (its maxY was inside diagram)
-        val shiftedDiagramLine = lineSegmenter.getStrokeLineIndex(documentModel.activeStrokes[0])
+        val shiftedDiagramLine = lineSegmenter.getStrokeLineIndex(documentModel.main.activeStrokes[0])
         assertEquals("Diagram stroke shifted down by 3", 6 + 3, shiftedDiagramLine)
 
         // Overflow stroke was shifted down (its maxY was inside diagram)
-        val shiftedOverflowLine = lineSegmenter.getStrokeLineIndex(documentModel.activeStrokes[1])
+        val shiftedOverflowLine = lineSegmenter.getStrokeLineIndex(documentModel.main.activeStrokes[1])
         assertTrue("Overflow stroke shifted down, now inside diagram",
             area.containsLine(shiftedOverflowLine))
     }
@@ -567,16 +567,16 @@ class DiagramIntentTest {
     fun `scenario 1 - overflow crosses diagram start, text above stays outside`() {
         // "Hello World" text on line 1
         val helloStroke = makeTextStroke(line = 1)
-        documentModel.activeStrokes.add(helloStroke)
+        documentModel.main.activeStrokes.add(helloStroke)
 
         // Diagram at lines 4-6 with a shape
         val shapeStroke = makeTextStroke(line = 5)
-        documentModel.activeStrokes.add(shapeStroke)
-        documentModel.diagramAreas.add(DiagramArea(startLineIndex = 4, heightInLines = 3))
+        documentModel.main.activeStrokes.add(shapeStroke)
+        documentModel.main.diagramAreas.add(DiagramArea(startLineIndex = 4, heightInLines = 3))
 
         // Overflow stroke from line 3 (above diagram) to line 5 (inside diagram)
         val overflowStroke = makeLineStroke(startLine = 3, endLine = 5)
-        documentModel.activeStrokes.add(overflowStroke)
+        documentModel.main.activeStrokes.add(overflowStroke)
 
         simulateOverflow(overflowStroke.strokeId,
             strokeMinY = TM + 3 * LS + LS * 0.2f,
@@ -584,18 +584,18 @@ class DiagramIntentTest {
         )
 
         // Text stays at line 1 (not shifted — maxY is above diagram)
-        val textLine = lineSegmenter.getStrokeLineIndex(documentModel.activeStrokes[0])
+        val textLine = lineSegmenter.getStrokeLineIndex(documentModel.main.activeStrokes[0])
         assertEquals("Hello World stays at line 1", 1, textLine)
 
         // Diagram area should NOT contain text line
-        val area = documentModel.diagramAreas[0]
+        val area = documentModel.main.diagramAreas[0]
         assertTrue("Diagram should not contain line 1", !area.containsLine(1))
         assertTrue("Diagram should not contain line 2", !area.containsLine(textLine + 1))
 
         // All diagram/overflow strokes should be inside the diagram area
-        val shapeLine = lineSegmenter.getStrokeLineIndex(documentModel.activeStrokes[1])
+        val shapeLine = lineSegmenter.getStrokeLineIndex(documentModel.main.activeStrokes[1])
         assertTrue("Shape should be inside diagram", area.containsLine(shapeLine))
-        val overflowLine = lineSegmenter.getStrokeLineIndex(documentModel.activeStrokes[2])
+        val overflowLine = lineSegmenter.getStrokeLineIndex(documentModel.main.activeStrokes[2])
         assertTrue("Overflow should be inside diagram", area.containsLine(overflowLine))
     }
 
@@ -603,16 +603,16 @@ class DiagramIntentTest {
     fun `scenario 2 - overflow overlaps text, text stays above diagram`() {
         // "Hello World" text on line 2
         val helloStroke = makeTextStroke(line = 2)
-        documentModel.activeStrokes.add(helloStroke)
+        documentModel.main.activeStrokes.add(helloStroke)
 
         // Diagram at lines 4-6 with a shape
         val shapeStroke = makeTextStroke(line = 5)
-        documentModel.activeStrokes.add(shapeStroke)
-        documentModel.diagramAreas.add(DiagramArea(startLineIndex = 4, heightInLines = 3))
+        documentModel.main.activeStrokes.add(shapeStroke)
+        documentModel.main.diagramAreas.add(DiagramArea(startLineIndex = 4, heightInLines = 3))
 
         // Overflow stroke from line 2 (SAME line as Hello World) to line 5 (inside diagram)
         val overflowStroke = makeLineStroke(startLine = 2, endLine = 5)
-        documentModel.activeStrokes.add(overflowStroke)
+        documentModel.main.activeStrokes.add(overflowStroke)
 
         simulateOverflow(overflowStroke.strokeId,
             strokeMinY = TM + 2 * LS + LS * 0.2f,
@@ -620,27 +620,27 @@ class DiagramIntentTest {
         )
 
         // Hello World stays at line 2 (maxY is on line 2, below diagram top at line 4)
-        val textLine = lineSegmenter.getStrokeLineIndex(documentModel.activeStrokes[0])
+        val textLine = lineSegmenter.getStrokeLineIndex(documentModel.main.activeStrokes[0])
         assertEquals("Hello World stays at line 2", 2, textLine)
 
         // Diagram should not contain Hello World's line
-        val area = documentModel.diagramAreas[0]
+        val area = documentModel.main.diagramAreas[0]
         assertTrue("Diagram should not contain line 2 (Hello World)", !area.containsLine(textLine))
 
         // Overflow stroke was shifted down — now inside the diagram
-        val overflowLine = lineSegmenter.getStrokeLineIndex(documentModel.activeStrokes[2])
+        val overflowLine = lineSegmenter.getStrokeLineIndex(documentModel.main.activeStrokes[2])
         assertTrue("Overflow should be inside diagram", area.containsLine(overflowLine))
     }
 
     @Test
     fun `stroke within diagram bounds does not expand`() {
-        documentModel.diagramAreas.add(DiagramArea(startLineIndex = 3, heightInLines = 6))
+        documentModel.main.diagramAreas.add(DiagramArea(startLineIndex = 3, heightInLines = 6))
 
         val strokeMinY = TM + 4 * LS + LS * 0.2f
         val strokeMaxY = TM + 6 * LS + LS * 0.8f
         simulateOverflow(strokeMinY, strokeMaxY)
 
-        val area = documentModel.diagramAreas[0]
+        val area = documentModel.main.diagramAreas[0]
         assertEquals("Start should remain 3", 3, area.startLineIndex)
         assertEquals("Height should remain 6", 6, area.heightInLines)
     }
@@ -649,41 +649,41 @@ class DiagramIntentTest {
     fun `scenario 3 - overflow crosses diagram end, text below stays outside`() {
         // Hello World on line 1
         val helloStroke = makeTextStroke(line = 1)
-        documentModel.activeStrokes.add(helloStroke)
+        documentModel.main.activeStrokes.add(helloStroke)
 
         // Diagram at lines 3-5 with a shape
         val shapeStroke = makeTextStroke(line = 4)
-        documentModel.activeStrokes.add(shapeStroke)
-        documentModel.diagramAreas.add(DiagramArea(startLineIndex = 3, heightInLines = 3))
+        documentModel.main.activeStrokes.add(shapeStroke)
+        documentModel.main.diagramAreas.add(DiagramArea(startLineIndex = 3, heightInLines = 3))
 
         // Text underneath on line 7
         val textBelow = makeTextStroke(line = 7)
-        documentModel.activeStrokes.add(textBelow)
+        documentModel.main.activeStrokes.add(textBelow)
 
         // Overflow stroke from line 4 (inside) to line 6 (below diagram end at 5)
         val overflowStroke = makeLineStroke(startLine = 4, endLine = 6)
-        documentModel.activeStrokes.add(overflowStroke)
+        documentModel.main.activeStrokes.add(overflowStroke)
 
         simulateOverflow(overflowStroke.strokeId,
             strokeMinY = TM + 4 * LS + LS * 0.2f,
             strokeMaxY = TM + 6 * LS + LS * 0.5f
         )
 
-        val area = documentModel.diagramAreas[0]
+        val area = documentModel.main.diagramAreas[0]
 
         // Hello World stays at line 1, outside diagram
-        assertEquals("Hello stays at 1", 1, lineSegmenter.getStrokeLineIndex(documentModel.activeStrokes[0]))
+        assertEquals("Hello stays at 1", 1, lineSegmenter.getStrokeLineIndex(documentModel.main.activeStrokes[0]))
         assertTrue("Hello outside diagram", !area.containsLine(1))
 
         // Shape inside diagram
-        assertTrue("Shape inside diagram", area.containsLine(lineSegmenter.getStrokeLineIndex(documentModel.activeStrokes[1])))
+        assertTrue("Shape inside diagram", area.containsLine(lineSegmenter.getStrokeLineIndex(documentModel.main.activeStrokes[1])))
 
         // Overflow stroke inside diagram (not shifted — it's diagram content)
-        val overflowLine = lineSegmenter.getStrokeLineIndex(documentModel.activeStrokes[3])
+        val overflowLine = lineSegmenter.getStrokeLineIndex(documentModel.main.activeStrokes[3])
         assertTrue("Overflow inside diagram", area.containsLine(overflowLine))
 
         // Text below shifted down, outside diagram
-        val textBelowLine = lineSegmenter.getStrokeLineIndex(documentModel.activeStrokes[2])
+        val textBelowLine = lineSegmenter.getStrokeLineIndex(documentModel.main.activeStrokes[2])
         assertTrue("Text below outside diagram", !area.containsLine(textBelowLine))
         assertTrue("Text below shifted further down", textBelowLine > 7)
     }
@@ -692,34 +692,34 @@ class DiagramIntentTest {
     fun `scenario 4 - overflow overlaps text below, text shifts down`() {
         // Hello World on line 1
         val helloStroke = makeTextStroke(line = 1)
-        documentModel.activeStrokes.add(helloStroke)
+        documentModel.main.activeStrokes.add(helloStroke)
 
         // Diagram at lines 3-5 with a shape
         val shapeStroke = makeTextStroke(line = 4)
-        documentModel.activeStrokes.add(shapeStroke)
-        documentModel.diagramAreas.add(DiagramArea(startLineIndex = 3, heightInLines = 3))
+        documentModel.main.activeStrokes.add(shapeStroke)
+        documentModel.main.diagramAreas.add(DiagramArea(startLineIndex = 3, heightInLines = 3))
 
         // Text underneath on line 6 (same line as overflow will reach)
         val textBelow = makeTextStroke(line = 6)
-        documentModel.activeStrokes.add(textBelow)
+        documentModel.main.activeStrokes.add(textBelow)
 
         // Overflow stroke from line 4 (inside) to line 6 (overlaps text below)
         val overflowStroke = makeLineStroke(startLine = 4, endLine = 6)
-        documentModel.activeStrokes.add(overflowStroke)
+        documentModel.main.activeStrokes.add(overflowStroke)
 
         simulateOverflow(overflowStroke.strokeId,
             strokeMinY = TM + 4 * LS + LS * 0.2f,
             strokeMaxY = TM + 6 * LS + LS * 0.5f
         )
 
-        val area = documentModel.diagramAreas[0]
+        val area = documentModel.main.diagramAreas[0]
 
         // Overflow stroke is inside diagram
-        val overflowLine = lineSegmenter.getStrokeLineIndex(documentModel.activeStrokes[3])
+        val overflowLine = lineSegmenter.getStrokeLineIndex(documentModel.main.activeStrokes[3])
         assertTrue("Overflow inside diagram", area.containsLine(overflowLine))
 
         // Text below was on same line as overflow — should be shifted out
-        val textBelowLine = lineSegmenter.getStrokeLineIndex(documentModel.activeStrokes[2])
+        val textBelowLine = lineSegmenter.getStrokeLineIndex(documentModel.main.activeStrokes[2])
         assertTrue("Text below outside diagram", !area.containsLine(textBelowLine))
     }
 
@@ -734,16 +734,16 @@ class DiagramIntentTest {
             ),
             strokeType = StrokeType.FREEHAND
         )
-        documentModel.activeStrokes.add(textWithDescender)
+        documentModel.main.activeStrokes.add(textWithDescender)
 
         // Diagram at lines 4-7 with a shape
         val shapeStroke = makeTextStroke(line = 6)
-        documentModel.activeStrokes.add(shapeStroke)
-        documentModel.diagramAreas.add(DiagramArea(startLineIndex = 4, heightInLines = 4))
+        documentModel.main.activeStrokes.add(shapeStroke)
+        documentModel.main.diagramAreas.add(DiagramArea(startLineIndex = 4, heightInLines = 4))
 
         // Overflow stroke from line 3 to line 5 (crosses diagram start)
         val overflowStroke = makeLineStroke(startLine = 3, endLine = 5)
-        documentModel.activeStrokes.add(overflowStroke)
+        documentModel.main.activeStrokes.add(overflowStroke)
 
         simulateOverflow(overflowStroke.strokeId,
             strokeMinY = TM + 3 * LS + LS * 0.2f,
@@ -751,11 +751,11 @@ class DiagramIntentTest {
         )
 
         // Text with descender should stay at line 3 (centroid is on line 3)
-        val textLine = lineSegmenter.getStrokeLineIndex(documentModel.activeStrokes[0])
+        val textLine = lineSegmenter.getStrokeLineIndex(documentModel.main.activeStrokes[0])
         assertEquals("Text with descender should stay at line 3", 3, textLine)
 
         // Text should be outside the diagram
-        val area = documentModel.diagramAreas[0]
+        val area = documentModel.main.diagramAreas[0]
         assertTrue("Text should be outside diagram", !area.containsLine(textLine))
     }
 
@@ -767,8 +767,8 @@ class DiagramIntentTest {
         val stroke = makeTextStroke(line = 5)
         simulateDiagramShapeDetected(stroke)
 
-        assertEquals("Should have 1 diagram area", 1, documentModel.diagramAreas.size)
-        val area = documentModel.diagramAreas[0]
+        assertEquals("Should have 1 diagram area", 1, documentModel.main.diagramAreas.size)
+        val area = documentModel.main.diagramAreas[0]
         assertTrue("Diagram should contain line 5", area.containsLine(5))
     }
 
@@ -777,15 +777,15 @@ class DiagramIntentTest {
         // First: shape creates diagram at lines 3-5
         val shapeStroke = makeRectangleStroke(startLine = 3, endLine = 5)
         simulateDiagramShapeDetected(shapeStroke)
-        assertEquals(1, documentModel.diagramAreas.size)
+        assertEquals(1, documentModel.main.diagramAreas.size)
 
         // Freehand dwell stroke at line 5 (overlapping) → should merge
         val freehandStroke = makeTextStroke(line = 5)
         simulateDiagramShapeDetected(freehandStroke)
 
-        assertEquals("Should merge into 1 area", 1, documentModel.diagramAreas.size)
-        assertTrue("Merged area covers line 3", documentModel.diagramAreas[0].containsLine(3))
-        assertTrue("Merged area covers line 5", documentModel.diagramAreas[0].containsLine(5))
+        assertEquals("Should merge into 1 area", 1, documentModel.main.diagramAreas.size)
+        assertTrue("Merged area covers line 3", documentModel.main.diagramAreas[0].containsLine(3))
+        assertTrue("Merged area covers line 5", documentModel.main.diagramAreas[0].containsLine(5))
     }
 
     @Test
@@ -794,22 +794,22 @@ class DiagramIntentTest {
 
         val stroke = makeTextStroke(line = 5)
         saveUndoSnapshot()
-        documentModel.activeStrokes.add(stroke)
+        documentModel.main.activeStrokes.add(stroke)
         simulateDiagramShapeDetected(stroke)
 
-        assertEquals(1, documentModel.diagramAreas.size)
+        assertEquals(1, documentModel.main.diagramAreas.size)
 
         undo()
-        assertEquals("Undo should remove diagram area", 0, documentModel.diagramAreas.size)
+        assertEquals("Undo should remove diagram area", 0, documentModel.main.diagramAreas.size)
     }
 
     // ── Sticky zone expansion ────────────────────────────────────────────────
 
     /** Check if a line has pre-existing strokes not inside a diagram area. */
     private fun hasTextStrokesOnLine(lineIdx: Int, excluding: InkStroke? = null): Boolean =
-        documentModel.activeStrokes.any {
+        documentModel.main.activeStrokes.any {
             it !== excluding &&
-            !documentModel.diagramAreas.any { area -> area.containsLine(lineSegmenter.getStrokeLineIndex(it)) } &&
+            !documentModel.main.diagramAreas.any { area -> area.containsLine(lineSegmenter.getStrokeLineIndex(it)) } &&
             lineSegmenter.getStrokeLineIndex(it) == lineIdx
         }
 
@@ -820,7 +820,7 @@ class DiagramIntentTest {
      */
     private fun simulateStickyZoneExpansion(stroke: InkStroke): Boolean {
         val lineIdx = lineSegmenter.getStrokeLineIndex(stroke)
-        val adjacentArea = documentModel.diagramAreas.find {
+        val adjacentArea = documentModel.main.diagramAreas.find {
             lineIdx == it.startLineIndex - 1 || lineIdx == it.endLineIndex + 1
         } ?: return false
 
@@ -832,8 +832,8 @@ class DiagramIntentTest {
 
         val newStart = minOf(adjacentArea.startLineIndex, lineIdx)
         val newEnd = maxOf(adjacentArea.endLineIndex, lineIdx)
-        documentModel.diagramAreas.remove(adjacentArea)
-        documentModel.diagramAreas.add(adjacentArea.copy(
+        documentModel.main.diagramAreas.remove(adjacentArea)
+        documentModel.main.diagramAreas.add(adjacentArea.copy(
             startLineIndex = newStart,
             heightInLines = newEnd - newStart + 1
         ))
@@ -842,102 +842,102 @@ class DiagramIntentTest {
 
     @Test
     fun `geometric stroke adjacent below diagram expands via sticky zone`() {
-        documentModel.diagramAreas.add(DiagramArea(startLineIndex = 3, heightInLines = 3))
+        documentModel.main.diagramAreas.add(DiagramArea(startLineIndex = 3, heightInLines = 3))
 
         val stroke = makeGeometricStroke(line = 6)
         val expanded = simulateStickyZoneExpansion(stroke)
 
         assertTrue("Geometric stroke should expand via sticky zone", expanded)
-        assertEquals(1, documentModel.diagramAreas.size)
-        val area = documentModel.diagramAreas[0]
+        assertEquals(1, documentModel.main.diagramAreas.size)
+        val area = documentModel.main.diagramAreas[0]
         assertEquals("Start should remain 3", 3, area.startLineIndex)
         assertTrue("Should now contain line 6", area.containsLine(6))
     }
 
     @Test
     fun `geometric stroke adjacent above diagram expands via sticky zone`() {
-        documentModel.diagramAreas.add(DiagramArea(startLineIndex = 5, heightInLines = 3))
+        documentModel.main.diagramAreas.add(DiagramArea(startLineIndex = 5, heightInLines = 3))
 
         val stroke = makeGeometricStroke(line = 4)
         val expanded = simulateStickyZoneExpansion(stroke)
 
         assertTrue("Geometric stroke should expand via sticky zone", expanded)
-        assertEquals(1, documentModel.diagramAreas.size)
-        val area = documentModel.diagramAreas[0]
+        assertEquals(1, documentModel.main.diagramAreas.size)
+        val area = documentModel.main.diagramAreas[0]
         assertEquals("Start should expand to 4", 4, area.startLineIndex)
         assertTrue("Should contain line 7", area.containsLine(7))
     }
 
     @Test
     fun `freehand text adjacent to diagram does NOT expand via sticky zone`() {
-        documentModel.diagramAreas.add(DiagramArea(startLineIndex = 3, heightInLines = 3))
+        documentModel.main.diagramAreas.add(DiagramArea(startLineIndex = 3, heightInLines = 3))
 
         // Freehand text stroke on line 6 (adjacent below) — should NOT expand
         val stroke = makeTextStroke(line = 6)
         val expanded = simulateStickyZoneExpansion(stroke)
 
         assertTrue("Freehand text should NOT expand", !expanded)
-        assertEquals("Height should remain 3", 3, documentModel.diagramAreas[0].heightInLines)
+        assertEquals("Height should remain 3", 3, documentModel.main.diagramAreas[0].heightInLines)
     }
 
     @Test
     fun `stroke 2 lines away from diagram does not trigger sticky zone`() {
-        documentModel.diagramAreas.add(DiagramArea(startLineIndex = 3, heightInLines = 3))
+        documentModel.main.diagramAreas.add(DiagramArea(startLineIndex = 3, heightInLines = 3))
 
         val stroke = makeGeometricStroke(line = 7)
         val expanded = simulateStickyZoneExpansion(stroke)
 
         assertTrue("Should NOT expand — not adjacent", !expanded)
-        assertEquals("Height should remain 3", 3, documentModel.diagramAreas[0].heightInLines)
+        assertEquals("Height should remain 3", 3, documentModel.main.diagramAreas[0].heightInLines)
     }
 
     // ── Text stroke buffer protection ────────────────────────────────────────
 
     @Test
     fun `sticky zone does not expand for geometric stroke into line with pre-existing text`() {
-        documentModel.diagramAreas.add(DiagramArea(startLineIndex = 3, heightInLines = 3))
+        documentModel.main.diagramAreas.add(DiagramArea(startLineIndex = 3, heightInLines = 3))
 
         // Pre-existing text stroke on line 6
         val textStroke = makeTextStroke(line = 6)
-        documentModel.activeStrokes.add(textStroke)
+        documentModel.main.activeStrokes.add(textStroke)
 
         // New geometric stroke also on line 6 — geometric but text exists
         val newStroke = makeGeometricStroke(line = 6)
-        documentModel.activeStrokes.add(newStroke)
+        documentModel.main.activeStrokes.add(newStroke)
         val expanded = simulateStickyZoneExpansion(newStroke)
 
         assertTrue("Should NOT expand — line 6 has pre-existing text", !expanded)
-        assertEquals("Height should remain 3", 3, documentModel.diagramAreas[0].heightInLines)
+        assertEquals("Height should remain 3", 3, documentModel.main.diagramAreas[0].heightInLines)
     }
 
     @Test
     fun `sticky zone expands into empty adjacent line for geometric stroke`() {
-        documentModel.diagramAreas.add(DiagramArea(startLineIndex = 3, heightInLines = 3))
+        documentModel.main.diagramAreas.add(DiagramArea(startLineIndex = 3, heightInLines = 3))
 
         // Geometric stroke on line 6 (adjacent below, no pre-existing strokes)
         val newStroke = makeGeometricStroke(line = 6)
-        documentModel.activeStrokes.add(newStroke)
+        documentModel.main.activeStrokes.add(newStroke)
         val expanded = simulateStickyZoneExpansion(newStroke)
 
         assertTrue("Should expand — geometric on empty line", expanded)
-        assertTrue("Should contain line 6", documentModel.diagramAreas[0].containsLine(6))
+        assertTrue("Should contain line 6", documentModel.main.diagramAreas[0].containsLine(6))
     }
 
     @Test
     fun `sticky zone does not expand above into line with pre-existing text`() {
-        documentModel.diagramAreas.add(DiagramArea(startLineIndex = 5, heightInLines = 3))
+        documentModel.main.diagramAreas.add(DiagramArea(startLineIndex = 5, heightInLines = 3))
 
         // Pre-existing text stroke on line 4
         val textStroke = makeTextStroke(line = 4)
-        documentModel.activeStrokes.add(textStroke)
+        documentModel.main.activeStrokes.add(textStroke)
 
         // New geometric stroke on line 4 (adjacent above diagram, but text exists)
         val newStroke = makeGeometricStroke(line = 4)
-        documentModel.activeStrokes.add(newStroke)
+        documentModel.main.activeStrokes.add(newStroke)
         val expanded = simulateStickyZoneExpansion(newStroke)
 
         assertTrue("Should NOT expand — line 4 has pre-existing text", !expanded)
-        assertEquals("Start should remain 5", 5, documentModel.diagramAreas[0].startLineIndex)
+        assertEquals("Start should remain 5", 5, documentModel.main.diagramAreas[0].startLineIndex)
     }
 
     // ── Padding respects text lines ──────────────────────────────────────────
@@ -945,12 +945,12 @@ class DiagramIntentTest {
     @Test
     fun `diagram creation does not absorb adjacent text above`() {
         val textStroke = makeTextStroke(line = 4)
-        documentModel.activeStrokes.add(textStroke)
+        documentModel.main.activeStrokes.add(textStroke)
 
         val shapeStroke = makeRectangleStroke(startLine = 5, endLine = 7)
         simulateDiagramShapeDetected(shapeStroke)
 
-        val area = documentModel.diagramAreas[0]
+        val area = documentModel.main.diagramAreas[0]
         assertEquals("Start should be 5 (no padding into text)", 5, area.startLineIndex)
         assertTrue("Should contain line 7", area.containsLine(7))
         assertTrue("Should NOT contain text line 4", !area.containsLine(4))
@@ -959,12 +959,12 @@ class DiagramIntentTest {
     @Test
     fun `diagram creation does not absorb adjacent text below`() {
         val textStroke = makeTextStroke(line = 8)
-        documentModel.activeStrokes.add(textStroke)
+        documentModel.main.activeStrokes.add(textStroke)
 
         val shapeStroke = makeRectangleStroke(startLine = 5, endLine = 7)
         simulateDiagramShapeDetected(shapeStroke)
 
-        val area = documentModel.diagramAreas[0]
+        val area = documentModel.main.diagramAreas[0]
         assertEquals("Start should be 5", 5, area.startLineIndex)
         assertTrue("Should contain line 7", area.containsLine(7))
         assertTrue("Should NOT contain text line 8", !area.containsLine(8))
@@ -975,7 +975,7 @@ class DiagramIntentTest {
         val shapeStroke = makeRectangleStroke(startLine = 5, endLine = 7)
         simulateDiagramShapeDetected(shapeStroke)
 
-        val area = documentModel.diagramAreas[0]
+        val area = documentModel.main.diagramAreas[0]
         assertEquals("Start should be 5 (exact bounds)", 5, area.startLineIndex)
         assertTrue("Should contain line 7", area.containsLine(7))
     }
@@ -988,7 +988,7 @@ class DiagramIntentTest {
      */
     private fun simulateShrink(area: DiagramArea) {
         val ls = LS
-        val remaining = documentModel.activeStrokes.filter {
+        val remaining = documentModel.main.activeStrokes.filter {
             area.containsLine(lineSegmenter.getStrokeLineIndex(it))
         }
 
@@ -996,12 +996,12 @@ class DiagramIntentTest {
             val linesFreed = area.heightInLines
             val shiftUpPx = linesFreed * ls
             val oldEnd = area.endLineIndex
-            documentModel.diagramAreas.remove(area)
-            val shifted = documentModel.activeStrokes.map { stroke ->
+            documentModel.main.diagramAreas.remove(area)
+            val shifted = documentModel.main.activeStrokes.map { stroke ->
                 if (lineSegmenter.getStrokeLineIndex(stroke) > oldEnd) stroke.shiftY(-shiftUpPx) else stroke
             }
-            documentModel.activeStrokes.clear()
-            documentModel.activeStrokes.addAll(shifted)
+            documentModel.main.activeStrokes.clear()
+            documentModel.main.activeStrokes.addAll(shifted)
             return
         }
 
@@ -1013,31 +1013,31 @@ class DiagramIntentTest {
         val linesFreedAbove = newStart - area.startLineIndex
         if (linesFreedAbove + linesFreedBelow == 0) return
 
-        documentModel.diagramAreas.remove(area)
-        documentModel.diagramAreas.add(DiagramArea(startLineIndex = newStart, heightInLines = newEnd - newStart + 1))
+        documentModel.main.diagramAreas.remove(area)
+        documentModel.main.diagramAreas.add(DiagramArea(startLineIndex = newStart, heightInLines = newEnd - newStart + 1))
 
         if (linesFreedBelow > 0) {
             val shiftUpPx = linesFreedBelow * ls
-            val shifted = documentModel.activeStrokes.map { stroke ->
+            val shifted = documentModel.main.activeStrokes.map { stroke ->
                 if (lineSegmenter.getStrokeLineIndex(stroke) > area.endLineIndex) stroke.shiftY(-shiftUpPx) else stroke
             }
-            documentModel.activeStrokes.clear()
-            documentModel.activeStrokes.addAll(shifted)
+            documentModel.main.activeStrokes.clear()
+            documentModel.main.activeStrokes.addAll(shifted)
         }
         if (linesFreedAbove > 0) {
             val shiftUpPx = linesFreedAbove * ls
-            val shifted = documentModel.activeStrokes.map { stroke ->
+            val shifted = documentModel.main.activeStrokes.map { stroke ->
                 if (lineSegmenter.getStrokeLineIndex(stroke) >= newStart) stroke.shiftY(-shiftUpPx) else stroke
             }
-            documentModel.activeStrokes.clear()
-            documentModel.activeStrokes.addAll(shifted)
-            val shiftedAreas = documentModel.diagramAreas.map { other ->
+            documentModel.main.activeStrokes.clear()
+            documentModel.main.activeStrokes.addAll(shifted)
+            val shiftedAreas = documentModel.main.diagramAreas.map { other ->
                 if (other.startLineIndex >= newStart)
                     other.copy(startLineIndex = other.startLineIndex - linesFreedAbove)
                 else other
             }
-            documentModel.diagramAreas.clear()
-            documentModel.diagramAreas.addAll(shiftedAreas)
+            documentModel.main.diagramAreas.clear()
+            documentModel.main.diagramAreas.addAll(shiftedAreas)
         }
     }
 
@@ -1045,112 +1045,112 @@ class DiagramIntentTest {
     fun `scenario 1 - erase near bottom shrinks diagram and shifts text up`() {
         // Text above
         val helloStroke = makeTextStroke(line = 1)
-        documentModel.activeStrokes.add(helloStroke)
+        documentModel.main.activeStrokes.add(helloStroke)
 
         // Diagram at lines 3-7
-        documentModel.diagramAreas.add(DiagramArea(startLineIndex = 3, heightInLines = 5))
+        documentModel.main.diagramAreas.add(DiagramArea(startLineIndex = 3, heightInLines = 5))
         val topShape = makeTextStroke(line = 4)  // stays
-        documentModel.activeStrokes.add(topShape)
+        documentModel.main.activeStrokes.add(topShape)
         val bottomShape = makeTextStroke(line = 6) // will be erased
-        documentModel.activeStrokes.add(bottomShape)
+        documentModel.main.activeStrokes.add(bottomShape)
 
         // Text below diagram
         val textBelow = makeTextStroke(line = 9)
-        documentModel.activeStrokes.add(textBelow)
+        documentModel.main.activeStrokes.add(textBelow)
 
         // Erase bottom shape
-        documentModel.activeStrokes.remove(bottomShape)
+        documentModel.main.activeStrokes.remove(bottomShape)
 
         // Shrink
-        simulateShrink(documentModel.diagramAreas[0])
+        simulateShrink(documentModel.main.diagramAreas[0])
 
         // Diagram should have shrunk
-        val area = documentModel.diagramAreas[0]
+        val area = documentModel.main.diagramAreas[0]
         assertTrue("Diagram should not contain line 6 anymore", !area.containsLine(6))
         assertTrue("Diagram should still contain line 4", area.containsLine(lineSegmenter.getStrokeLineIndex(
-            documentModel.activeStrokes.find { it.strokeId == topShape.strokeId }!!
+            documentModel.main.activeStrokes.find { it.strokeId == topShape.strokeId }!!
         )))
 
         // Text below should have shifted up
         val textBelowLine = lineSegmenter.getStrokeLineIndex(
-            documentModel.activeStrokes.find { it.strokeId == textBelow.strokeId }!!
+            documentModel.main.activeStrokes.find { it.strokeId == textBelow.strokeId }!!
         )
         assertTrue("Text below should have shifted up", textBelowLine < 9)
 
         // Hello World stays
         assertEquals("Hello stays at 1", 1, lineSegmenter.getStrokeLineIndex(
-            documentModel.activeStrokes.find { it.strokeId == helloStroke.strokeId }!!
+            documentModel.main.activeStrokes.find { it.strokeId == helloStroke.strokeId }!!
         ))
     }
 
     @Test
     fun `scenario 2 - erase near top shrinks diagram from top`() {
         val helloStroke = makeTextStroke(line = 1)
-        documentModel.activeStrokes.add(helloStroke)
+        documentModel.main.activeStrokes.add(helloStroke)
 
-        documentModel.diagramAreas.add(DiagramArea(startLineIndex = 3, heightInLines = 5))
+        documentModel.main.diagramAreas.add(DiagramArea(startLineIndex = 3, heightInLines = 5))
         val topShape = makeTextStroke(line = 4)  // will be erased
-        documentModel.activeStrokes.add(topShape)
+        documentModel.main.activeStrokes.add(topShape)
         val bottomShape = makeTextStroke(line = 6) // stays
-        documentModel.activeStrokes.add(bottomShape)
+        documentModel.main.activeStrokes.add(bottomShape)
 
         val textBelow = makeTextStroke(line = 9)
-        documentModel.activeStrokes.add(textBelow)
+        documentModel.main.activeStrokes.add(textBelow)
 
         // Erase top shape
-        documentModel.activeStrokes.remove(topShape)
+        documentModel.main.activeStrokes.remove(topShape)
 
-        simulateShrink(documentModel.diagramAreas[0])
+        simulateShrink(documentModel.main.diagramAreas[0])
 
         // Diagram should have shrunk from the top
-        val area = documentModel.diagramAreas[0]
+        val area = documentModel.main.diagramAreas[0]
         assertTrue("Diagram should still contain the remaining shape",
             area.containsLine(lineSegmenter.getStrokeLineIndex(
-                documentModel.activeStrokes.find { it.strokeId == bottomShape.strokeId }!!
+                documentModel.main.activeStrokes.find { it.strokeId == bottomShape.strokeId }!!
             )))
         assertTrue("Diagram height should be smaller than 5", area.heightInLines < 5)
     }
 
     @Test
     fun `erase all strokes removes diagram entirely`() {
-        documentModel.diagramAreas.add(DiagramArea(startLineIndex = 3, heightInLines = 5))
+        documentModel.main.diagramAreas.add(DiagramArea(startLineIndex = 3, heightInLines = 5))
         val shape = makeTextStroke(line = 5)
-        documentModel.activeStrokes.add(shape)
+        documentModel.main.activeStrokes.add(shape)
 
         val textBelow = makeTextStroke(line = 9)
-        documentModel.activeStrokes.add(textBelow)
+        documentModel.main.activeStrokes.add(textBelow)
 
         // Erase the only stroke
-        documentModel.activeStrokes.remove(shape)
+        documentModel.main.activeStrokes.remove(shape)
 
-        simulateShrink(documentModel.diagramAreas[0])
+        simulateShrink(documentModel.main.diagramAreas[0])
 
-        assertTrue("Diagram area should be removed", documentModel.diagramAreas.isEmpty())
+        assertTrue("Diagram area should be removed", documentModel.main.diagramAreas.isEmpty())
 
         // Text below should have shifted up
         val textBelowLine = lineSegmenter.getStrokeLineIndex(
-            documentModel.activeStrokes.find { it.strokeId == textBelow.strokeId }!!
+            documentModel.main.activeStrokes.find { it.strokeId == textBelow.strokeId }!!
         )
         assertTrue("Text below should have shifted up", textBelowLine < 9)
     }
 
     @Test
     fun `erase middle stroke does not shrink diagram`() {
-        documentModel.diagramAreas.add(DiagramArea(startLineIndex = 3, heightInLines = 5))
+        documentModel.main.diagramAreas.add(DiagramArea(startLineIndex = 3, heightInLines = 5))
         val topShape = makeTextStroke(line = 4)
-        documentModel.activeStrokes.add(topShape)
+        documentModel.main.activeStrokes.add(topShape)
         val middleShape = makeTextStroke(line = 5)  // will be erased
-        documentModel.activeStrokes.add(middleShape)
+        documentModel.main.activeStrokes.add(middleShape)
         val bottomShape = makeTextStroke(line = 6)
-        documentModel.activeStrokes.add(bottomShape)
+        documentModel.main.activeStrokes.add(bottomShape)
 
-        documentModel.activeStrokes.remove(middleShape)
+        documentModel.main.activeStrokes.remove(middleShape)
 
-        val areaBefore = documentModel.diagramAreas[0].copy()
-        simulateShrink(documentModel.diagramAreas[0])
+        val areaBefore = documentModel.main.diagramAreas[0].copy()
+        simulateShrink(documentModel.main.diagramAreas[0])
 
         // Diagram should stay the same — strokes still at top and bottom
-        val area = documentModel.diagramAreas[0]
+        val area = documentModel.main.diagramAreas[0]
         assertEquals("Start should be unchanged", areaBefore.startLineIndex, area.startLineIndex)
         assertEquals("Height should be unchanged", areaBefore.heightInLines, area.heightInLines)
     }

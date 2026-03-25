@@ -31,7 +31,7 @@ class UndoSnapshotPerfTest {
     private fun buildDocument(strokeCount: Int): DocumentModel {
         val doc = DocumentModel()
         for (i in 0 until strokeCount) {
-            doc.activeStrokes.add(makeStroke(i / 5))
+            doc.main.activeStrokes.add(makeStroke(i / 5))
         }
         return doc
     }
@@ -44,7 +44,7 @@ class UndoSnapshotPerfTest {
 
         // Warm up
         val warmup = UndoManager.Snapshot(
-            strokes = doc.activeStrokes.toList(),
+            strokes = doc.main.activeStrokes.toList(),
             scrollOffsetY = 0f,
             lineTextCache = emptyMap()
         )
@@ -54,7 +54,7 @@ class UndoSnapshotPerfTest {
         // Measure
         val t0 = System.nanoTime()
         val snapshot = UndoManager.Snapshot(
-            strokes = doc.activeStrokes.toList(),
+            strokes = doc.main.activeStrokes.toList(),
             scrollOffsetY = 0f,
             lineTextCache = emptyMap()
         )
@@ -75,7 +75,7 @@ class UndoSnapshotPerfTest {
 
         val t0 = System.nanoTime()
         val snapshot = UndoManager.Snapshot(
-            strokes = doc.activeStrokes.toList(),
+            strokes = doc.main.activeStrokes.toList(),
             scrollOffsetY = 0f,
             lineTextCache = emptyMap()
         )
@@ -96,7 +96,7 @@ class UndoSnapshotPerfTest {
 
         val t0 = System.nanoTime()
         val snapshot = UndoManager.Snapshot(
-            strokes = doc.activeStrokes.toList(),
+            strokes = doc.main.activeStrokes.toList(),
             scrollOffsetY = 0f,
             lineTextCache = emptyMap()
         )
@@ -116,16 +116,16 @@ class UndoSnapshotPerfTest {
 
         // Save a snapshot, then add a stroke
         val snapshot = UndoManager.Snapshot(
-            strokes = doc.activeStrokes.toList(),
+            strokes = doc.main.activeStrokes.toList(),
             scrollOffsetY = 0f,
             lineTextCache = emptyMap()
         )
         undoManager.saveSnapshot(snapshot)
-        doc.activeStrokes.add(makeStroke(100))
+        doc.main.activeStrokes.add(makeStroke(100))
 
         // Measure undo (pop from stack + create current snapshot)
         val current = UndoManager.Snapshot(
-            strokes = doc.activeStrokes.toList(),
+            strokes = doc.main.activeStrokes.toList(),
             scrollOffsetY = 0f,
             lineTextCache = emptyMap()
         )
@@ -148,7 +148,7 @@ class UndoSnapshotPerfTest {
 
         // First stroke creates snapshot
         val snap1 = UndoManager.Snapshot(
-            strokes = doc.activeStrokes.toList(),
+            strokes = doc.main.activeStrokes.toList(),
             scrollOffsetY = 0f,
             lineTextCache = emptyMap()
         )
@@ -159,7 +159,7 @@ class UndoSnapshotPerfTest {
         val t0 = System.nanoTime()
         for (i in 1..10) {
             val snap = UndoManager.Snapshot(
-                strokes = doc.activeStrokes.toList(),
+                strokes = doc.main.activeStrokes.toList(),
                 scrollOffsetY = 0f,
                 lineTextCache = emptyMap()
             )

@@ -1,7 +1,7 @@
 package com.writer.ui.writing
 
 import android.util.Log
-import com.writer.model.DocumentModel
+import com.writer.model.ColumnModel
 import com.writer.model.InkStroke
 import com.writer.recognition.LineSegmenter
 import com.writer.recognition.StrokeClassifier
@@ -31,7 +31,7 @@ interface RecognitionManagerHost {
 }
 
 class LineRecognitionManager(
-    private val documentModel: DocumentModel,
+    private val columnModel: ColumnModel,
     private val recognizer: TextRecognizer,
     private val lineSegmenter: LineSegmenter,
     private val strokeClassifier: StrokeClassifier,
@@ -96,7 +96,7 @@ class LineRecognitionManager(
         }
         try {
             val allStrokes = lineSegmenter.getStrokesForLine(
-                documentModel.activeStrokes, lineIndex
+                columnModel.activeStrokes, lineIndex
             )
             if (allStrokes.isEmpty()) {
                 recognizingLines.remove(lineIndex)

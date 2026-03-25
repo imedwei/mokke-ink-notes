@@ -761,7 +761,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
         var isGeometric = false
 
         // Magnetic snap: resolve arrow endpoints to nearest shape perimeters
-        val nodes = documentModel?.diagram?.nodes ?: emptyMap()
+        val nodes = documentModel?.main?.diagram?.nodes ?: emptyMap()
         val magnetThreshold = MAGNET_THRESHOLD_SPANS * LINE_SPACING
 
         fun magnetSnap(x1: Float, y1: Float, x2: Float, y2: Float): Pair<Pair<Float, Float>, Pair<Float, Float>> {

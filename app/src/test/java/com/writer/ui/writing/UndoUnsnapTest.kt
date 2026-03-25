@@ -24,10 +24,10 @@ class UndoUnsnapTest {
 
     /** Simulates the state captured by [WritingCoordinator.saveUndoSnapshot]. */
     private fun currentSnapshot() = UndoManager.Snapshot(
-        strokes = documentModel.activeStrokes.toList(),
+        strokes = documentModel.main.activeStrokes.toList(),
         scrollOffsetY = 0f,
         lineTextCache = emptyMap(),
-        diagramAreas = documentModel.diagramAreas.toList()
+        diagramAreas = documentModel.main.diagramAreas.toList()
     )
 
     private fun saveUndoSnapshot() {
@@ -35,10 +35,10 @@ class UndoUnsnapTest {
     }
 
     private fun applySnapshot(snapshot: UndoManager.Snapshot) {
-        documentModel.activeStrokes.clear()
-        documentModel.activeStrokes.addAll(snapshot.strokes)
-        documentModel.diagramAreas.clear()
-        documentModel.diagramAreas.addAll(snapshot.diagramAreas)
+        documentModel.main.activeStrokes.clear()
+        documentModel.main.activeStrokes.addAll(snapshot.strokes)
+        documentModel.main.diagramAreas.clear()
+        documentModel.main.diagramAreas.addAll(snapshot.diagramAreas)
     }
 
     private fun undo(): Boolean {
@@ -56,14 +56,14 @@ class UndoUnsnapTest {
     /** Simulate onStrokeCompleted as WritingCoordinator does. */
     private fun simulateStrokeCompleted(stroke: InkStroke) {
         saveUndoSnapshot()
-        documentModel.activeStrokes.add(stroke)
+        documentModel.main.activeStrokes.add(stroke)
     }
 
     /** Simulate onStrokeReplaced as WritingCoordinator does. */
     private fun simulateStrokeReplaced(oldStrokeId: String, newStroke: InkStroke) {
         saveUndoSnapshot()
-        documentModel.activeStrokes.removeAll { it.strokeId == oldStrokeId }
-        documentModel.activeStrokes.add(newStroke)
+        documentModel.main.activeStrokes.removeAll { it.strokeId == oldStrokeId }
+        documentModel.main.activeStrokes.add(newStroke)
     }
 
     private fun makePoints(vararg pairs: Pair<Float, Float>): List<StrokePoint> =
@@ -93,14 +93,14 @@ class UndoUnsnapTest {
         simulateStrokeReplaced(rawStroke.strokeId, snappedStroke)
 
         // Verify current state has snapped stroke
-        assertEquals(1, documentModel.activeStrokes.size)
-        assertEquals(StrokeType.LINE, documentModel.activeStrokes[0].strokeType)
+        assertEquals(1, documentModel.main.activeStrokes.size)
+        assertEquals(StrokeType.LINE, documentModel.main.activeStrokes[0].strokeType)
 
         // Undo once → raw freehand
         assertTrue(undo())
-        assertEquals(1, documentModel.activeStrokes.size)
-        assertEquals(StrokeType.FREEHAND, documentModel.activeStrokes[0].strokeType)
-        assertEquals(rawStroke.strokeId, documentModel.activeStrokes[0].strokeId)
+        assertEquals(1, documentModel.main.activeStrokes.size)
+        assertEquals(StrokeType.FREEHAND, documentModel.main.activeStrokes[0].strokeType)
+        assertEquals(rawStroke.strokeId, documentModel.main.activeStrokes[0].strokeId)
     }
 
     @Test
@@ -120,11 +120,11 @@ class UndoUnsnapTest {
 
         // Undo once → raw stroke
         assertTrue(undo())
-        assertEquals(1, documentModel.activeStrokes.size)
+        assertEquals(1, documentModel.main.activeStrokes.size)
 
         // Undo again → empty
         assertTrue(undo())
-        assertEquals(0, documentModel.activeStrokes.size)
+        assertEquals(0, documentModel.main.activeStrokes.size)
     }
 
     @Test
@@ -144,12 +144,12 @@ class UndoUnsnapTest {
 
         // Undo to raw
         undo()
-        assertEquals(StrokeType.FREEHAND, documentModel.activeStrokes[0].strokeType)
+        assertEquals(StrokeType.FREEHAND, documentModel.main.activeStrokes[0].strokeType)
 
         // Redo → snapped restored
         assertTrue(redo())
-        assertEquals(1, documentModel.activeStrokes.size)
-        assertEquals(StrokeType.ARROW_HEAD, documentModel.activeStrokes[0].strokeType)
+        assertEquals(1, documentModel.main.activeStrokes.size)
+        assertEquals(StrokeType.ARROW_HEAD, documentModel.main.activeStrokes[0].strokeType)
     }
 
     @Test
@@ -169,17 +169,17 @@ class UndoUnsnapTest {
         // Undo twice → empty
         undo()
         undo()
-        assertEquals(0, documentModel.activeStrokes.size)
+        assertEquals(0, documentModel.main.activeStrokes.size)
 
         // Redo → raw
         assertTrue(redo())
-        assertEquals(1, documentModel.activeStrokes.size)
-        assertEquals(StrokeType.FREEHAND, documentModel.activeStrokes[0].strokeType)
+        assertEquals(1, documentModel.main.activeStrokes.size)
+        assertEquals(StrokeType.FREEHAND, documentModel.main.activeStrokes[0].strokeType)
 
         // Redo → snapped
         assertTrue(redo())
-        assertEquals(1, documentModel.activeStrokes.size)
-        assertEquals(StrokeType.ELLIPSE, documentModel.activeStrokes[0].strokeType)
+        assertEquals(1, documentModel.main.activeStrokes.size)
+        assertEquals(StrokeType.ELLIPSE, documentModel.main.activeStrokes[0].strokeType)
     }
 
     @Test
@@ -192,11 +192,11 @@ class UndoUnsnapTest {
         // Normal stroke — only onStrokeCompleted, no onStrokeReplaced
         simulateStrokeCompleted(stroke)
 
-        assertEquals(1, documentModel.activeStrokes.size)
+        assertEquals(1, documentModel.main.activeStrokes.size)
 
         // Single undo removes it
         assertTrue(undo())
-        assertEquals(0, documentModel.activeStrokes.size)
+        assertEquals(0, documentModel.main.activeStrokes.size)
     }
 
     @Test
@@ -222,23 +222,23 @@ class UndoUnsnapTest {
         simulateStrokeReplaced(rawStroke.strokeId, snappedStroke)
 
         // State: freehand + snapped rectangle
-        assertEquals(2, documentModel.activeStrokes.size)
+        assertEquals(2, documentModel.main.activeStrokes.size)
 
         // Undo 1: rectangle → raw
         undo()
-        assertEquals(2, documentModel.activeStrokes.size)
-        assertEquals(StrokeType.FREEHAND, documentModel.activeStrokes[0].strokeType)
-        assertEquals(StrokeType.FREEHAND, documentModel.activeStrokes[1].strokeType)
-        assertEquals(rawStroke.strokeId, documentModel.activeStrokes[1].strokeId)
+        assertEquals(2, documentModel.main.activeStrokes.size)
+        assertEquals(StrokeType.FREEHAND, documentModel.main.activeStrokes[0].strokeType)
+        assertEquals(StrokeType.FREEHAND, documentModel.main.activeStrokes[1].strokeType)
+        assertEquals(rawStroke.strokeId, documentModel.main.activeStrokes[1].strokeId)
 
         // Undo 2: raw stroke removed
         undo()
-        assertEquals(1, documentModel.activeStrokes.size)
-        assertEquals(freehand.strokeId, documentModel.activeStrokes[0].strokeId)
+        assertEquals(1, documentModel.main.activeStrokes.size)
+        assertEquals(freehand.strokeId, documentModel.main.activeStrokes[0].strokeId)
 
         // Undo 3: freehand removed
         undo()
-        assertEquals(0, documentModel.activeStrokes.size)
+        assertEquals(0, documentModel.main.activeStrokes.size)
     }
 
     @Test
@@ -262,19 +262,19 @@ class UndoUnsnapTest {
         // Scrub -1 → raw stroke
         val snap1 = undoManager.scrubTo(-1)!!
         applySnapshot(snap1)
-        assertEquals(1, documentModel.activeStrokes.size)
-        assertEquals(StrokeType.FREEHAND, documentModel.activeStrokes[0].strokeType)
+        assertEquals(1, documentModel.main.activeStrokes.size)
+        assertEquals(StrokeType.FREEHAND, documentModel.main.activeStrokes[0].strokeType)
 
         // Scrub -2 → empty
         val snap2 = undoManager.scrubTo(-2)!!
         applySnapshot(snap2)
-        assertEquals(0, documentModel.activeStrokes.size)
+        assertEquals(0, documentModel.main.activeStrokes.size)
 
         // Scrub back to 0 → snapped
         val snap3 = undoManager.scrubTo(0)!!
         applySnapshot(snap3)
-        assertEquals(1, documentModel.activeStrokes.size)
-        assertEquals(StrokeType.LINE, documentModel.activeStrokes[0].strokeType)
+        assertEquals(1, documentModel.main.activeStrokes.size)
+        assertEquals(StrokeType.LINE, documentModel.main.activeStrokes[0].strokeType)
 
         undoManager.endScrub()
     }
@@ -282,7 +282,7 @@ class UndoUnsnapTest {
     @Test
     fun `diagram areas preserved through snap undo cycle`() {
         val diagramArea = DiagramArea(startLineIndex = 2, heightInLines = 4)
-        documentModel.diagramAreas.add(diagramArea)
+        documentModel.main.diagramAreas.add(diagramArea)
 
         val rawStroke = InkStroke(
             points = makePoints(50f to 300f, 100f to 350f),
@@ -299,12 +299,12 @@ class UndoUnsnapTest {
 
         // Undo to raw — diagram areas still present
         undo()
-        assertEquals(1, documentModel.diagramAreas.size)
-        assertEquals(diagramArea, documentModel.diagramAreas[0])
+        assertEquals(1, documentModel.main.diagramAreas.size)
+        assertEquals(diagramArea, documentModel.main.diagramAreas[0])
 
         // Undo to empty — diagram areas still present (was there before the stroke)
         undo()
-        assertEquals(0, documentModel.activeStrokes.size)
-        assertEquals(1, documentModel.diagramAreas.size)
+        assertEquals(0, documentModel.main.activeStrokes.size)
+        assertEquals(1, documentModel.main.diagramAreas.size)
     }
 }
