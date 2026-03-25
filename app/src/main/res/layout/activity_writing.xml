@@ -94,4 +94,11 @@
 
     </LinearLayout>
 
+    <!-- Tutorial overlay: dimmed background + cutout + tooltip (covers entire screen) -->
+    <com.writer.view.TutorialOverlay
+        android:id="@+id/tutorialOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:visibility="gone" />
+
 </FrameLayout>

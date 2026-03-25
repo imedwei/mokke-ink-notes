@@ -68,6 +68,8 @@ class WritingCoordinator(
     var onHeadingDetected: ((String) -> Unit)? = null
     // Callback to notify activity when undo/redo availability changes
     var onUndoRedoStateChanged: (() -> Unit)? = null
+    // Callback for tutorial step completion (fires action IDs like "stroke_completed")
+    var onTutorialAction: ((String) -> Unit)? = null
     // Diagram lifecycle manager (created in start())
     private lateinit var diagramManager: DiagramManager
     // Display manager (created in start())
@@ -132,6 +134,7 @@ class WritingCoordinator(
         displayManager = DisplayManager(inkCanvas, textView, scope, lineSegmenter, paragraphBuilder, displayHost)
 
         inkCanvas.documentModel = documentModel
+        inkCanvas.onPenDown = { onTutorialAction?.invoke("pen_down") }
         inkCanvas.onRawStrokeCapture = { points ->
             lastStrokeIndex = eventLog.recordStroke(points)
         }
@@ -144,6 +147,7 @@ class WritingCoordinator(
                 inkCanvas.textOverscroll = maxOverscroll
             }
             displayManager.displayHiddenLines()
+            onTutorialAction?.invoke("manual_scroll")
         }
         textView.onTextTap = { lineIndex -> displayManager.scrollToLine(lineIndex) }
         inkCanvas.onDiagramShapeDetected = { stroke -> diagramManager.onShapeDetected(stroke) }
@@ -167,6 +171,7 @@ class WritingCoordinator(
         inkCanvas.onDiagramStrokeOverflow = null
         inkCanvas.onScratchOut = null
         inkCanvas.onStrokeReplaced = null
+        inkCanvas.onPenDown = null
     }
 
     fun reset() {
@@ -179,6 +184,7 @@ class WritingCoordinator(
         highestLineIndex = -1
         currentLineIndex = -1
         userRenamed = false
+        documentModel.activeStrokes.clear()
         documentModel.diagramAreas.clear()
         inkCanvas.diagramAreas = emptyList()
     }
@@ -189,12 +195,14 @@ class WritingCoordinator(
         if (gestureHandler.tryHandle(stroke)) {
             eventLog.recordEvent(lastStrokeIndex, StrokeEventLog.EventType.GESTURE_CONSUMED, elapsedMs = elapsedMs)
             if (elapsedMs > PERF_BUDGET_MS) Log.w(TAG, "Slow stroke: ${elapsedMs}ms (gesture)")
+            onTutorialAction?.invoke("gesture_consumed")
             return
         }
 
         saveSnapshot(UndoCoalescer.ActionType.STROKE_ADDED, lineSegmenter.getStrokeLineIndex(stroke))
         documentModel.activeStrokes.add(stroke)
         eventLog.recordEvent(lastStrokeIndex, StrokeEventLog.EventType.ADDED, "line=${lineSegmenter.getStrokeLineIndex(stroke)}", elapsedMs = elapsedMs)
+        onTutorialAction?.invoke("stroke_completed")
         if (elapsedMs > PERF_BUDGET_MS) Log.w(TAG, "Slow stroke: ${elapsedMs}ms (added, line=${lineSegmenter.getStrokeLineIndex(stroke)})")
 
         val lineIdx = lineSegmenter.getStrokeLineIndex(stroke)
@@ -277,6 +285,7 @@ class WritingCoordinator(
         }
 
         Log.i(TAG, "Stroke replaced: $oldStrokeId → ${newStroke.strokeId} (${newStroke.strokeType})")
+        onTutorialAction?.invoke("stroke_replaced")
     }
 
     private fun onScratchOut(scratchPoints: List<StrokePoint>, left: Float, top: Float, right: Float, bottom: Float) {
@@ -320,6 +329,7 @@ class WritingCoordinator(
         eventLog.recordEvent(lastStrokeIndex, StrokeEventLog.EventType.SCRATCH_OUT,
             "erased=${idsToRemove.joinToString(",")}", elapsedMs = inkCanvas.lastFinishStrokeMs)
         Log.i(TAG, "Scratch-out erase: removed ${overlapping.size} strokes in [$left,$top,$right,$bottom]")
+        onTutorialAction?.invoke("scratch_out")
     }
 
     // --- Recognition ---
