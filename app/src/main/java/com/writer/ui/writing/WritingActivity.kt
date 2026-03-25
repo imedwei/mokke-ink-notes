@@ -153,6 +153,8 @@ class WritingActivity : AppCompatActivity() {
 
         documentModel = DocumentModel()
 
+        val tutorialOverlay = findViewById<com.writer.view.TutorialOverlay>(R.id.tutorialOverlay)
+
         tutorialManager = TutorialManager(
             context = this,
             inkCanvas = inkCanvas,
@@ -160,8 +162,9 @@ class WritingActivity : AppCompatActivity() {
             getCoordinator = { coordinator },
             getPendingRestore = { pendingRestore },
             clearPendingRestore = { pendingRestore = null },
-            onClosed = {}
+            onClosed = { updateUndoRedoButtons() }
         )
+        tutorialManager.setOverlay(tutorialOverlay)
 
         // Migrate old single-file storage if needed, then determine current document
         val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
@@ -318,6 +321,7 @@ class WritingActivity : AppCompatActivity() {
         )
         coordinator?.onHeadingDetected = { heading -> autoRenameFromHeading(heading) }
         coordinator?.onUndoRedoStateChanged = { updateUndoRedoButtons() }
+        coordinator?.onTutorialAction = { actionId -> tutorialManager.onStepAction(actionId) }
         coordinator?.start()
 
     }

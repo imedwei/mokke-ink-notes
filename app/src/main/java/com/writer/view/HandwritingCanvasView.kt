@@ -150,6 +150,21 @@ class HandwritingCanvasView @JvmOverloads constructor(
     var annotationStrokes: List<AnnotationStroke> = emptyList()
     var textAnnotations: List<TextAnnotation> = emptyList()
 
+    // Tutorial ghost strokes: rendered in gray with optional progressive reveal
+    var ghostStrokes: List<InkStroke> = emptyList()
+    /** 0.0 = all gray, 1.0 = all revealed in black. Controls progressive reveal animation. */
+    var ghostRevealProgress: Float = 0f
+
+    private val ghostPaint = Paint().apply {
+        color = CanvasTheme.LINE_COLOR
+        strokeWidth = CanvasTheme.DEFAULT_STROKE_WIDTH
+        style = Paint.Style.STROKE
+        isAntiAlias = false
+        strokeCap = Paint.Cap.ROUND
+        strokeJoin = Paint.Join.ROUND
+    }
+    private val ghostRevealPaint = CanvasTheme.newStrokePaint()
+
     var onStrokeCompleted: ((InkStroke) -> Unit)? = null
     var onIdleTimeout: (() -> Unit)? = null
     /** Called when manual scrolling changes the offset. */
@@ -213,9 +228,13 @@ class HandwritingCanvasView @JvmOverloads constructor(
 
     // --- Shared stroke lifecycle methods (used by SDK callbacks, fallback touch, and tests) ---
 
+    /** Called at the very start of pen input (before any processing). */
+    var onPenDown: (() -> Unit)? = null
+
     /** Begin a new stroke: set pen active, clear state, start dwell detection. */
     fun beginStroke(firstPoint: StrokePoint) {
         touchFilter?.penActive = true
+        onPenDown?.invoke()
         onPenStateChanged?.invoke(true)
         handler.removeCallbacks(idleRunnable)
         currentStrokePoints.clear()
@@ -1050,6 +1069,34 @@ class HandwritingCanvasView @JvmOverloads constructor(
         while (lineY < maxDocY) {
             canvas.drawLine(0f, lineY, canvasRight, lineY, linePaint)
             lineY += LINE_SPACING
+        }
+
+        // Draw ghost strokes (tutorial demo content)
+        if (ghostStrokes.isNotEmpty()) {
+            val totalPoints = ghostStrokes.sumOf { it.points.size }
+            val revealedCount = (totalPoints * ghostRevealProgress).toInt()
+            var pointsSoFar = 0
+            for (stroke in ghostStrokes) {
+                val strokeStart = pointsSoFar
+                val strokeEnd = pointsSoFar + stroke.points.size
+                pointsSoFar = strokeEnd
+
+                if (strokeStart >= revealedCount) {
+                    // Entirely unrevealed — draw as ghost
+                    CanvasTheme.drawStroke(canvas, stroke, renderPath, ghostPaint)
+                } else if (strokeEnd <= revealedCount) {
+                    // Entirely revealed — draw in black
+                    CanvasTheme.drawStroke(canvas, stroke, renderPath, ghostRevealPaint)
+                } else {
+                    // Partially revealed — draw ghost first, then revealed portion
+                    CanvasTheme.drawStroke(canvas, stroke, renderPath, ghostPaint)
+                    val revealIdx = revealedCount - strokeStart
+                    if (revealIdx >= 2) {
+                        val partial = InkStroke(points = stroke.points.subList(0, revealIdx))
+                        CanvasTheme.drawStroke(canvas, partial, renderPath, ghostRevealPaint)
+                    }
+                }
+            }
         }
 
         // Only draw strokes within the visible viewport
