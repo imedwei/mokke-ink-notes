@@ -23,6 +23,7 @@ import com.onyx.android.sdk.pen.TouchHelper
 import com.onyx.android.sdk.pen.data.TouchPointList
 import com.writer.model.DiagramArea
 import com.writer.ui.writing.DiagramStrokeClassifier
+import com.writer.ui.writing.SpaceInsertMode
 import com.writer.model.DocumentModel
 import com.writer.model.InkStroke
 import com.writer.model.StrokePoint
@@ -489,8 +490,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
                 spaceInsertDragActive = true
 
                 // If anchor is inside a diagram, scan from the diagram's top edge
-                val containingDiagram = diagramAreas.find { it.containsLine(lineIndex) }
-                val scanFrom = containingDiagram?.startLineIndex ?: lineIndex
+                val scanFrom = SpaceInsertMode.effectiveShiftLine(lineIndex, diagramAreas)
 
                 // Compute max allowed upward shift by counting empty lines above scanFrom
                 val occupiedLines = completedStrokes.map { s ->
@@ -1063,8 +1063,13 @@ class HandwritingCanvasView @JvmOverloads constructor(
         } else 0f
         val previewShiftPx = rawShiftPx.coerceAtLeast(-spaceInsertMaxUpPx)
         val isClamped = rawShiftPx < -spaceInsertMaxUpPx
-        val anchorY = if (spaceInsertAnchorLine >= 0) {
-            TOP_MARGIN + spaceInsertAnchorLine * LINE_SPACING
+        // If anchor is inside a diagram, shift from the diagram's top edge so all
+        // strokes in the diagram preview-shift together (mirrors SpaceInsertMode logic).
+        val shiftFromLine = if (spaceInsertAnchorLine >= 0) {
+            SpaceInsertMode.effectiveShiftLine(spaceInsertAnchorLine, diagramAreas)
+        } else Int.MAX_VALUE
+        val anchorY = if (shiftFromLine < Int.MAX_VALUE) {
+            TOP_MARGIN + shiftFromLine * LINE_SPACING
         } else Float.MAX_VALUE
 
         for (stroke in completedStrokes) {
@@ -1129,7 +1134,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
                 // When clamped at content, highlight the barrier line and blocking strokes
                 if (isClamped) {
                     val emptyAbove = (spaceInsertMaxUpPx / LINE_SPACING).toInt()
-                    val barrierLine = spaceInsertAnchorLine - emptyAbove - 1
+                    val barrierLine = SpaceInsertMode.barrierLine(spaceInsertAnchorLine, diagramAreas, emptyAbove)
                     if (barrierLine >= 0) {
                         val barrierY = TOP_MARGIN + (barrierLine + 1) * LINE_SPACING
                         canvas.drawLine(0f, barrierY, canvasRight, barrierY, spaceInsertBarrierPaint)

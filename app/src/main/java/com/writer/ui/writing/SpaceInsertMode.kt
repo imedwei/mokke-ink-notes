@@ -1,5 +1,6 @@
 package com.writer.ui.writing
 
+import com.writer.model.DiagramArea
 import com.writer.model.DocumentModel
 import com.writer.model.shiftY
 import com.writer.recognition.LineSegmenter
@@ -16,6 +17,26 @@ import com.writer.view.HandwritingCanvasView
 object SpaceInsertMode {
 
     /**
+     * The line from which shifting effectively starts.
+     * When [anchorLine] is inside a diagram, returns the diagram's start line
+     * so the entire diagram moves as a unit. Otherwise returns [anchorLine].
+     */
+    fun effectiveShiftLine(anchorLine: Int, diagramAreas: List<DiagramArea>): Int {
+        val containingArea = diagramAreas.find { it.containsLine(anchorLine) }
+        return containingArea?.startLineIndex ?: anchorLine
+    }
+
+    /**
+     * Compute the barrier line index — the line containing blocking content
+     * that prevents further upward drag. Returns -1 if no barrier exists.
+     */
+    fun barrierLine(anchorLine: Int, diagramAreas: List<DiagramArea>, emptyAbove: Int): Int {
+        val shiftFrom = effectiveShiftLine(anchorLine, diagramAreas)
+        val barrier = shiftFrom - emptyAbove - 1
+        return if (barrier >= 0) barrier else -1
+    }
+
+    /**
      * Insert [linesToInsert] blank lines at [anchorLine].
      * All strokes and diagram areas at or below [anchorLine] shift down.
      */
@@ -28,9 +49,13 @@ object SpaceInsertMode {
         if (linesToInsert <= 0) return
         val shiftPx = linesToInsert * HandwritingCanvasView.LINE_SPACING
 
-        // Shift strokes at or below the anchor line
+        // If anchor is inside a diagram, shift from the diagram's top edge
+        // so all strokes in the diagram move as a unit (same pattern as removeSpace).
+        val shiftFrom = effectiveShiftLine(anchorLine, documentModel.diagramAreas)
+
+        // Shift strokes at or below shiftFrom
         val shifted = documentModel.activeStrokes.map { stroke ->
-            if (lineSegmenter.getStrokeLineIndex(stroke) >= anchorLine) {
+            if (lineSegmenter.getStrokeLineIndex(stroke) >= shiftFrom) {
                 stroke.shiftY(shiftPx)
             } else {
                 stroke
@@ -93,8 +118,7 @@ object SpaceInsertMode {
         if (linesToRemove <= 0 || anchorLine <= 0) return 0
 
         // If anchor is inside a diagram, scan from the diagram's top edge instead
-        val containingArea = documentModel.diagramAreas.find { it.containsLine(anchorLine) }
-        val scanFrom = containingArea?.startLineIndex ?: anchorLine
+        val scanFrom = effectiveShiftLine(anchorLine, documentModel.diagramAreas)
 
         if (scanFrom <= 0) return 0
 
