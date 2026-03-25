@@ -195,12 +195,12 @@ class TutorialOverlay @JvmOverloads constructor(
     override fun onTouchEvent(event: MotionEvent): Boolean {
         val step = currentStep ?: return false
 
-        if (event.action == MotionEvent.ACTION_UP) {
-            // Check skip button tap
-            if (skipRect.contains(event.x.toInt(), event.y.toInt())) {
+        // Skip button takes priority over cutout pass-through
+        if (skipRect.contains(event.x.toInt(), event.y.toInt())) {
+            if (event.action == MotionEvent.ACTION_UP) {
                 onSkip?.invoke()
-                return true
             }
+            return true  // consume all events on the skip button
         }
 
         // If touch is inside the cutout, let it pass through to views below
