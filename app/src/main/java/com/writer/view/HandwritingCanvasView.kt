@@ -231,6 +231,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
     /** Called at the very start of pen input (before any processing). */
     var onPenDown: (() -> Unit)? = null
 
+
     /** Begin a new stroke: set pen active, clear state, start dwell detection. */
     fun beginStroke(firstPoint: StrokePoint) {
         touchFilter?.penActive = true
@@ -634,33 +635,22 @@ class HandwritingCanvasView @JvmOverloads constructor(
             return
         }
 
-        // Start-dwell without shape → check if stroke looks like drawing
-        if (dwellIndicatorShown) {
-            val stroke = InkStroke(
-                points = currentStrokePoints.toList(),
-                isGeometric = false,
-                strokeType = StrokeType.FREEHAND
-            )
-            val drawingScore = DiagramStrokeClassifier.classifyStroke(
-                stroke, LINE_SPACING, includeConnector = false
-            )
-            completedStrokes.add(stroke)
-            onStrokeCompleted?.invoke(stroke)
-            if (drawingScore >= 0.5f) {
-                onDiagramShapeDetected?.invoke(stroke)
-                resetStrokeState()
-                flushAndRedraw()
-            } else {
-                resetStrokeState()
-            }
-            return
-        }
-
-        // Plain text stroke
+        // Auto-classify: if stroke looks like a drawing (score ≥ 0.5),
+        // create a diagram area around it. No dwell required — the system
+        // infers intent from the stroke shape.
         val stroke = InkStroke(points = currentStrokePoints.toList())
+        val drawingScore = DiagramStrokeClassifier.classifyStroke(
+            stroke, LINE_SPACING, includeConnector = false
+        )
         completedStrokes.add(stroke)
         onStrokeCompleted?.invoke(stroke)
-        resetStrokeState()
+        if (drawingScore >= 0.5f) {
+            onDiagramShapeDetected?.invoke(stroke)
+            resetStrokeState()
+            flushAndRedraw()
+        } else {
+            resetStrokeState()
+        }
     }
 
     /**
@@ -978,10 +968,6 @@ class HandwritingCanvasView @JvmOverloads constructor(
             if (dx * dx + dy * dy < ARROW_DWELL_RADIUS * ARROW_DWELL_RADIUS) {
                 dwellIndicatorShown = true
                 dwellDotCenter = PointF(first.x, first.y)
-                // Draw indicator to surface; on Boox the SDK overlay may obscure it
-                // mid-stroke, but the dwell state is preserved for finishStroke().
-                // Do NOT pause/resume SDK here — it triggers onBeginRawDrawing
-                // which resets the stroke + dwell state.
                 drawToSurface()
             }
         }
