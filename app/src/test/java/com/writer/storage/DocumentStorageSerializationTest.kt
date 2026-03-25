@@ -1,5 +1,6 @@
 package com.writer.storage
 
+import com.writer.model.ColumnData
 import com.writer.model.DocumentData
 import com.writer.model.InkStroke
 import com.writer.model.StrokePoint
@@ -16,18 +17,13 @@ import org.junit.Test
 class DocumentStorageSerializationTest {
 
     private fun makeData(strokes: List<InkStroke>) = DocumentData(
-        strokes = strokes,
-        scrollOffsetY = 0f,
-        lineTextCache = emptyMap(),
-        everHiddenLines = emptySet(),
-        highestLineIndex = 0,
-        currentLineIndex = 0
+        main = ColumnData(strokes = strokes)
     )
 
     private fun roundTrip(strokes: List<InkStroke>): List<InkStroke> {
         val json = DocumentStorage.serializeToJson(makeData(strokes))
         val loaded = DocumentStorage.deserializeFromJson(json.toString())
-        return loaded.strokes
+        return loaded.main.strokes
     }
 
     private fun samplePoints() = listOf(
@@ -126,8 +122,8 @@ class DocumentStorageSerializationTest {
         """.trimIndent()
 
         val loaded = DocumentStorage.deserializeFromJson(json)
-        assertEquals(StrokeType.FREEHAND, loaded.strokes[0].strokeType)
-        assertFalse(loaded.strokes[0].isGeometric)
+        assertEquals(StrokeType.FREEHAND, loaded.main.strokes[0].strokeType)
+        assertFalse(loaded.main.strokes[0].isGeometric)
     }
 
     @Test fun unknownStrokeType_defaultsToFreehand() {
@@ -151,7 +147,7 @@ class DocumentStorageSerializationTest {
         """.trimIndent()
 
         val loaded = DocumentStorage.deserializeFromJson(json)
-        assertEquals(StrokeType.FREEHAND, loaded.strokes[0].strokeType)
+        assertEquals(StrokeType.FREEHAND, loaded.main.strokes[0].strokeType)
     }
 
     // ── Multiple strokes with mixed types ───────────────────────────────────

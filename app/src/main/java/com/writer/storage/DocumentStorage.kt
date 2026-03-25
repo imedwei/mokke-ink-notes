@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.util.Log
 import androidx.documentfile.provider.DocumentFile
+import com.writer.model.ColumnData
 import com.writer.model.DiagramArea
 import com.writer.model.DocumentData
 import com.writer.model.InkStroke
@@ -60,7 +61,7 @@ object DocumentStorage {
             val json = serializeToJson(data)
             val file = docFile(context, name)
             file.writeText(json.toString())
-            Log.i(TAG, "Saved ${data.strokes.size} strokes to $name")
+            Log.i(TAG, "Saved ${data.main.strokes.size} strokes to $name")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to save document $name", e)
         }
@@ -71,7 +72,7 @@ object DocumentStorage {
             val file = docFile(context, name)
             if (!file.exists()) return null
             val data = deserializeFromJson(file.readText())
-            Log.i(TAG, "Loaded ${data.strokes.size} strokes from $name")
+            Log.i(TAG, "Loaded ${data.main.strokes.size} strokes from $name")
             return data
         } catch (e: Exception) {
             Log.e(TAG, "Failed to load document $name", e)
@@ -185,20 +186,51 @@ object DocumentStorage {
         json.put("currentLineIndex", data.currentLineIndex)
         json.put("userRenamed", data.userRenamed)
 
+        json.put("main", serializeColumnToJson(data.main))
+
+        val hasCueContent = data.cue.strokes.isNotEmpty() ||
+                data.cue.lineTextCache.isNotEmpty() ||
+                data.cue.diagramAreas.isNotEmpty()
+        if (hasCueContent) {
+            json.put("cue", serializeColumnToJson(data.cue))
+        }
+
+        return json
+    }
+
+    private fun serializeColumnToJson(col: ColumnData): JSONObject {
+        val json = JSONObject()
+
         val cacheObj = JSONObject()
-        for ((key, value) in data.lineTextCache) {
+        for ((key, value) in col.lineTextCache) {
             cacheObj.put(key.toString(), value)
         }
         json.put("lineTextCache", cacheObj)
 
         val hiddenArr = JSONArray()
-        for (line in data.everHiddenLines) {
+        for (line in col.everHiddenLines) {
             hiddenArr.put(line)
         }
         json.put("everHiddenLines", hiddenArr)
 
+        json.put("strokes", serializeStrokesToJson(col.strokes))
+
+        val diagramArr = JSONArray()
+        for (area in col.diagramAreas) {
+            val areaObj = JSONObject()
+            areaObj.put("id", area.id)
+            areaObj.put("startLineIndex", area.startLineIndex)
+            areaObj.put("heightInLines", area.heightInLines)
+            diagramArr.put(areaObj)
+        }
+        json.put("diagramAreas", diagramArr)
+
+        return json
+    }
+
+    private fun serializeStrokesToJson(strokes: List<InkStroke>): JSONArray {
         val strokesArr = JSONArray()
-        for (stroke in data.strokes) {
+        for (stroke in strokes) {
             val strokeObj = JSONObject()
             strokeObj.put("strokeId", stroke.strokeId)
             strokeObj.put("strokeWidth", stroke.strokeWidth.toDouble())
@@ -221,19 +253,7 @@ object DocumentStorage {
             }
             strokesArr.put(strokeObj)
         }
-        json.put("strokes", strokesArr)
-
-        val diagramArr = JSONArray()
-        for (area in data.diagramAreas) {
-            val areaObj = JSONObject()
-            areaObj.put("id", area.id)
-            areaObj.put("startLineIndex", area.startLineIndex)
-            areaObj.put("heightInLines", area.heightInLines)
-            diagramArr.put(areaObj)
-        }
-        json.put("diagramAreas", diagramArr)
-
-        return json
+        return strokesArr
     }
 
     internal fun deserializeFromJson(text: String): DocumentData {
@@ -244,6 +264,31 @@ object DocumentStorage {
         val currentLineIndex = json.optInt("currentLineIndex", -1)
         val userRenamed = json.optBoolean("userRenamed", false)
 
+        // Detect format: new format has "main" object, legacy has flat "strokes" array
+        val mainColumn = if (json.has("main")) {
+            deserializeColumnFromJson(json.getJSONObject("main"))
+        } else {
+            // Legacy format: per-column fields are at top level
+            deserializeColumnFromJson(json)
+        }
+
+        val cueColumn = if (json.has("cue")) {
+            deserializeColumnFromJson(json.getJSONObject("cue"))
+        } else {
+            ColumnData()
+        }
+
+        return DocumentData(
+            main = mainColumn,
+            cue = cueColumn,
+            scrollOffsetY = scrollOffsetY,
+            highestLineIndex = highestLineIndex,
+            currentLineIndex = currentLineIndex,
+            userRenamed = userRenamed
+        )
+    }
+
+    private fun deserializeColumnFromJson(json: JSONObject): ColumnData {
         val lineTextCache = mutableMapOf<Int, String>()
         val cacheObj = json.optJSONObject("lineTextCache")
         if (cacheObj != null) {
@@ -260,45 +305,7 @@ object DocumentStorage {
             }
         }
 
-        val strokes = mutableListOf<InkStroke>()
-        val strokesArr = json.optJSONArray("strokes")
-        if (strokesArr != null) {
-            for (i in 0 until strokesArr.length()) {
-                val strokeObj = strokesArr.getJSONObject(i)
-                val strokeId = strokeObj.getString("strokeId")
-                val strokeWidth = strokeObj.optDouble("strokeWidth", 5.0).toFloat()
-
-                val pointsArr = strokeObj.getJSONArray("points")
-                val points = mutableListOf<StrokePoint>()
-                for (j in 0 until pointsArr.length()) {
-                    val ptObj = pointsArr.getJSONObject(j)
-                    points.add(
-                        StrokePoint(
-                            x = ptObj.getDouble("x").toFloat(),
-                            y = ptObj.getDouble("y").toFloat(),
-                            pressure = ptObj.getDouble("pressure").toFloat(),
-                            timestamp = ptObj.getLong("timestamp")
-                        )
-                    )
-                }
-
-                val strokeTypeName = strokeObj.optString("strokeType", "")
-                val strokeType = try {
-                    if (strokeTypeName.isNotEmpty()) StrokeType.valueOf(strokeTypeName)
-                    else StrokeType.FREEHAND
-                } catch (_: IllegalArgumentException) { StrokeType.FREEHAND }
-
-                strokes.add(
-                    InkStroke(
-                        strokeId = strokeId,
-                        points = points,
-                        strokeWidth = strokeWidth,
-                        strokeType = strokeType,
-                        isGeometric = strokeObj.optBoolean("isGeometric", false)
-                    )
-                )
-            }
-        }
+        val strokes = deserializeStrokesFromJson(json.optJSONArray("strokes"))
 
         val diagramAreas = mutableListOf<DiagramArea>()
         val diagramArr = json.optJSONArray("diagramAreas")
@@ -315,15 +322,52 @@ object DocumentStorage {
             }
         }
 
-        return DocumentData(
+        return ColumnData(
             strokes = strokes,
-            scrollOffsetY = scrollOffsetY,
             lineTextCache = lineTextCache,
             everHiddenLines = everHiddenLines,
-            highestLineIndex = highestLineIndex,
-            currentLineIndex = currentLineIndex,
-            userRenamed = userRenamed,
             diagramAreas = diagramAreas
         )
+    }
+
+    private fun deserializeStrokesFromJson(strokesArr: JSONArray?): List<InkStroke> {
+        if (strokesArr == null) return emptyList()
+        val strokes = mutableListOf<InkStroke>()
+        for (i in 0 until strokesArr.length()) {
+            val strokeObj = strokesArr.getJSONObject(i)
+            val strokeId = strokeObj.getString("strokeId")
+            val strokeWidth = strokeObj.optDouble("strokeWidth", 5.0).toFloat()
+
+            val pointsArr = strokeObj.getJSONArray("points")
+            val points = mutableListOf<StrokePoint>()
+            for (j in 0 until pointsArr.length()) {
+                val ptObj = pointsArr.getJSONObject(j)
+                points.add(
+                    StrokePoint(
+                        x = ptObj.getDouble("x").toFloat(),
+                        y = ptObj.getDouble("y").toFloat(),
+                        pressure = ptObj.getDouble("pressure").toFloat(),
+                        timestamp = ptObj.getLong("timestamp")
+                    )
+                )
+            }
+
+            val strokeTypeName = strokeObj.optString("strokeType", "")
+            val strokeType = try {
+                if (strokeTypeName.isNotEmpty()) StrokeType.valueOf(strokeTypeName)
+                else StrokeType.FREEHAND
+            } catch (_: IllegalArgumentException) { StrokeType.FREEHAND }
+
+            strokes.add(
+                InkStroke(
+                    strokeId = strokeId,
+                    points = points,
+                    strokeWidth = strokeWidth,
+                    strokeType = strokeType,
+                    isGeometric = strokeObj.optBoolean("isGeometric", false)
+                )
+            )
+        }
+        return strokes
     }
 }

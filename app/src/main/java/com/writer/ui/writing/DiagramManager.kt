@@ -2,7 +2,7 @@ package com.writer.ui.writing
 
 import android.util.Log
 import com.writer.model.DiagramArea
-import com.writer.model.DocumentModel
+import com.writer.model.ColumnModel
 import com.writer.model.InkLine
 import com.writer.model.InkStroke
 import com.writer.model.StrokeType
@@ -28,7 +28,7 @@ interface DiagramManagerHost {
 }
 
 class DiagramManager(
-    val documentModel: DocumentModel,
+    val columnModel: ColumnModel,
     val lineSegmenter: LineSegmenter,
     private val recognizer: TextRecognizer,
     private val canvas: DiagramCanvas,
@@ -56,11 +56,11 @@ class DiagramManager(
 
     /** Check if a line index falls inside any diagram area. */
     fun isDiagramLine(lineIdx: Int): Boolean =
-        documentModel.diagramAreas.any { it.containsLine(lineIdx) }
+        columnModel.diagramAreas.any { it.containsLine(lineIdx) }
 
     /** Check if a line has pre-existing strokes (not inside any diagram area). */
     fun hasTextStrokesOnLine(lineIdx: Int, excluding: InkStroke? = null): Boolean =
-        documentModel.activeStrokes.any {
+        columnModel.activeStrokes.any {
             it !== excluding &&
             !isDiagramLine(lineSegmenter.getStrokeLineIndex(it)) &&
             lineSegmenter.getStrokeLineIndex(it) == lineIdx
@@ -75,7 +75,7 @@ class DiagramManager(
         val lineTextCache = host.getLineTextCache()
 
         // Find all remaining strokes in this diagram area
-        val remainingStrokes = documentModel.activeStrokes.filter { stroke ->
+        val remainingStrokes = columnModel.activeStrokes.filter { stroke ->
             area.containsLine(lineSegmenter.getStrokeLineIndex(stroke))
         }
 
@@ -85,25 +85,25 @@ class DiagramManager(
             val shiftUpPx = linesFreed * ls
             val oldEnd = area.endLineIndex
 
-            documentModel.diagramAreas.remove(area)
+            columnModel.diagramAreas.remove(area)
             diagramTextCache.remove(area.startLineIndex)
 
             // Shift strokes below the old diagram up
-            val shifted = documentModel.activeStrokes.map { stroke ->
+            val shifted = columnModel.activeStrokes.map { stroke ->
                 val strokeLine = lineSegmenter.getStrokeLineIndex(stroke)
                 if (strokeLine > oldEnd) stroke.shiftY(-shiftUpPx) else stroke
             }
-            documentModel.activeStrokes.clear()
-            documentModel.activeStrokes.addAll(shifted)
+            columnModel.activeStrokes.clear()
+            columnModel.activeStrokes.addAll(shifted)
 
             // Shift other diagram areas below
-            val shiftedAreas = documentModel.diagramAreas.map { other ->
+            val shiftedAreas = columnModel.diagramAreas.map { other ->
                 if (other.startLineIndex > oldEnd)
                     other.copy(startLineIndex = other.startLineIndex - linesFreed)
                 else other
             }
-            documentModel.diagramAreas.clear()
-            documentModel.diagramAreas.addAll(shiftedAreas)
+            columnModel.diagramAreas.clear()
+            columnModel.diagramAreas.addAll(shiftedAreas)
 
             // Shift text cache
             val shiftedCache = lineTextCache.entries.associate { (line, text) ->
@@ -112,8 +112,8 @@ class DiagramManager(
             lineTextCache.clear()
             lineTextCache.putAll(shiftedCache)
 
-            canvas.loadStrokes(documentModel.activeStrokes.toList())
-            canvas.diagramAreas = documentModel.diagramAreas.toList()
+            canvas.loadStrokes(columnModel.activeStrokes.toList())
+            canvas.diagramAreas = columnModel.diagramAreas.toList()
             canvas.pauseAndRedraw()
             host.onDiagramAreasChanged()
             Log.i(TAG, "Removed empty diagram area ${area.startLineIndex}-${area.endLineIndex}, shifted up $linesFreed lines")
@@ -133,30 +133,30 @@ class DiagramManager(
         if (totalFreed == 0) return  // no change
 
         // Step 1: Shrink the diagram area first
-        documentModel.diagramAreas.remove(area)
+        columnModel.diagramAreas.remove(area)
         val shrunk = DiagramArea(
             startLineIndex = newStart,
             heightInLines = newEnd - newStart + 1
         )
-        documentModel.diagramAreas.add(shrunk)
+        columnModel.diagramAreas.add(shrunk)
 
         // Step 2: Shift content below the old diagram end UP by linesFreedBelow
         if (linesFreedBelow > 0) {
             val shiftUpPx = linesFreedBelow * ls
-            val shifted = documentModel.activeStrokes.map { stroke ->
+            val shifted = columnModel.activeStrokes.map { stroke ->
                 val strokeLine = lineSegmenter.getStrokeLineIndex(stroke)
                 if (strokeLine > area.endLineIndex) stroke.shiftY(-shiftUpPx) else stroke
             }
-            documentModel.activeStrokes.clear()
-            documentModel.activeStrokes.addAll(shifted)
+            columnModel.activeStrokes.clear()
+            columnModel.activeStrokes.addAll(shifted)
 
-            val shiftedAreas = documentModel.diagramAreas.map { other ->
+            val shiftedAreas = columnModel.diagramAreas.map { other ->
                 if (other.startLineIndex > area.endLineIndex)
                     other.copy(startLineIndex = other.startLineIndex - linesFreedBelow)
                 else other
             }
-            documentModel.diagramAreas.clear()
-            documentModel.diagramAreas.addAll(shiftedAreas)
+            columnModel.diagramAreas.clear()
+            columnModel.diagramAreas.addAll(shiftedAreas)
 
             val shiftedCache = lineTextCache.entries.associate { (line, text) ->
                 (if (line > area.endLineIndex) line - linesFreedBelow else line) to text
@@ -168,20 +168,20 @@ class DiagramManager(
         // Step 3: Shrink from top — shift diagram content + everything below UP
         if (linesFreedAbove > 0) {
             val shiftUpPx = linesFreedAbove * ls
-            val shifted = documentModel.activeStrokes.map { stroke ->
+            val shifted = columnModel.activeStrokes.map { stroke ->
                 val strokeLine = lineSegmenter.getStrokeLineIndex(stroke)
                 if (strokeLine >= newStart) stroke.shiftY(-shiftUpPx) else stroke
             }
-            documentModel.activeStrokes.clear()
-            documentModel.activeStrokes.addAll(shifted)
+            columnModel.activeStrokes.clear()
+            columnModel.activeStrokes.addAll(shifted)
 
-            val shiftedAreas = documentModel.diagramAreas.map { other ->
+            val shiftedAreas = columnModel.diagramAreas.map { other ->
                 if (other.startLineIndex >= newStart)
                     other.copy(startLineIndex = other.startLineIndex - linesFreedAbove)
                 else other
             }
-            documentModel.diagramAreas.clear()
-            documentModel.diagramAreas.addAll(shiftedAreas)
+            columnModel.diagramAreas.clear()
+            columnModel.diagramAreas.addAll(shiftedAreas)
 
             val shiftedCache = lineTextCache.entries.associate { (line, text) ->
                 (if (line >= newStart) line - linesFreedAbove else line) to text
@@ -192,14 +192,14 @@ class DiagramManager(
             canvas.scrollOffsetY = (canvas.scrollOffsetY - shiftUpPx).coerceAtLeast(0f)
         }
 
-        canvas.loadStrokes(documentModel.activeStrokes.toList())
-        canvas.diagramAreas = documentModel.diagramAreas.toList()
+        canvas.loadStrokes(columnModel.activeStrokes.toList())
+        canvas.diagramAreas = columnModel.diagramAreas.toList()
         canvas.pauseAndRedraw()
         host.onDiagramAreasChanged()
 
         for (line in 0..area.endLineIndex) { lineTextCache.remove(line) }
 
-        val finalArea = documentModel.diagramAreas.find {
+        val finalArea = columnModel.diagramAreas.find {
             it.heightInLines == shrunk.heightInLines
         }
         Log.i(TAG, "Shrunk diagram: ${area.startLineIndex}-${area.endLineIndex} -> " +
@@ -227,7 +227,7 @@ class DiagramManager(
         val lineTextCache = host.getLineTextCache()
 
         // Collect all freehand strokes in the diagram area
-        val freehandStrokes = documentModel.activeStrokes.filter { stroke ->
+        val freehandStrokes = columnModel.activeStrokes.filter { stroke ->
             stroke.strokeType == StrokeType.FREEHAND &&
                 area.containsLine(lineSegmenter.getStrokeLineIndex(stroke))
         }
@@ -239,7 +239,7 @@ class DiagramManager(
         val ls = HandwritingCanvasView.LINE_SPACING
 
         // Collect geometric (shape) strokes for classification context
-        val shapeStrokes = documentModel.activeStrokes.filter { stroke ->
+        val shapeStrokes = columnModel.activeStrokes.filter { stroke ->
             stroke.strokeType != StrokeType.FREEHAND &&
                 !stroke.strokeType.isConnector &&
                 area.containsLine(lineSegmenter.getStrokeLineIndex(stroke))
@@ -314,31 +314,31 @@ class DiagramManager(
         var mergeHeight = bottomLine - mergeStart + 1
 
         // Merge with adjacent diagram area above
-        val above = documentModel.diagramAreas.find { it.endLineIndex + 1 >= mergeStart && it.endLineIndex < mergeStart + mergeHeight }
+        val above = columnModel.diagramAreas.find { it.endLineIndex + 1 >= mergeStart && it.endLineIndex < mergeStart + mergeHeight }
         if (above != null && above.endLineIndex + 1 >= mergeStart) {
             if (above.startLineIndex < mergeStart) {
                 mergeHeight += mergeStart - above.startLineIndex
                 mergeStart = above.startLineIndex
             }
-            documentModel.diagramAreas.remove(above)
+            columnModel.diagramAreas.remove(above)
         }
 
         // Merge with adjacent diagram area below
-        val below = documentModel.diagramAreas.find { it.startLineIndex <= mergeStart + mergeHeight && it.startLineIndex >= mergeStart }
+        val below = columnModel.diagramAreas.find { it.startLineIndex <= mergeStart + mergeHeight && it.startLineIndex >= mergeStart }
         if (below != null && below != above) {
             val belowEnd = below.startLineIndex + below.heightInLines
             if (belowEnd > mergeStart + mergeHeight) {
                 mergeHeight = belowEnd - mergeStart
             }
-            documentModel.diagramAreas.remove(below)
+            columnModel.diagramAreas.remove(below)
         }
 
         val newArea = DiagramArea(
             startLineIndex = mergeStart,
             heightInLines = mergeHeight
         )
-        documentModel.diagramAreas.add(newArea)
-        canvas.diagramAreas = documentModel.diagramAreas.toList()
+        columnModel.diagramAreas.add(newArea)
+        canvas.diagramAreas = columnModel.diagramAreas.toList()
 
         // Invalidate text cache for affected lines
         for (line in mergeStart until mergeStart + mergeHeight) {
@@ -361,7 +361,7 @@ class DiagramManager(
         val strokeBottomLine = lineSegmenter.getLineIndex(strokeMaxY)
 
         // Find the diagram area that the stroke started in (closest match)
-        val area = documentModel.diagramAreas.find {
+        val area = columnModel.diagramAreas.find {
             // The stroke overlaps this area
             strokeTopLine <= it.endLineIndex && strokeBottomLine >= it.startLineIndex
         } ?: return
@@ -379,23 +379,23 @@ class DiagramManager(
         // The overflow stroke is identified by matching its Y bounds.
         if (linesAbove > 0) {
             val shiftPx = linesAbove * ls
-            val shifted = documentModel.activeStrokes.map { stroke ->
+            val shifted = columnModel.activeStrokes.map { stroke ->
                 val strokeLine = lineSegmenter.getStrokeLineIndex(stroke)
                 val isInsideDiagram = strokeLine >= area.startLineIndex
                 val isOverflowStroke = stroke.strokeId == overflowStrokeId
                 if (isInsideDiagram || isOverflowStroke) stroke.shiftY(shiftPx) else stroke
             }
-            documentModel.activeStrokes.clear()
-            documentModel.activeStrokes.addAll(shifted)
+            columnModel.activeStrokes.clear()
+            columnModel.activeStrokes.addAll(shifted)
 
             // Shift diagram areas at or below
-            val shiftedAreas = documentModel.diagramAreas.map { other ->
+            val shiftedAreas = columnModel.diagramAreas.map { other ->
                 if (other.startLineIndex >= area.startLineIndex)
                     other.copy(startLineIndex = other.startLineIndex + linesAbove)
                 else other
             }
-            documentModel.diagramAreas.clear()
-            documentModel.diagramAreas.addAll(shiftedAreas)
+            columnModel.diagramAreas.clear()
+            columnModel.diagramAreas.addAll(shiftedAreas)
 
             // Shift text cache
             val shiftedCache = lineTextCache.entries.associate { (line, text) ->
@@ -414,22 +414,22 @@ class DiagramManager(
         if (linesBelow > 0) {
             val shiftPx = linesBelow * ls
             val postEndLine = area.endLineIndex + linesAbove  // adjusted for upward shift
-            val shifted = documentModel.activeStrokes.map { stroke ->
+            val shifted = columnModel.activeStrokes.map { stroke ->
                 val strokeLine = lineSegmenter.getStrokeLineIndex(stroke)
                 val isOverflowStroke = stroke.strokeId == overflowStrokeId
                 if (strokeLine > postEndLine && !isOverflowStroke)
                     stroke.shiftY(shiftPx) else stroke
             }
-            documentModel.activeStrokes.clear()
-            documentModel.activeStrokes.addAll(shifted)
+            columnModel.activeStrokes.clear()
+            columnModel.activeStrokes.addAll(shifted)
 
-            val shiftedAreas = documentModel.diagramAreas.map { other ->
+            val shiftedAreas = columnModel.diagramAreas.map { other ->
                 if (other.startLineIndex > postEndLine)
                     other.copy(startLineIndex = other.startLineIndex + linesBelow)
                 else other
             }
-            documentModel.diagramAreas.clear()
-            documentModel.diagramAreas.addAll(shiftedAreas)
+            columnModel.diagramAreas.clear()
+            columnModel.diagramAreas.addAll(shiftedAreas)
 
             val shiftedCache = lineTextCache.entries.associate { (line, text) ->
                 (if (line > postEndLine) line + linesBelow else line) to text
@@ -441,19 +441,19 @@ class DiagramManager(
         // Expand diagram: keep original startLineIndex, grow height.
         // After upward shift, the area moved to startLineIndex + linesAbove.
         // We expand it back to the original startLineIndex.
-        val shiftedArea = documentModel.diagramAreas.find {
+        val shiftedArea = columnModel.diagramAreas.find {
             it.startLineIndex == area.startLineIndex + linesAbove
         } ?: return
-        documentModel.diagramAreas.remove(shiftedArea)
+        columnModel.diagramAreas.remove(shiftedArea)
         val expanded = DiagramArea(
             startLineIndex = area.startLineIndex,
             heightInLines = area.heightInLines + linesAbove + linesBelow
         )
-        documentModel.diagramAreas.add(expanded)
+        columnModel.diagramAreas.add(expanded)
 
         // Update canvas and force redraw so expanded bounds are immediately visible
-        canvas.loadStrokes(documentModel.activeStrokes.toList())
-        canvas.diagramAreas = documentModel.diagramAreas.toList()
+        canvas.loadStrokes(columnModel.activeStrokes.toList())
+        canvas.diagramAreas = columnModel.diagramAreas.toList()
         canvas.pauseAndRedraw()
         for (line in expanded.startLineIndex..expanded.endLineIndex) {
             lineTextCache.remove(line)
@@ -469,7 +469,7 @@ class DiagramManager(
      */
     fun onStrokesErased(idsToRemove: Set<String>, erasedStrokes: List<InkStroke>): Boolean {
         // Invalidate diagram text cache for any affected diagram areas
-        for (area in documentModel.diagramAreas) {
+        for (area in columnModel.diagramAreas) {
             val cachedGroups = diagramTextCache[area.startLineIndex] ?: continue
             if (cachedGroups.any { group -> group.strokeIds.any { it in idsToRemove } }) {
                 recognizeDiagramArea(area)
@@ -480,7 +480,7 @@ class DiagramManager(
         var redrew = false
         val affectedStartLines = erasedStrokes.map { lineSegmenter.getStrokeLineIndex(it) }.toSet()
         for (startLine in affectedStartLines) {
-            val area = documentModel.diagramAreas.find { it.containsLine(startLine) } ?: continue
+            val area = columnModel.diagramAreas.find { it.containsLine(startLine) } ?: continue
             shrinkDiagramAfterErase(area)
             redrew = true
         }

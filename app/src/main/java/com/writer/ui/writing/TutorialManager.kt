@@ -225,10 +225,10 @@ class TutorialManager(
 
         val showcase = TutorialDemoContent.generateShowcaseDocument(font, canvasWidth, ls, tm)
         val docModel = inkCanvas.documentModel ?: return
-        docModel.activeStrokes.addAll(showcase.strokes)
-        docModel.diagramAreas.add(showcase.diagramArea)
+        docModel.main.activeStrokes.addAll(showcase.strokes)
+        docModel.main.diagramAreas.add(showcase.diagramArea)
         inkCanvas.loadStrokes(showcase.strokes)
-        inkCanvas.diagramAreas = docModel.diagramAreas.toList()
+        inkCanvas.diagramAreas = docModel.main.diagramAreas.toList()
         inkCanvas.drawToSurface()
     }
 
@@ -385,7 +385,7 @@ class TutorialManager(
         val strokes = savedStrokes
         if (strokes != null) {
             // Reload strokes into both the canvas and the document model
-            // (reset() clears documentModel.activeStrokes)
+            // (reset() clears documentModel.main.activeStrokes)
             inkCanvas.loadStrokes(strokes)
             inkCanvas.scrollOffsetY = savedScrollY
             inkCanvas.drawToSurface()
@@ -400,15 +400,15 @@ class TutorialManager(
         coordinator?.start()
         val docModel = inkCanvas.documentModel
         if (savedState != null) {
-            docModel?.activeStrokes?.addAll(savedState!!.strokes)
-            docModel?.diagramAreas?.addAll(savedState!!.diagramAreas)
+            docModel?.main?.activeStrokes?.addAll(savedState!!.main.strokes)
+            docModel?.main?.diagramAreas?.addAll(savedState!!.main.diagramAreas)
             coordinator?.restoreState(savedState!!)
         } else {
             val pending = getPendingRestore()
             if (pending != null) {
                 clearPendingRestore()
-                docModel?.activeStrokes?.addAll(pending.strokes)
-                docModel?.diagramAreas?.addAll(pending.diagramAreas)
+                docModel?.main?.activeStrokes?.addAll(pending.main.strokes)
+                docModel?.main?.diagramAreas?.addAll(pending.main.diagramAreas)
                 coordinator?.restoreState(pending)
             }
         }

@@ -262,12 +262,12 @@ class WritingActivity : AppCompatActivity() {
     private fun restoreDocumentVisuals() {
         val data = pendingRestore ?: return
 
-        Log.i(TAG, "Restoring ${data.strokes.size} strokes, scroll=${data.scrollOffsetY}")
+        Log.i(TAG, "Restoring ${data.main.strokes.size} strokes, scroll=${data.scrollOffsetY}")
 
-        documentModel.activeStrokes.addAll(data.strokes)
-        documentModel.diagramAreas.addAll(data.diagramAreas)
-        inkCanvas.diagramAreas = data.diagramAreas
-        inkCanvas.loadStrokes(data.strokes)
+        documentModel.main.activeStrokes.addAll(data.main.strokes)
+        documentModel.main.diagramAreas.addAll(data.main.diagramAreas)
+        inkCanvas.diagramAreas = data.main.diagramAreas
+        inkCanvas.loadStrokes(data.main.strokes)
         inkCanvas.scrollOffsetY = data.scrollOffsetY
         inkCanvas.drawToSurface()
     }
@@ -309,6 +309,7 @@ class WritingActivity : AppCompatActivity() {
     private fun startCoordinator() {
         coordinator = WritingCoordinator(
             documentModel = documentModel,
+            columnModel = documentModel.main,
             recognizer = recognizer,
             inkCanvas = inkCanvas,
             textView = recognizedTextView,
@@ -374,7 +375,7 @@ class WritingActivity : AppCompatActivity() {
         // Clear current state
         coordinator?.stop()
         coordinator?.reset()
-        documentModel.activeStrokes.clear()
+        documentModel.main.activeStrokes.clear()
         inkCanvas.clear()
         recognizedTextView.setParagraphs(emptyList())
 
@@ -385,8 +386,8 @@ class WritingActivity : AppCompatActivity() {
 
         val data = DocumentStorage.load(this, name)
         if (data != null) {
-            documentModel.activeStrokes.addAll(data.strokes)
-            inkCanvas.loadStrokes(data.strokes)
+            documentModel.main.activeStrokes.addAll(data.main.strokes)
+            inkCanvas.loadStrokes(data.main.strokes)
             inkCanvas.scrollOffsetY = data.scrollOffsetY
             inkCanvas.drawToSurface()
             coordinator?.start()
@@ -402,7 +403,7 @@ class WritingActivity : AppCompatActivity() {
 
         coordinator?.stop()
         coordinator?.reset()
-        documentModel.activeStrokes.clear()
+        documentModel.main.activeStrokes.clear()
         inkCanvas.clear()
         recognizedTextView.setParagraphs(emptyList())
         recognizedTextView.showScrollHint = true
@@ -623,17 +624,17 @@ class WritingActivity : AppCompatActivity() {
         // Clear current document
         coordinator?.stop()
         coordinator?.reset()
-        documentModel.activeStrokes.clear()
+        documentModel.main.activeStrokes.clear()
         inkCanvas.clear()
         inkCanvas.scrollOffsetY = 0f
         recognizedTextView.setParagraphs(emptyList())
 
         // Generate demo strokes + diagram area
         val showcase = TutorialDemoContent.generateShowcaseDocument(font, cw, ls, tm)
-        documentModel.activeStrokes.addAll(showcase.strokes)
-        documentModel.diagramAreas.add(showcase.diagramArea)
+        documentModel.main.activeStrokes.addAll(showcase.strokes)
+        documentModel.main.diagramAreas.add(showcase.diagramArea)
         inkCanvas.loadStrokes(showcase.strokes)
-        inkCanvas.diagramAreas = documentModel.diagramAreas.toList()
+        inkCanvas.diagramAreas = documentModel.main.diagramAreas.toList()
         inkCanvas.drawToSurface()
 
         // Restart coordinator

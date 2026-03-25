@@ -1,6 +1,8 @@
 package com.writer.ui.writing
 
 import android.util.Log
+import com.writer.model.ColumnData
+import com.writer.model.ColumnModel
 import com.writer.model.DiagramNode
 import com.writer.model.DocumentModel
 import com.writer.model.InkStroke
@@ -24,6 +26,7 @@ import kotlinx.coroutines.launch
 
 class WritingCoordinator(
     private val documentModel: DocumentModel,
+    private val columnModel: ColumnModel,
     private val recognizer: TextRecognizer,
     private val inkCanvas: HandwritingCanvasView,
     private val textView: RecognizedTextView,
@@ -42,7 +45,7 @@ class WritingCoordinator(
     private val undoCoalescer = UndoCoalescer(undoManager)
 
     private val gestureHandler = GestureHandler(
-        documentModel = documentModel,
+        columnModel = columnModel,
         inkCanvas = inkCanvas,
         lineSegmenter = lineSegmenter,
         onLinesChanged = { invalidatedLines ->
@@ -103,7 +106,7 @@ class WritingCoordinator(
                 inkCanvas.resumeRawDrawing()
             }
         }
-        diagramManager = DiagramManager(documentModel, lineSegmenter, recognizer, canvasAdapter, this, scope)
+        diagramManager = DiagramManager(columnModel, lineSegmenter, recognizer, canvasAdapter, this, scope)
 
         val recognitionHost = object : RecognitionManagerHost {
             override val lineTextCache: MutableMap<Int, String> get() = this@WritingCoordinator.lineTextCache
@@ -117,12 +120,12 @@ class WritingCoordinator(
             }
         }
         recognitionManager = LineRecognitionManager(
-            documentModel, recognizer, lineSegmenter, strokeClassifier, scope,
+            columnModel, recognizer, lineSegmenter, strokeClassifier, scope,
             recognitionHost, canvasWidthProvider = { inkCanvas.width.toFloat() }
         )
 
         val displayHost = object : DisplayManagerHost {
-            override val documentModel: DocumentModel get() = this@WritingCoordinator.documentModel
+            override val columnModel: ColumnModel get() = this@WritingCoordinator.columnModel
             override val diagramManager: DiagramManager get() = this@WritingCoordinator.diagramManager
             override val lineTextCache: Map<Int, String> get() = this@WritingCoordinator.lineTextCache
             override val highestLineIndex: Int get() = this@WritingCoordinator.highestLineIndex
@@ -188,8 +191,8 @@ class WritingCoordinator(
         highestLineIndex = -1
         currentLineIndex = -1
         userRenamed = false
-        documentModel.activeStrokes.clear()
-        documentModel.diagramAreas.clear()
+        columnModel.activeStrokes.clear()
+        columnModel.diagramAreas.clear()
         inkCanvas.diagramAreas = emptyList()
     }
 
@@ -204,7 +207,7 @@ class WritingCoordinator(
         }
 
         saveSnapshot(UndoCoalescer.ActionType.STROKE_ADDED, lineSegmenter.getStrokeLineIndex(stroke))
-        documentModel.activeStrokes.add(stroke)
+        columnModel.activeStrokes.add(stroke)
         eventLog.recordEvent(lastStrokeIndex, StrokeEventLog.EventType.ADDED, "line=${lineSegmenter.getStrokeLineIndex(stroke)}", elapsedMs = elapsedMs)
         onTutorialAction?.invoke("stroke_completed")
         if (elapsedMs > PERF_BUDGET_MS) Log.w(TAG, "Slow stroke: ${elapsedMs}ms (added, line=${lineSegmenter.getStrokeLineIndex(stroke)})")
@@ -214,7 +217,7 @@ class WritingCoordinator(
         // Diagram strokes: recognize freehand by spatial groups, not by line
         if (diagramManager.isDiagramLine(lineIdx)) {
             if (stroke.strokeType == StrokeType.FREEHAND) {
-                val area = documentModel.diagramAreas.find { it.containsLine(lineIdx) }
+                val area = columnModel.diagramAreas.find { it.containsLine(lineIdx) }
                 if (area != null) diagramManager.recognizeDiagramArea(area)
             }
             return
@@ -223,19 +226,19 @@ class WritingCoordinator(
         // Sticky zone: if a geometric (shape-snapped) stroke lands adjacent to a diagram
         // area, expand it. Freehand strokes do NOT trigger sticky expansion — they're
         // likely text and should stay outside the diagram.
-        val adjacentArea = documentModel.diagramAreas.find {
+        val adjacentArea = columnModel.diagramAreas.find {
             lineIdx == it.startLineIndex - 1 || lineIdx == it.endLineIndex + 1
         }
         if (adjacentArea != null && stroke.isGeometric && !diagramManager.hasTextStrokesOnLine(lineIdx, excluding = stroke)) {
             val newStart = minOf(adjacentArea.startLineIndex, lineIdx)
             val newEnd = maxOf(adjacentArea.endLineIndex, lineIdx)
-            documentModel.diagramAreas.remove(adjacentArea)
+            columnModel.diagramAreas.remove(adjacentArea)
             val expanded = adjacentArea.copy(
                 startLineIndex = newStart,
                 heightInLines = newEnd - newStart + 1
             )
-            documentModel.diagramAreas.add(expanded)
-            inkCanvas.diagramAreas = documentModel.diagramAreas.toList()
+            columnModel.diagramAreas.add(expanded)
+            inkCanvas.diagramAreas = columnModel.diagramAreas.toList()
             for (line in newStart..newEnd) {
                 lineTextCache.remove(line)
             }
@@ -272,8 +275,8 @@ class WritingCoordinator(
 
     private fun onStrokeReplaced(oldStrokeId: String, newStroke: InkStroke) {
         saveSnapshot(UndoCoalescer.ActionType.STROKE_REPLACED)  // captures state with raw stroke (state N+1)
-        documentModel.activeStrokes.removeAll { it.strokeId == oldStrokeId }
-        documentModel.activeStrokes.add(newStroke)
+        columnModel.activeStrokes.removeAll { it.strokeId == oldStrokeId }
+        columnModel.activeStrokes.add(newStroke)
         eventLog.recordEvent(lastStrokeIndex, StrokeEventLog.EventType.REPLACED, newStroke.strokeType.name, elapsedMs = inkCanvas.lastFinishStrokeMs)
 
         // Track shape nodes for magnetic arrow snapping
@@ -281,7 +284,7 @@ class WritingCoordinator(
             val bounds = android.graphics.RectF(
                 newStroke.minX, newStroke.minY, newStroke.maxX, newStroke.maxY
             )
-            documentModel.diagram.nodes[newStroke.strokeId] = DiagramNode(
+            columnModel.diagram.nodes[newStroke.strokeId] = DiagramNode(
                 strokeId = newStroke.strokeId,
                 shapeType = newStroke.strokeType,
                 bounds = bounds
@@ -298,7 +301,7 @@ class WritingCoordinator(
         // scratch-out via isFocusedScratchOut — most of its path covers existing strokes.
         val radius = ScreenMetrics.dp(ScratchOutDetection.COVERAGE_RADIUS_DP)
         val radiusSq = radius * radius
-        val overlapping = documentModel.activeStrokes.filter { stroke ->
+        val overlapping = columnModel.activeStrokes.filter { stroke ->
             if (stroke.points.size < 5) {
                 // Small strokes (dots, taps): segment intersection is unreliable,
                 // use proximity check instead — any scratch point within radius counts.
@@ -318,8 +321,8 @@ class WritingCoordinator(
         saveSnapshot(UndoCoalescer.ActionType.SCRATCH_OUT)
 
         val idsToRemove = overlapping.map { it.strokeId }.toSet()
-        documentModel.activeStrokes.removeAll { it.strokeId in idsToRemove }
-        for (id in idsToRemove) { documentModel.diagram.nodes.remove(id) }
+        columnModel.activeStrokes.removeAll { it.strokeId in idsToRemove }
+        for (id in idsToRemove) { columnModel.diagram.nodes.remove(id) }
 
         inkCanvas.removeStrokes(idsToRemove)
 
@@ -340,10 +343,10 @@ class WritingCoordinator(
 
     /** Recognize all lines that have strokes but no cached text or failed recognition. */
     fun recognizeAllLines() {
-        val strokesByLine = lineSegmenter.groupByLine(documentModel.activeStrokes)
+        val strokesByLine = lineSegmenter.groupByLine(columnModel.activeStrokes)
         if (strokesByLine.isEmpty()) return
         // Recognize diagram areas immediately on load (no debounce)
-        for (area in documentModel.diagramAreas) {
+        for (area in columnModel.diagramAreas) {
             diagramManager.recognizeDiagramArea(area, immediate = true)
         }
         scope.launch {
@@ -368,11 +371,11 @@ class WritingCoordinator(
     /** Insert [lines] blank lines at [anchorLine], shifting content below down. */
     fun insertSpace(anchorLine: Int, lines: Int) {
         saveSnapshot(UndoCoalescer.ActionType.SPACE_INSERTED)
-        SpaceInsertMode.insertSpace(documentModel, lineSegmenter, anchorLine, lines)
+        SpaceInsertMode.insertSpace(columnModel, lineSegmenter, anchorLine, lines)
         // Invalidate text cache for affected lines
         lineTextCache.keys.filter { it >= anchorLine }.forEach { lineTextCache.remove(it) }
-        inkCanvas.loadStrokes(documentModel.activeStrokes.toList())
-        inkCanvas.diagramAreas = documentModel.diagramAreas.toList()
+        inkCanvas.loadStrokes(columnModel.activeStrokes.toList())
+        inkCanvas.diagramAreas = columnModel.diagramAreas.toList()
         displayManager.clearEverHiddenLines()
         displayManager.displayHiddenLines()
         Log.i(TAG, "Insert space: $lines lines at anchor=$anchorLine")
@@ -381,11 +384,11 @@ class WritingCoordinator(
     /** Remove up to [lines] empty lines at [anchorLine]. Returns actual lines removed. */
     fun removeSpace(anchorLine: Int, lines: Int): Int {
         saveSnapshot(UndoCoalescer.ActionType.SPACE_INSERTED)
-        val removed = SpaceInsertMode.removeSpace(documentModel, lineSegmenter, anchorLine, lines)
+        val removed = SpaceInsertMode.removeSpace(columnModel, lineSegmenter, anchorLine, lines)
         if (removed == 0) return 0
         lineTextCache.keys.filter { it >= anchorLine }.forEach { lineTextCache.remove(it) }
-        inkCanvas.loadStrokes(documentModel.activeStrokes.toList())
-        inkCanvas.diagramAreas = documentModel.diagramAreas.toList()
+        inkCanvas.loadStrokes(columnModel.activeStrokes.toList())
+        inkCanvas.diagramAreas = columnModel.diagramAreas.toList()
         displayManager.clearEverHiddenLines()
         displayManager.displayHiddenLines()
         Log.i(TAG, "Remove space: $removed lines at anchor=$anchorLine")
@@ -402,16 +405,16 @@ class WritingCoordinator(
     // --- Markdown export ---
 
     fun getMarkdownText(): String {
-        if (lineTextCache.isEmpty() && documentModel.diagramAreas.isEmpty()) return ""
+        if (lineTextCache.isEmpty() && columnModel.diagramAreas.isEmpty()) return ""
 
-        val strokesByLine = lineSegmenter.groupByLine(documentModel.activeStrokes)
+        val strokesByLine = lineSegmenter.groupByLine(columnModel.activeStrokes)
         val writingWidth = inkCanvas.width.toFloat()
 
         val classifiedLines = lineTextCache.keys.sorted().filter { !diagramManager.isDiagramLine(it) }.mapNotNull { lineIdx ->
             paragraphBuilder.classifyLine(lineIdx, lineTextCache[lineIdx], strokesByLine[lineIdx], writingWidth)
         }
 
-        val grouped = paragraphBuilder.groupIntoParagraphs(classifiedLines, strokesByLine, writingWidth, documentModel.diagramAreas)
+        val grouped = paragraphBuilder.groupIntoParagraphs(classifiedLines, strokesByLine, writingWidth, columnModel.diagramAreas)
 
         // Build text paragraphs with their starting line index
         data class MdBlock(val lineIndex: Int, val text: String)
@@ -425,8 +428,8 @@ class WritingCoordinator(
         }
 
         // Insert diagram SVGs at correct positions
-        for (area in documentModel.diagramAreas.sortedBy { it.startLineIndex }) {
-            val diagramStrokes = documentModel.activeStrokes.filter { stroke ->
+        for (area in columnModel.diagramAreas.sortedBy { it.startLineIndex }) {
+            val diagramStrokes = columnModel.activeStrokes.filter { stroke ->
                 val strokeLine = lineSegmenter.getStrokeLineIndex(stroke)
                 area.containsLine(strokeLine)
             }
@@ -448,13 +451,13 @@ class WritingCoordinator(
     // --- Diagram node rebuild ---
 
     private fun rebuildDiagramNodes(strokes: List<InkStroke>) {
-        documentModel.diagram.nodes.clear()
+        columnModel.diagram.nodes.clear()
         for (stroke in strokes) {
             if (!stroke.strokeType.isConnector && stroke.strokeType != StrokeType.FREEHAND) {
                 val bounds = android.graphics.RectF(
                     stroke.minX, stroke.minY, stroke.maxX, stroke.maxY
                 )
-                documentModel.diagram.nodes[stroke.strokeId] = DiagramNode(
+                columnModel.diagram.nodes[stroke.strokeId] = DiagramNode(
                     strokeId = stroke.strokeId, shapeType = stroke.strokeType, bounds = bounds
                 )
             }
@@ -473,14 +476,14 @@ class WritingCoordinator(
 
     private fun applySnapshot(snapshot: UndoManager.Snapshot) {
         // Compute which strokes changed so we can scroll to them if off-screen
-        val oldStrokeIds = documentModel.activeStrokes.map { it.strokeId }.toSet()
+        val oldStrokeIds = columnModel.activeStrokes.map { it.strokeId }.toSet()
         val newStrokeIds = snapshot.strokes.map { it.strokeId }.toSet()
         val changedIds = (oldStrokeIds - newStrokeIds) + (newStrokeIds - oldStrokeIds)
 
-        documentModel.activeStrokes.clear()
-        documentModel.activeStrokes.addAll(snapshot.strokes)
-        documentModel.diagramAreas.clear()
-        documentModel.diagramAreas.addAll(snapshot.diagramAreas)
+        columnModel.activeStrokes.clear()
+        columnModel.activeStrokes.addAll(snapshot.strokes)
+        columnModel.diagramAreas.clear()
+        columnModel.diagramAreas.addAll(snapshot.diagramAreas)
         diagramManager.clearTextCache()
         rebuildDiagramNodes(snapshot.strokes)
         inkCanvas.diagramAreas = snapshot.diagramAreas
@@ -512,10 +515,10 @@ class WritingCoordinator(
     }
 
     private fun currentSnapshot() = UndoManager.Snapshot(
-        strokes = documentModel.activeStrokes.toList(),
+        strokes = columnModel.activeStrokes.toList(),
         scrollOffsetY = inkCanvas.scrollOffsetY,
         lineTextCache = lineTextCache.toMap(),
-        diagramAreas = documentModel.diagramAreas.toList()
+        diagramAreas = columnModel.diagramAreas.toList()
     )
 
     fun canUndo(): Boolean = undoManager.canUndo()
@@ -554,8 +557,8 @@ class WritingCoordinator(
 
         val json = BugReport.serialize(
             eventSnapshot = snapshot,
-            activeStrokes = documentModel.activeStrokes.toList(),
-            diagramAreas = documentModel.diagramAreas.toList(),
+            activeStrokes = columnModel.activeStrokes.toList(),
+            diagramAreas = columnModel.diagramAreas.toList(),
             lineTextCache = lineTextCache.toMap()
         )
 
@@ -579,27 +582,29 @@ class WritingCoordinator(
 
     fun getState(): DocumentData {
         return DocumentData(
-            strokes = inkCanvas.getStrokes(),
+            main = ColumnData(
+                strokes = inkCanvas.getStrokes(),
+                lineTextCache = lineTextCache.toMap(),
+                everHiddenLines = displayManager.getEverHiddenLinesSnapshot(),
+                diagramAreas = columnModel.diagramAreas.toList()
+            ),
             scrollOffsetY = inkCanvas.scrollOffsetY,
-            lineTextCache = lineTextCache.toMap(),
-            everHiddenLines = displayManager.getEverHiddenLinesSnapshot(),
             highestLineIndex = highestLineIndex,
             currentLineIndex = currentLineIndex,
-            userRenamed = userRenamed,
-            diagramAreas = documentModel.diagramAreas.toList()
+            userRenamed = userRenamed
         )
     }
 
     fun restoreState(data: DocumentData) {
-        lineTextCache.putAll(data.lineTextCache)
-        displayManager.addEverHiddenLines(data.everHiddenLines)
+        lineTextCache.putAll(data.main.lineTextCache)
+        displayManager.addEverHiddenLines(data.main.everHiddenLines)
         highestLineIndex = data.highestLineIndex
         currentLineIndex = data.currentLineIndex
         userRenamed = data.userRenamed
-        documentModel.diagramAreas.clear()
-        documentModel.diagramAreas.addAll(data.diagramAreas)
-        inkCanvas.diagramAreas = data.diagramAreas
-        rebuildDiagramNodes(documentModel.activeStrokes)
+        columnModel.diagramAreas.clear()
+        columnModel.diagramAreas.addAll(data.main.diagramAreas)
+        inkCanvas.diagramAreas = data.main.diagramAreas
+        rebuildDiagramNodes(columnModel.activeStrokes)
         displayManager.displayHiddenLines()
     }
 }

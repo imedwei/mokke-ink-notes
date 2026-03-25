@@ -1,7 +1,7 @@
 package com.writer.ui.writing
 
 import android.util.Log
-import com.writer.model.DocumentModel
+import com.writer.model.ColumnModel
 import com.writer.model.InkStroke
 import com.writer.model.maxY
 import com.writer.view.CanvasTheme
@@ -16,7 +16,7 @@ import com.writer.recognition.LineSegmenter
 
 /** Callback interface for DisplayManager to communicate with its host. */
 interface DisplayManagerHost {
-    val documentModel: DocumentModel
+    val columnModel: ColumnModel
     val diagramManager: DiagramManager
     val lineTextCache: Map<Int, String>
     val highestLineIndex: Int
@@ -85,7 +85,7 @@ class DisplayManager(
     fun checkAutoScroll(currentLineIndex: Int) {
         if (scrollAnimating) return
 
-        val strokes = host.documentModel.activeStrokes
+        val strokes = host.columnModel.activeStrokes
         if (strokes.isEmpty()) return
 
         val canvasHeight = inkCanvas.height.toFloat()
@@ -168,7 +168,7 @@ class DisplayManager(
     }
 
     fun displayHiddenLines() {
-        val strokesByLine = lineSegmenter.groupByLine(host.documentModel.activeStrokes)
+        val strokesByLine = lineSegmenter.groupByLine(host.columnModel.activeStrokes)
 
         val currentlyHidden = PreviewLayoutCalculator.currentlyHiddenLines(
             strokesByLine.keys, inkCanvas.scrollOffsetY,
@@ -195,7 +195,7 @@ class DisplayManager(
                 for (lineIdx in uncached) {
                     host.doRecognizeLine(lineIdx)
                 }
-                val freshStrokesByLine = lineSegmenter.groupByLine(host.documentModel.activeStrokes)
+                val freshStrokesByLine = lineSegmenter.groupByLine(host.columnModel.activeStrokes)
                 val stillNotVisible = PreviewLayoutCalculator.notYetVisibleLines(
                     freshStrokesByLine.keys, inkCanvas.scrollOffsetY,
                     HandwritingCanvasView.TOP_MARGIN, HandwritingCanvasView.LINE_SPACING
@@ -214,7 +214,7 @@ class DisplayManager(
                 paragraphBuilder.classifyLine(lineIdx, host.lineTextCache[lineIdx], strokesByLine[lineIdx], writingWidth)
             }
 
-        val grouped = paragraphBuilder.groupIntoParagraphs(classifiedLines, strokesByLine, writingWidth, host.documentModel.diagramAreas)
+        val grouped = paragraphBuilder.groupIntoParagraphs(classifiedLines, strokesByLine, writingWidth, host.columnModel.diagramAreas)
 
         val paragraphs = grouped.map { group ->
             group.map { line ->
@@ -229,15 +229,15 @@ class DisplayManager(
         }
 
         // Build diagram displays -- include as soon as any part scrolls off the canvas
-        val strokeMaxYByArea = host.documentModel.diagramAreas.associate { area ->
-            val areaStrokes = host.documentModel.activeStrokes.filter { stroke ->
+        val strokeMaxYByArea = host.columnModel.diagramAreas.associate { area ->
+            val areaStrokes = host.columnModel.activeStrokes.filter { stroke ->
                 area.containsLine(lineSegmenter.getStrokeLineIndex(stroke))
             }
             area.startLineIndex to (if (areaStrokes.isNotEmpty()) areaStrokes.maxOf { it.maxY } else null)
         }.filterValues { it != null }.mapValues { it.value!! }
 
         val visibilities = PreviewLayoutCalculator.diagramVisibilities(
-            areas = host.documentModel.diagramAreas,
+            areas = host.columnModel.diagramAreas,
             scrollOffsetY = inkCanvas.scrollOffsetY,
             topMargin = HandwritingCanvasView.TOP_MARGIN,
             lineSpacing = HandwritingCanvasView.LINE_SPACING,
@@ -245,11 +245,11 @@ class DisplayManager(
             strokeWidthPadding = CanvasTheme.DEFAULT_STROKE_WIDTH
         )
 
-        val areaByStartLine = host.documentModel.diagramAreas.associateBy { it.startLineIndex }
+        val areaByStartLine = host.columnModel.diagramAreas.associateBy { it.startLineIndex }
         val diagrams = visibilities.map { vis ->
             val area = areaByStartLine[vis.startLineIndex]
             val areaStrokes = if (area != null) {
-                host.documentModel.activeStrokes.filter { stroke ->
+                host.columnModel.activeStrokes.filter { stroke ->
                     area.containsLine(lineSegmenter.getStrokeLineIndex(stroke))
                 }
             } else emptyList()

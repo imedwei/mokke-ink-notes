@@ -1,7 +1,7 @@
 package com.writer.ui.writing
 
 import com.writer.model.DiagramArea
-import com.writer.model.DocumentModel
+import com.writer.model.ColumnModel
 import com.writer.model.shiftY
 import com.writer.recognition.LineSegmenter
 import com.writer.view.HandwritingCanvasView
@@ -41,7 +41,7 @@ object SpaceInsertMode {
      * All strokes and diagram areas at or below [anchorLine] shift down.
      */
     fun insertSpace(
-        documentModel: DocumentModel,
+        columnModel: ColumnModel,
         lineSegmenter: LineSegmenter,
         anchorLine: Int,
         linesToInsert: Int
@@ -51,29 +51,29 @@ object SpaceInsertMode {
 
         // If anchor is inside a diagram, shift from the diagram's top edge
         // so all strokes in the diagram move as a unit (same pattern as removeSpace).
-        val shiftFrom = effectiveShiftLine(anchorLine, documentModel.diagramAreas)
+        val shiftFrom = effectiveShiftLine(anchorLine, columnModel.diagramAreas)
 
         // Shift strokes at or below shiftFrom
-        val shifted = documentModel.activeStrokes.map { stroke ->
+        val shifted = columnModel.activeStrokes.map { stroke ->
             if (lineSegmenter.getStrokeLineIndex(stroke) >= shiftFrom) {
                 stroke.shiftY(shiftPx)
             } else {
                 stroke
             }
         }
-        documentModel.activeStrokes.clear()
-        documentModel.activeStrokes.addAll(shifted)
+        columnModel.activeStrokes.clear()
+        columnModel.activeStrokes.addAll(shifted)
 
         // Shift diagram areas at or below the anchor line (or containing it) down as a unit
-        val shiftedAreas = documentModel.diagramAreas.map { area ->
+        val shiftedAreas = columnModel.diagramAreas.map { area ->
             if (area.startLineIndex >= anchorLine || area.containsLine(anchorLine)) {
                 area.copy(startLineIndex = area.startLineIndex + linesToInsert)
             } else {
                 area
             }
         }
-        documentModel.diagramAreas.clear()
-        documentModel.diagramAreas.addAll(shiftedAreas)
+        columnModel.diagramAreas.clear()
+        columnModel.diagramAreas.addAll(shiftedAreas)
     }
 
     /**
@@ -81,13 +81,13 @@ object SpaceInsertMode {
      * Stops at content or diagram areas. Used for clamping the drag preview.
      */
     fun countEmptyLinesAbove(
-        documentModel: DocumentModel,
+        columnModel: ColumnModel,
         lineSegmenter: LineSegmenter,
         anchorLine: Int,
         maxCount: Int = Int.MAX_VALUE
     ): Int {
         if (anchorLine <= 0) return 0
-        val occupiedLines = documentModel.activeStrokes
+        val occupiedLines = columnModel.activeStrokes
             .map { lineSegmenter.getStrokeLineIndex(it) }
             .toSet()
         var count = 0
@@ -95,7 +95,7 @@ object SpaceInsertMode {
             val checkLine = anchorLine - i
             if (checkLine < 0) break
             if (checkLine in occupiedLines) break
-            if (documentModel.diagramAreas.any { it.containsLine(checkLine) }) break
+            if (columnModel.diagramAreas.any { it.containsLine(checkLine) }) break
             count++
         }
         return count
@@ -110,7 +110,7 @@ object SpaceInsertMode {
      * @return the number of lines actually removed
      */
     fun removeSpace(
-        documentModel: DocumentModel,
+        columnModel: ColumnModel,
         lineSegmenter: LineSegmenter,
         anchorLine: Int,
         linesToRemove: Int
@@ -118,12 +118,12 @@ object SpaceInsertMode {
         if (linesToRemove <= 0 || anchorLine <= 0) return 0
 
         // If anchor is inside a diagram, scan from the diagram's top edge instead
-        val scanFrom = effectiveShiftLine(anchorLine, documentModel.diagramAreas)
+        val scanFrom = effectiveShiftLine(anchorLine, columnModel.diagramAreas)
 
         if (scanFrom <= 0) return 0
 
         // Find which lines have strokes
-        val occupiedLines = documentModel.activeStrokes
+        val occupiedLines = columnModel.activeStrokes
             .map { lineSegmenter.getStrokeLineIndex(it) }
             .toSet()
 
@@ -133,7 +133,7 @@ object SpaceInsertMode {
             val checkLine = scanFrom - i
             if (checkLine < 0) break
             if (checkLine in occupiedLines) break
-            if (documentModel.diagramAreas.any { it.containsLine(checkLine) }) break
+            if (columnModel.diagramAreas.any { it.containsLine(checkLine) }) break
             emptyCount++
         }
 
@@ -142,28 +142,28 @@ object SpaceInsertMode {
         val shiftPx = emptyCount * HandwritingCanvasView.LINE_SPACING
 
         // Shift strokes at/below scanFrom up (includes strokes inside containing diagram)
-        val shifted = documentModel.activeStrokes.map { stroke ->
+        val shifted = columnModel.activeStrokes.map { stroke ->
             if (lineSegmenter.getStrokeLineIndex(stroke) >= scanFrom) {
                 stroke.shiftY(-shiftPx)
             } else {
                 stroke
             }
         }
-        documentModel.activeStrokes.clear()
-        documentModel.activeStrokes.addAll(shifted)
+        columnModel.activeStrokes.clear()
+        columnModel.activeStrokes.addAll(shifted)
 
         // Shift diagram areas at/below scanFrom up.
         // Since scanFrom == containingArea.startLineIndex when anchor is inside a diagram,
         // the >= check correctly includes the containing diagram itself.
-        val shiftedAreas = documentModel.diagramAreas.map { area ->
+        val shiftedAreas = columnModel.diagramAreas.map { area ->
             if (area.startLineIndex >= scanFrom) {
                 area.copy(startLineIndex = area.startLineIndex - emptyCount)
             } else {
                 area
             }
         }
-        documentModel.diagramAreas.clear()
-        documentModel.diagramAreas.addAll(shiftedAreas)
+        columnModel.diagramAreas.clear()
+        columnModel.diagramAreas.addAll(shiftedAreas)
 
         return emptyCount
     }

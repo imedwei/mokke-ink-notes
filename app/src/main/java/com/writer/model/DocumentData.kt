@@ -1,12 +1,14 @@
 package com.writer.model
 
+/**
+ * Serializable snapshot of a full document.
+ * Holds two [ColumnData] instances (main + cue) and shared fields.
+ */
 data class DocumentData(
-    val strokes: List<InkStroke>,
-    val scrollOffsetY: Float,
-    val lineTextCache: Map<Int, String>,
-    val everHiddenLines: Set<Int>,
-    val highestLineIndex: Int,
-    val currentLineIndex: Int,
-    val userRenamed: Boolean = false,
-    val diagramAreas: List<DiagramArea> = emptyList()
+    val main: ColumnData,
+    val cue: ColumnData = ColumnData(),
+    val scrollOffsetY: Float = 0f,
+    val highestLineIndex: Int = 0,
+    val currentLineIndex: Int = 0,
+    val userRenamed: Boolean = false
 )

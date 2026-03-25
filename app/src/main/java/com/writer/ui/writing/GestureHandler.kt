@@ -2,7 +2,7 @@ package com.writer.ui.writing
 
 import android.util.Log
 import com.writer.model.DiagramArea
-import com.writer.model.DocumentModel
+import com.writer.model.ColumnModel
 import com.writer.model.InkStroke
 import com.writer.model.minX
 import com.writer.model.maxX
@@ -23,7 +23,7 @@ import com.writer.view.ScreenMetrics
  * gesture logic separate from recognition and scroll orchestration.
  */
 class GestureHandler(
-    private val documentModel: DocumentModel,
+    private val columnModel: ColumnModel,
     private val inkCanvas: HandwritingCanvasView,
     private val lineSegmenter: LineSegmenter,
     private val onLinesChanged: (invalidatedLines: Set<Int>) -> Unit,
@@ -69,7 +69,7 @@ class GestureHandler(
      */
     fun tryHandle(stroke: InkStroke): Boolean {
         val strokeLine = lineSegmenter.getStrokeLineIndex(stroke)
-        val diagramArea = documentModel.diagramAreas.find { it.containsLine(strokeLine) }
+        val diagramArea = columnModel.diagramAreas.find { it.containsLine(strokeLine) }
 
         if (diagramArea != null) {
             // Inside diagram: only scribble-delete gesture
@@ -118,7 +118,7 @@ class GestureHandler(
         if (startY < lineTop + lineSpacing * UNDERLINE_BOTTOM_FRACTION) return false
 
         // Must have existing text on this line
-        val lineStrokes = lineSegmenter.getStrokesForLine(documentModel.activeStrokes, lineIdx)
+        val lineStrokes = lineSegmenter.getStrokesForLine(columnModel.activeStrokes, lineIdx)
         if (lineStrokes.isEmpty()) return false
 
         // Measure text width from existing strokes
@@ -173,7 +173,7 @@ class GestureHandler(
         val scribbleMaxY = gestureStroke.maxY
 
         // Find all strokes in the diagram area that overlap with the scribble region
-        val diagramStrokes = documentModel.activeStrokes.filter { stroke ->
+        val diagramStrokes = columnModel.activeStrokes.filter { stroke ->
             if (stroke.strokeId == gestureStroke.strokeId) return@filter false
             val strokeLine = lineSegmenter.getStrokeLineIndex(stroke)
             if (!diagramArea.containsLine(strokeLine)) return@filter false
@@ -194,7 +194,7 @@ class GestureHandler(
         val idsToRemove = diagramStrokes.map { it.strokeId }.toMutableSet()
         idsToRemove.add(gestureStroke.strokeId)
 
-        documentModel.activeStrokes.removeAll { it.strokeId in idsToRemove }
+        columnModel.activeStrokes.removeAll { it.strokeId in idsToRemove }
         refreshCanvas { inkCanvas.removeStrokes(idsToRemove) }
 
         Log.i(TAG, "Scribble-delete in diagram area: removed ${diagramStrokes.size} strokes")
@@ -207,7 +207,7 @@ class GestureHandler(
         val gestureMinX = gestureStroke.minX
         val gestureMaxX = gestureStroke.maxX
 
-        val lineStrokes = lineSegmenter.getStrokesForLine(documentModel.activeStrokes, lineIdx)
+        val lineStrokes = lineSegmenter.getStrokesForLine(columnModel.activeStrokes, lineIdx)
         val overlapping = lineStrokes.filter { stroke ->
             stroke.maxX >= gestureMinX && stroke.minX <= gestureMaxX
         }
@@ -222,7 +222,7 @@ class GestureHandler(
         val idsToRemove = overlapping.map { it.strokeId }.toMutableSet()
         idsToRemove.add(gestureStroke.strokeId)
 
-        documentModel.activeStrokes.removeAll { it.strokeId in idsToRemove }
+        columnModel.activeStrokes.removeAll { it.strokeId in idsToRemove }
         refreshCanvas { inkCanvas.removeStrokes(idsToRemove) }
 
         onLinesChanged(setOf(lineIdx))
