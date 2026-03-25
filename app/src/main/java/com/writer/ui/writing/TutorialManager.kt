@@ -102,8 +102,9 @@ class TutorialManager(
         textView.setParagraphs(emptyList())
         textView.showScrollHint = false
 
-        // Restart coordinator on blank canvas so strokes are processed normally
+        // Restart coordinator and load the showcase document
         coordinator?.start()
+        loadShowcaseDocument()
 
         // Build the 4 tutorial steps
         steps = buildSteps()
@@ -172,23 +173,11 @@ class TutorialManager(
                 inkCanvas.resumeRawDrawing()
                 revealHandler.postDelayed(this, REVEAL_INTERVAL_MS)
             } else if (revealTickCount == REVEAL_TICKS + 1) {
-                // Full reveal complete — on erase step, remove the demo content
-                // to show the erasing effect
-                if (currentStepIndex < steps.size && steps[currentStepIndex].id == "erase" && revealLoopCount == 0) {
-                    val docModel = inkCanvas.documentModel
-                    docModel?.activeStrokes?.clear()
-                    inkCanvas.clear()
-                    inkCanvas.pauseRawDrawing()
-                    inkCanvas.drawToSurface()
-                    inkCanvas.resumeRawDrawing()
-                }
+                // Pause at full reveal before looping
                 revealLoopCount++
                 revealHandler.postDelayed(this, REVEAL_PAUSE_MS)
             } else {
-                // Reset and loop — on erase step, re-add demo content to erase again
-                if (currentStepIndex < steps.size && steps[currentStepIndex].id == "erase") {
-                    reloadEraseContent()
-                }
+                // Reset and loop
                 revealTickCount = 0
                 inkCanvas.ghostRevealProgress = 0f
                 inkCanvas.pauseRawDrawing()
@@ -223,141 +212,56 @@ class TutorialManager(
         overlay.stepIndex = currentStepIndex
         overlay.totalSteps = steps.size
 
-        // Load demo ghost strokes for this step
-        loadDemoContent(step.id)
+        // Load ghost animations for this step (showcase document persists)
+        loadStepGhosts(step.id)
     }
 
-    private fun loadDemoContent(stepId: String) {
+    /** Load the showcase document once at tutorial start. Called from show(). */
+    private fun loadShowcaseDocument() {
+        val font = hersheyFont ?: return
         val ls = com.writer.view.HandwritingCanvasView.LINE_SPACING
         val tm = com.writer.view.HandwritingCanvasView.TOP_MARGIN
         val canvasWidth = inkCanvas.width.toFloat()
-        val coordinator = getCoordinator()
 
-        // Clear canvas between steps so each step has fresh demo content
-        // Clear canvas between steps so each starts fresh with its own demo content
-        coordinator?.reset()
-        inkCanvas.clear()
-        inkCanvas.diagramAreas = emptyList()
-        inkCanvas.scrollOffsetY = 0f
-        textView.setParagraphs(emptyList())
-        coordinator?.start()
+        val showcase = TutorialDemoContent.generateShowcaseDocument(font, canvasWidth, ls, tm)
+        val docModel = inkCanvas.documentModel ?: return
+        docModel.activeStrokes.addAll(showcase.strokes)
+        docModel.diagramAreas.add(showcase.diagramArea)
+        inkCanvas.loadStrokes(showcase.strokes)
+        inkCanvas.diagramAreas = docModel.diagramAreas.toList()
+        inkCanvas.drawToSurface()
+    }
 
-        val ghosts: List<InkStroke>
-        val preloadedStrokes: List<InkStroke>
+    /** Load ghost animations for the current step (overlay on the persistent showcase doc). */
+    private fun loadStepGhosts(stepId: String) {
+        val ls = com.writer.view.HandwritingCanvasView.LINE_SPACING
+        val tm = com.writer.view.HandwritingCanvasView.TOP_MARGIN
+        val canvasWidth = inkCanvas.width.toFloat()
 
-        val font = hersheyFont
-
-        when (stepId) {
-            "write" -> {
-                ghosts = if (font != null) {
-                    TutorialDemoContent.generateWelcomeText(
-                        font = font,
-                        startX = canvasWidth * 0.06f,
-                        startY = tm + ls * 0.1f,
-                        lineSpacing = ls
-                    )
-                } else emptyList()
-                preloadedStrokes = emptyList()
-            }
-            "draw" -> {
-                ghosts = listOf(TutorialDemoContent.generateRectangle(
-                    cx = canvasWidth * 0.35f,
-                    cy = tm + ls * 1.5f,
-                    width = ls * 2f,
-                    height = ls * 1.5f
-                ))
-                preloadedStrokes = emptyList()
-            }
+        val ghosts = when (stepId) {
             "erase" -> {
-                // Pre-load demo text and a shape as real strokes to erase
-                val demoTextStrokes = if (font != null) {
-                    TutorialDemoContent.generateHelloText(
-                        font = font,
-                        startX = canvasWidth * 0.08f,
-                        startY = tm + ls * 0.1f,
-                        lineSpacing = ls
-                    )
-                } else emptyList()
-                val demoRect = TutorialDemoContent.generateSmallRect(
-                    cx = canvasWidth * 0.5f,
-                    cy = tm + ls * 2f,
-                    lineSpacing = ls
-                )
-                preloadedStrokes = demoTextStrokes + listOf(demoRect)
-
-                // Ghost animations showing how to erase
-                ghosts = listOf(
+                // Ghost strikethrough over the text area + scratch-out over diagram
+                listOf(
                     TutorialDemoContent.generateStrikethrough(
                         startX = canvasWidth * 0.05f,
-                        endX = canvasWidth * 0.45f,
-                        y = tm + ls * 0.55f
+                        endX = canvasWidth * 0.5f,
+                        y = tm + ls * 1.55f
                     ),
                     TutorialDemoContent.generateScratchOut(
-                        cx = canvasWidth * 0.5f,
-                        cy = tm + ls * 2f,
-                        width = ls * 1.5f,
-                        height = ls * 0.8f
+                        cx = canvasWidth * 0.35f,
+                        cy = tm + ls * 4f,
+                        width = ls * 2f,
+                        height = ls * 1f
                     )
                 )
             }
-            "scroll" -> {
-                // Load real text strokes so scrolling up produces recognized text.
-                // Use a smaller scale to fit within the canvas width.
-                ghosts = emptyList()
-                val scrollStrokes = mutableListOf<InkStroke>()
-                if (font != null) {
-                    // Scale to fit: Hershey chars are ~20 units wide on average,
-                    // so N chars at scale S takes ~N*20*S pixels.
-                    val maxCharsPerLine = 18
-                    val textScale = (canvasWidth * 0.85f) / (maxCharsPerLine * 20f)
-                    val jitter = textScale * 0.3f
-                    val margin = canvasWidth * 0.06f
-
-                    scrollStrokes.addAll(font.textToStrokes(
-                        "The quick brown",
-                        startX = margin,
-                        startY = tm + ls * 0.4f,
-                        scale = textScale,
-                        jitter = jitter
-                    ))
-                    scrollStrokes.addAll(font.textToStrokes(
-                        "fox jumps over",
-                        startX = margin,
-                        startY = tm + ls * 1.4f,
-                        scale = textScale,
-                        jitter = jitter
-                    ))
-                    scrollStrokes.addAll(font.textToStrokes(
-                        "the lazy dog",
-                        startX = margin,
-                        startY = tm + ls * 2.4f,
-                        scale = textScale,
-                        jitter = jitter
-                    ))
-                }
-                preloadedStrokes = scrollStrokes
-            }
-            else -> {
-                ghosts = emptyList()
-                preloadedStrokes = emptyList()
-            }
-        }
-
-        // Load pre-built strokes as real content (for erase step)
-        if (preloadedStrokes.isNotEmpty()) {
-            for (stroke in preloadedStrokes) {
-                inkCanvas.documentModel?.activeStrokes?.add(stroke)
-            }
-            inkCanvas.loadStrokes(
-                (inkCanvas.getStrokes() + preloadedStrokes)
-            )
+            else -> emptyList()
         }
 
         inkCanvas.ghostStrokes = ghosts
         inkCanvas.ghostRevealProgress = 0f
         inkCanvas.drawToSurface()
 
-        // Start continuous progressive reveal animation
         if (ghosts.isNotEmpty()) {
             revealTickCount = 0
             revealHandler.postDelayed(revealRunnable, REVEAL_INTERVAL_MS)
@@ -397,28 +301,6 @@ class TutorialManager(
             advanceHandler.removeCallbacks(advanceRunnable)
             advanceHandler.postDelayed(advanceRunnable, 2000L)
         }
-    }
-
-    private fun reloadEraseContent() {
-        val ls = com.writer.view.HandwritingCanvasView.LINE_SPACING
-        val tm = com.writer.view.HandwritingCanvasView.TOP_MARGIN
-        val canvasWidth = inkCanvas.width.toFloat()
-        val font = hersheyFont
-
-        val demoStrokes = mutableListOf<InkStroke>()
-        if (font != null) {
-            demoStrokes.addAll(TutorialDemoContent.generateHelloText(
-                font, canvasWidth * 0.08f, tm + ls * 0.1f, ls
-            ))
-        }
-        demoStrokes.add(TutorialDemoContent.generateSmallRect(
-            canvasWidth * 0.5f, tm + ls * 2f, ls
-        ))
-
-        val docModel = inkCanvas.documentModel
-        docModel?.activeStrokes?.clear()
-        docModel?.activeStrokes?.addAll(demoStrokes)
-        inkCanvas.loadStrokes(demoStrokes)
     }
 
     private fun stopRevealAnimation() {
