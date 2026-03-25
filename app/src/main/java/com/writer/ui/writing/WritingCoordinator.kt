@@ -150,7 +150,11 @@ class WritingCoordinator(
             onTutorialAction?.invoke("manual_scroll")
         }
         textView.onTextTap = { lineIndex -> displayManager.scrollToLine(lineIndex) }
-        inkCanvas.onDiagramShapeDetected = { stroke -> diagramManager.onShapeDetected(stroke) }
+        inkCanvas.onDiagramShapeDetected = { stroke ->
+            val result = diagramManager.onShapeDetected(stroke)
+            onTutorialAction?.invoke("diagram_created")
+            result
+        }
         inkCanvas.onDiagramStrokeOverflow = { strokeId, minY, maxY -> diagramManager.onStrokeOverflow(strokeId, minY, maxY) }
         inkCanvas.onScratchOut = { scratchPoints, left, top, right, bottom ->
             onScratchOut(scratchPoints, left, top, right, bottom)

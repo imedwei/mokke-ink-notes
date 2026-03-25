@@ -447,7 +447,7 @@ class TutorialManager(
 
         val matches = when (currentStep.id) {
             "write" -> actionId == "stroke_completed"
-            "draw" -> actionId == "stroke_replaced"
+            "draw" -> actionId == "stroke_replaced" || actionId == "diagram_created"
             "erase" -> actionId == "scratch_out" || actionId == "gesture_consumed"
             "scroll" -> actionId == "manual_scroll"
             else -> false
