@@ -1,6 +1,7 @@
 package com.writer.ui.writing
 
 import android.content.Intent
+import android.content.res.Configuration
 import android.net.Uri
 import android.os.Bundle
 import android.util.Log
@@ -21,7 +22,9 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.lifecycleScope
 import com.writer.R
+import com.writer.model.ColumnData
 import com.writer.model.DocumentModel
+import com.writer.recognition.LineSegmenter
 import com.writer.recognition.TextRecognizer
 import com.writer.recognition.TextRecognizerFactory
 import com.writer.model.DocumentData
@@ -44,6 +47,18 @@ class WritingActivity : AppCompatActivity() {
 
     private lateinit var inkCanvas: HandwritingCanvasView
     private lateinit var recognizedTextView: RecognizedTextView
+
+    // Cue column views (landscape Cornell Notes)
+    private lateinit var cueInkCanvas: HandwritingCanvasView
+    private lateinit var cueRecognizedTextView: RecognizedTextView
+    private lateinit var cueSplitLayout: View
+    private lateinit var columnDivider: View
+    private lateinit var cueIndicatorStrip: com.writer.view.CueIndicatorStrip
+    private lateinit var contextRail: com.writer.view.ContextRail
+    private lateinit var mainSplitLayout: View
+    private var cueCoordinator: WritingCoordinator? = null
+    private var isLandscape = false
+    private var isFoldedToCues = false
 
     // Floating gutter overlay
     private lateinit var gutterOverlay: View
@@ -123,6 +138,20 @@ class WritingActivity : AppCompatActivity() {
         val splitLayout = findViewById<com.writer.view.SplitLayout>(R.id.splitLayout)
         val splitDivider = findViewById<View>(R.id.splitDivider)
 
+        // Cue column views
+        cueInkCanvas = findViewById(R.id.cueInkCanvas)
+        cueRecognizedTextView = findViewById(R.id.cueRecognizedTextView)
+        cueSplitLayout = findViewById(R.id.cueSplitLayout)
+        columnDivider = findViewById(R.id.columnDivider)
+        cueIndicatorStrip = findViewById(R.id.cueIndicatorStrip)
+        contextRail = findViewById(R.id.contextRail)
+        mainSplitLayout = splitLayout
+        isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+
+        // Portrait fold/unfold: tap indicator strip to show cues, tap context rail to show notes
+        cueIndicatorStrip.onTap = { foldToCues() }
+        contextRail.onTap = { unfoldToNotes() }
+
         // Floating gutter overlay
         gutterOverlay = findViewById(R.id.gutterOverlay)
         menuButton = findViewById(R.id.menuButton)
@@ -192,11 +221,22 @@ class WritingActivity : AppCompatActivity() {
             inkCanvas.scrollOffsetY = raw.coerceAtLeast(0f)
             inkCanvas.drawToSurface()
             inkCanvas.onManualScroll?.invoke()
+            // Linked scroll: sync cue column
+            if (isLandscape) {
+                cueInkCanvas.scrollOffsetY = inkCanvas.scrollOffsetY
+                cueInkCanvas.drawToSurface()
+                cueInkCanvas.onManualScroll?.invoke()
+            }
         }
         recognizedTextView.onScrollEnd = {
             inkCanvas.scrollOffsetY = inkCanvas.snapToLine(inkCanvas.scrollOffsetY)
             inkCanvas.drawToSurface()
             inkCanvas.onManualScroll?.invoke()
+            if (isLandscape) {
+                cueInkCanvas.scrollOffsetY = inkCanvas.scrollOffsetY
+                cueInkCanvas.drawToSurface()
+                cueInkCanvas.onManualScroll?.invoke()
+            }
         }
 
         // Pick the best available recognizer synchronously (initialized later in coroutine).
@@ -238,6 +278,36 @@ class WritingActivity : AppCompatActivity() {
             }
         }
 
+        // Set up cue canvas touch filter and scroll sync
+        val cueTouchFilter = TouchFilter()
+        cueInkCanvas.touchFilter = cueTouchFilter
+        cueRecognizedTextView.touchFilter = cueTouchFilter
+
+        // Cue text view scroll drives cue canvas scroll (same pattern as main)
+        cueRecognizedTextView.onScroll = { dy ->
+            val raw = cueInkCanvas.scrollOffsetY - dy
+            cueInkCanvas.scrollOffsetY = raw.coerceAtLeast(0f)
+            cueInkCanvas.drawToSurface()
+            // Linked scroll: sync main column
+            inkCanvas.scrollOffsetY = cueInkCanvas.scrollOffsetY
+            inkCanvas.drawToSurface()
+            inkCanvas.onManualScroll?.invoke()
+        }
+        cueRecognizedTextView.onScrollEnd = {
+            cueInkCanvas.scrollOffsetY = cueInkCanvas.snapToLine(cueInkCanvas.scrollOffsetY)
+            cueInkCanvas.drawToSurface()
+            inkCanvas.scrollOffsetY = cueInkCanvas.scrollOffsetY
+            inkCanvas.drawToSurface()
+            inkCanvas.onManualScroll?.invoke()
+        }
+
+        // Show cue column if starting in landscape, otherwise show indicator strip
+        if (isLandscape) {
+            showCueColumn()
+        } else {
+            cueIndicatorStrip.visibility = View.VISIBLE
+        }
+
         // Initialize recognizer in the background
         recognizedTextView.statusMessage = "Loading handwriting recognition model..."
         recognizedTextView.statusSubtext = "This may take a minute (~20 MB download)"
@@ -247,6 +317,7 @@ class WritingActivity : AppCompatActivity() {
                 recognizedTextView.statusMessage = ""
                 recognizedTextView.statusSubtext = ""
                 coordinator?.recognizeAllLines()
+                cueCoordinator?.recognizeAllLines()
             } catch (e: Exception) {
                 recognizedTextView.statusMessage = "Error loading model"
                 Toast.makeText(
@@ -262,7 +333,7 @@ class WritingActivity : AppCompatActivity() {
     private fun restoreDocumentVisuals() {
         val data = pendingRestore ?: return
 
-        Log.i(TAG, "Restoring ${data.main.strokes.size} strokes, scroll=${data.scrollOffsetY}")
+        Log.i(TAG, "Restoring ${data.main.strokes.size} main + ${data.cue.strokes.size} cue strokes, scroll=${data.scrollOffsetY}")
 
         documentModel.main.activeStrokes.addAll(data.main.strokes)
         documentModel.main.diagramAreas.addAll(data.main.diagramAreas)
@@ -270,6 +341,10 @@ class WritingActivity : AppCompatActivity() {
         inkCanvas.loadStrokes(data.main.strokes)
         inkCanvas.scrollOffsetY = data.scrollOffsetY
         inkCanvas.drawToSurface()
+
+        // Restore cue column data into the model (views are populated in showCueColumn)
+        documentModel.cue.activeStrokes.addAll(data.cue.strokes)
+        documentModel.cue.diagramAreas.addAll(data.cue.diagramAreas)
     }
 
     /** Restore coordinator state (text cache, hidden lines) — no recognizer needed. */
@@ -375,9 +450,16 @@ class WritingActivity : AppCompatActivity() {
         // Clear current state
         coordinator?.stop()
         coordinator?.reset()
+        cueCoordinator?.stop()
+        cueCoordinator?.reset()
         documentModel.main.activeStrokes.clear()
+        documentModel.main.diagramAreas.clear()
+        documentModel.cue.activeStrokes.clear()
+        documentModel.cue.diagramAreas.clear()
         inkCanvas.clear()
+        cueInkCanvas.clear()
         recognizedTextView.setParagraphs(emptyList())
+        cueRecognizedTextView.setParagraphs(emptyList())
 
         // Load new document
         currentDocumentName = name
@@ -387,11 +469,28 @@ class WritingActivity : AppCompatActivity() {
         val data = DocumentStorage.load(this, name)
         if (data != null) {
             documentModel.main.activeStrokes.addAll(data.main.strokes)
+            documentModel.main.diagramAreas.addAll(data.main.diagramAreas)
             inkCanvas.loadStrokes(data.main.strokes)
+            inkCanvas.diagramAreas = data.main.diagramAreas
             inkCanvas.scrollOffsetY = data.scrollOffsetY
             inkCanvas.drawToSurface()
+
+            // Restore cue data
+            documentModel.cue.activeStrokes.addAll(data.cue.strokes)
+            documentModel.cue.diagramAreas.addAll(data.cue.diagramAreas)
+
             coordinator?.start()
             coordinator?.restoreState(data)
+
+            // If in landscape, restore cue column views too
+            if (isLandscape) {
+                cueInkCanvas.loadStrokes(data.cue.strokes)
+                cueInkCanvas.diagramAreas = data.cue.diagramAreas
+                cueInkCanvas.scrollOffsetY = data.scrollOffsetY
+                cueInkCanvas.drawToSurface()
+                cueCoordinator?.start()
+                cueCoordinator?.restoreColumnState(data.cue)
+            }
         } else {
             inkCanvas.drawToSurface()
             coordinator?.start()
@@ -403,9 +502,16 @@ class WritingActivity : AppCompatActivity() {
 
         coordinator?.stop()
         coordinator?.reset()
+        cueCoordinator?.stop()
+        cueCoordinator?.reset()
         documentModel.main.activeStrokes.clear()
+        documentModel.main.diagramAreas.clear()
+        documentModel.cue.activeStrokes.clear()
+        documentModel.cue.diagramAreas.clear()
         inkCanvas.clear()
+        cueInkCanvas.clear()
         recognizedTextView.setParagraphs(emptyList())
+        cueRecognizedTextView.setParagraphs(emptyList())
         recognizedTextView.showScrollHint = true
 
         currentDocumentName = DocumentStorage.generateName(this)
@@ -583,12 +689,188 @@ class WritingActivity : AppCompatActivity() {
         popup.showAtLocation(recognizedTextView, Gravity.NO_GRAVITY, x, y)
     }
 
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        val nowLandscape = newConfig.orientation == Configuration.ORIENTATION_LANDSCAPE
+        if (nowLandscape == isLandscape) return
+        isLandscape = nowLandscape
+        if (isLandscape) {
+            // Unfold from any portrait state to landscape
+            if (isFoldedToCues) unfoldToNotes()
+            cueIndicatorStrip.visibility = View.GONE
+            showCueColumn()
+        } else {
+            // Always return to notes view on portrait (design decision)
+            hideCueColumn()
+            cueIndicatorStrip.visibility = View.VISIBLE
+            updateCueIndicatorStrip()
+        }
+    }
+
+    private fun ensureCueCoordinator() {
+        if (cueCoordinator == null) {
+            cueCoordinator = WritingCoordinator(
+                documentModel = documentModel,
+                columnModel = documentModel.cue,
+                recognizer = recognizer,
+                inkCanvas = cueInkCanvas,
+                textView = cueRecognizedTextView,
+                scope = lifecycleScope,
+                onStatusUpdate = {}
+            )
+        }
+    }
+
+    private fun showCueColumn() {
+        columnDivider.visibility = View.VISIBLE
+        cueSplitLayout.visibility = View.VISIBLE
+
+        // Restore cue strokes if they exist
+        cueInkCanvas.loadStrokes(documentModel.cue.activeStrokes.toList())
+        cueInkCanvas.diagramAreas = documentModel.cue.diagramAreas.toList()
+        cueInkCanvas.scrollOffsetY = inkCanvas.scrollOffsetY
+        cueInkCanvas.drawToSurface()
+
+        ensureCueCoordinator()
+        cueCoordinator?.start()
+
+        // Linked scroll: main canvas scroll → sync cue canvas
+        coordinator?.onLinkedScroll = {
+            cueInkCanvas.scrollOffsetY = inkCanvas.scrollOffsetY
+            cueInkCanvas.drawToSurface()
+        }
+        // Linked scroll: cue canvas scroll → sync main canvas
+        cueCoordinator?.onLinkedScroll = {
+            inkCanvas.scrollOffsetY = cueInkCanvas.scrollOffsetY
+            inkCanvas.drawToSurface()
+        }
+
+        // Cross-column space insertion: sync the other column
+        coordinator?.onSpaceChanged = { anchorLine, delta ->
+            if (delta > 0) {
+                SpaceInsertMode.insertSpace(documentModel.cue, LineSegmenter(), anchorLine, delta)
+            } else if (delta < 0) {
+                SpaceInsertMode.removeSpace(documentModel.cue, LineSegmenter(), anchorLine, -delta)
+            }
+            cueInkCanvas.loadStrokes(documentModel.cue.activeStrokes.toList())
+            cueInkCanvas.diagramAreas = documentModel.cue.diagramAreas.toList()
+            cueInkCanvas.drawToSurface()
+        }
+        cueCoordinator?.onSpaceChanged = { anchorLine, delta ->
+            if (delta > 0) {
+                SpaceInsertMode.insertSpace(documentModel.main, LineSegmenter(), anchorLine, delta)
+            } else if (delta < 0) {
+                SpaceInsertMode.removeSpace(documentModel.main, LineSegmenter(), anchorLine, -delta)
+            }
+            inkCanvas.loadStrokes(documentModel.main.activeStrokes.toList())
+            inkCanvas.diagramAreas = documentModel.main.diagramAreas.toList()
+            inkCanvas.drawToSurface()
+        }
+
+        // Reinitialize Onyx SDK for the cue canvas
+        cueInkCanvas.reinitializeRawDrawing()
+
+        // Recognize existing cue content
+        cueCoordinator?.recognizeAllLines()
+
+        Log.i(TAG, "Cue column shown (landscape)")
+    }
+
+    private fun hideCueColumn() {
+        cueCoordinator?.stop()
+        cueCoordinator?.onLinkedScroll = null
+        cueCoordinator?.onSpaceChanged = null
+        coordinator?.onLinkedScroll = null
+        coordinator?.onSpaceChanged = null
+        cueInkCanvas.closeRawDrawing()
+        columnDivider.visibility = View.GONE
+        cueSplitLayout.visibility = View.GONE
+
+        // Reinitialize main canvas after layout change
+        inkCanvas.reinitializeRawDrawing()
+
+        Log.i(TAG, "Cue column hidden (portrait)")
+    }
+
+    /** Portrait: fold from notes to cues view — show cue column full-width, hide main. */
+    private fun foldToCues() {
+        if (isLandscape || isFoldedToCues) return
+        isFoldedToCues = true
+
+        // Hide main column, show cue column
+        mainSplitLayout.visibility = View.GONE
+        cueIndicatorStrip.visibility = View.GONE
+        cueSplitLayout.visibility = View.VISIBLE
+        contextRail.visibility = View.VISIBLE
+
+        // Set cue column weight to fill
+        val params = cueSplitLayout.layoutParams as LinearLayout.LayoutParams
+        params.weight = 1f
+        cueSplitLayout.layoutParams = params
+
+        // Load cue content and start coordinator
+        cueInkCanvas.loadStrokes(documentModel.cue.activeStrokes.toList())
+        cueInkCanvas.diagramAreas = documentModel.cue.diagramAreas.toList()
+        cueInkCanvas.scrollOffsetY = inkCanvas.scrollOffsetY
+        cueInkCanvas.drawToSurface()
+
+        ensureCueCoordinator()
+        cueCoordinator?.start()
+        cueInkCanvas.reinitializeRawDrawing()
+        cueCoordinator?.recognizeAllLines()
+
+        // Pause main canvas while hidden
+        inkCanvas.closeRawDrawing()
+
+        Log.i(TAG, "Folded to cues (portrait)")
+    }
+
+    /** Portrait: unfold from cues back to notes view. */
+    private fun unfoldToNotes() {
+        if (isLandscape || !isFoldedToCues) return
+        isFoldedToCues = false
+
+        // Show main column, hide cue column
+        mainSplitLayout.visibility = View.VISIBLE
+        cueIndicatorStrip.visibility = View.VISIBLE
+        cueSplitLayout.visibility = View.GONE
+        contextRail.visibility = View.GONE
+
+        // Stop cue coordinator
+        cueCoordinator?.stop()
+        cueInkCanvas.closeRawDrawing()
+
+        // Sync scroll position from cue to main (preserve position)
+        inkCanvas.scrollOffsetY = cueInkCanvas.scrollOffsetY
+
+        // Restart main canvas
+        inkCanvas.reinitializeRawDrawing()
+        inkCanvas.drawToSurface()
+
+        updateCueIndicatorStrip()
+
+        Log.i(TAG, "Unfolded to notes (portrait)")
+    }
+
+    /** Update the indicator strip with current cue line indices. */
+    private fun updateCueIndicatorStrip() {
+        val cueLines = documentModel.cue.activeStrokes.map { stroke ->
+            val y = stroke.points.firstOrNull()?.y ?: 0f
+            ((y - ScreenMetrics.topMargin) / ScreenMetrics.lineSpacing).toInt()
+        }.toSet()
+        cueIndicatorStrip.cueLineIndices = cueLines
+        cueIndicatorStrip.scrollOffsetY = inkCanvas.scrollOffsetY
+    }
+
     override fun onResume() {
         super.onResume()
         // Reinitialize Onyx SDK to clear stale system-level state from other apps
         // (e.g. toolbar exclude rects that persist across app switches)
         if (!tutorialManager.isActive) {
             inkCanvas.reinitializeRawDrawing()
+            if (isLandscape) {
+                cueInkCanvas.reinitializeRawDrawing()
+            }
         }
     }
 
@@ -599,14 +881,21 @@ class WritingActivity : AppCompatActivity() {
 
     private fun saveDocument() {
         if (tutorialManager.isActive) return // Don't save tutorial state as a document
-        val state = coordinator?.getState() ?: return
+        val mainState = coordinator?.getState() ?: return
+        // Merge cue column state if active
+        val cueColumnData = cueCoordinator?.getColumnState() ?: ColumnData(
+            strokes = documentModel.cue.activeStrokes.toList(),
+            diagramAreas = documentModel.cue.diagramAreas.toList()
+        )
+        val state = mainState.copy(cue = cueColumnData)
         DocumentStorage.save(this, currentDocumentName, state)
 
         // Export to sync folder if configured
         val syncUri = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
             .getString(PREF_SYNC_FOLDER, null)
         if (syncUri != null) {
-            val markdown = coordinator?.getMarkdownText() ?: ""
+            val cueBlocks = cueCoordinator?.getMarkdownBlocks() ?: emptyList()
+            val markdown = coordinator?.getMarkdownText(cueBlocks) ?: ""
             DocumentStorage.exportToSyncFolder(
                 this, currentDocumentName, state, markdown, Uri.parse(syncUri)
             )
@@ -677,6 +966,7 @@ class WritingActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         coordinator?.stop()
+        cueCoordinator?.stop()
         recognizer.close()
     }
 }

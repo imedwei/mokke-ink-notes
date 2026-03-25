@@ -4,36 +4,100 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent">
 
-    <com.writer.view.SplitLayout
-        android:id="@+id/splitLayout"
+    <!-- Columns container: horizontal split for landscape Cornell Notes -->
+    <LinearLayout
+        android:id="@+id/columnsContainer"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:orientation="vertical"
+        android:orientation="horizontal"
         android:background="@color/white">
 
-        <!-- Recognized text area — 25% of space, bottom-aligned -->
-        <com.writer.view.RecognizedTextView
-            android:id="@+id/recognizedTextView"
-            android:layout_width="match_parent"
-            android:layout_height="0dp"
+        <!-- Main column: text + canvas (always visible) -->
+        <com.writer.view.SplitLayout
+            android:id="@+id/splitLayout"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
             android:layout_weight="1"
-            android:background="@color/white" />
+            android:orientation="vertical"
+            android:background="@color/white">
 
-        <!-- Divider between text and canvas (visual only, drag handled by SplitLayout) -->
+            <com.writer.view.RecognizedTextView
+                android:id="@+id/recognizedTextView"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:background="@color/white" />
+
+            <View
+                android:id="@+id/splitDivider"
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:background="#AAAAAA" />
+
+            <com.writer.view.HandwritingCanvasView
+                android:id="@+id/inkCanvas"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="3" />
+
+        </com.writer.view.SplitLayout>
+
+        <!-- Column divider (landscape only) -->
         <View
-            android:id="@+id/splitDivider"
-            android:layout_width="match_parent"
-            android:layout_height="1dp"
-            android:background="#AAAAAA" />
+            android:id="@+id/columnDivider"
+            android:layout_width="4dp"
+            android:layout_height="match_parent"
+            android:background="#AAAAAA"
+            android:visibility="gone" />
 
-        <!-- Ink canvas — 75% of space -->
-        <com.writer.view.HandwritingCanvasView
-            android:id="@+id/inkCanvas"
-            android:layout_width="match_parent"
-            android:layout_height="0dp"
-            android:layout_weight="3" />
+        <!-- Cue column: text + canvas (landscape only) -->
+        <com.writer.view.SplitLayout
+            android:id="@+id/cueSplitLayout"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:background="@color/white"
+            android:visibility="gone">
 
-    </com.writer.view.SplitLayout>
+            <com.writer.view.RecognizedTextView
+                android:id="@+id/cueRecognizedTextView"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:background="@color/white" />
+
+            <View
+                android:id="@+id/cueSplitDivider"
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:background="#AAAAAA" />
+
+            <com.writer.view.HandwritingCanvasView
+                android:id="@+id/cueInkCanvas"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="3" />
+
+        </com.writer.view.SplitLayout>
+
+    </LinearLayout>
+
+    <!-- Cue indicator strip (portrait: right edge, shows dots where cues exist) -->
+    <com.writer.view.CueIndicatorStrip
+        android:id="@+id/cueIndicatorStrip"
+        android:layout_width="40dp"
+        android:layout_height="match_parent"
+        android:layout_gravity="end"
+        android:visibility="gone" />
+
+    <!-- Context rail (portrait cue view: left edge, minimap of main content) -->
+    <com.writer.view.ContextRail
+        android:id="@+id/contextRail"
+        android:layout_width="24dp"
+        android:layout_height="match_parent"
+        android:layout_gravity="start"
+        android:visibility="gone" />
 
     <!-- Floating gutter overlay: menu + undo + redo (top-right, independent of views) -->
     <LinearLayout

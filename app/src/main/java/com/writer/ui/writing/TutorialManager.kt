@@ -224,11 +224,11 @@ class TutorialManager(
         val canvasWidth = inkCanvas.width.toFloat()
 
         val showcase = TutorialDemoContent.generateShowcaseDocument(font, canvasWidth, ls, tm)
-        val docModel = inkCanvas.documentModel ?: return
-        docModel.main.activeStrokes.addAll(showcase.strokes)
-        docModel.main.diagramAreas.add(showcase.diagramArea)
+        val colModel = inkCanvas.columnModel ?: return
+        colModel.activeStrokes.addAll(showcase.strokes)
+        colModel.diagramAreas.add(showcase.diagramArea)
         inkCanvas.loadStrokes(showcase.strokes)
-        inkCanvas.diagramAreas = docModel.main.diagramAreas.toList()
+        inkCanvas.diagramAreas = colModel.diagramAreas.toList()
         inkCanvas.drawToSurface()
     }
 
@@ -398,17 +398,17 @@ class TutorialManager(
         // restoreState() expects strokes already in documentModel — add them
         // before calling restoreState (same pattern as WritingActivity.restoreDocumentVisuals).
         coordinator?.start()
-        val docModel = inkCanvas.documentModel
+        val colModel = inkCanvas.columnModel
         if (savedState != null) {
-            docModel?.main?.activeStrokes?.addAll(savedState!!.main.strokes)
-            docModel?.main?.diagramAreas?.addAll(savedState!!.main.diagramAreas)
+            colModel?.activeStrokes?.addAll(savedState!!.main.strokes)
+            colModel?.diagramAreas?.addAll(savedState!!.main.diagramAreas)
             coordinator?.restoreState(savedState!!)
         } else {
             val pending = getPendingRestore()
             if (pending != null) {
                 clearPendingRestore()
-                docModel?.main?.activeStrokes?.addAll(pending.main.strokes)
-                docModel?.main?.diagramAreas?.addAll(pending.main.diagramAreas)
+                colModel?.activeStrokes?.addAll(pending.main.strokes)
+                colModel?.diagramAreas?.addAll(pending.main.diagramAreas)
                 coordinator?.restoreState(pending)
             }
         }
