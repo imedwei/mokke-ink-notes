@@ -1,7 +1,9 @@
 package com.writer.ui.writing
 
+import com.writer.model.DiagramArea
 import com.writer.model.InkStroke
 import com.writer.model.StrokePoint
+import com.writer.model.StrokeType
 import com.writer.view.HandwritingCanvasView
 
 /**
@@ -85,7 +87,7 @@ object TutorialDemoContent {
                 t += 20L
             }
         }
-        return InkStroke(points = pts)
+        return InkStroke(points = pts, isGeometric = true, strokeType = StrokeType.RECTANGLE)
     }
 
 
@@ -110,6 +112,125 @@ object TutorialDemoContent {
             )
         }
         return InkStroke(points = pts)
+    }
+
+    /**
+     * Generate an arrow/connector stroke from (x1,y1) to (x2,y2).
+     */
+    fun generateArrow(x1: Float, y1: Float, x2: Float, y2: Float): InkStroke {
+        // Just a straight line — CanvasTheme.drawStroke renders the arrowhead
+        // automatically for ARROW_HEAD stroke type.
+        val pts = listOf(
+            StrokePoint(x1, y1, 0.5f, 0L),
+            StrokePoint(x2, y2, 0.5f, 100L)
+        )
+        return InkStroke(points = pts, isGeometric = true, strokeType = StrokeType.ARROW_HEAD)
+    }
+
+    /**
+     * Generate an ellipse stroke at the given center.
+     */
+    fun generateEllipse(cx: Float, cy: Float, rx: Float, ry: Float): InkStroke {
+        val pts = mutableListOf<StrokePoint>()
+        val steps = 24
+        for (i in 0..steps) {
+            val angle = 2.0 * kotlin.math.PI * i / steps
+            pts.add(StrokePoint(
+                cx + rx * kotlin.math.cos(angle).toFloat(),
+                cy + ry * kotlin.math.sin(angle).toFloat(),
+                0.5f,
+                i.toLong()
+            ))
+        }
+        return InkStroke(points = pts, isGeometric = true, strokeType = StrokeType.ELLIPSE)
+    }
+
+    /**
+     * Data class for the showcase document: strokes + diagram area.
+     */
+    data class ShowcaseDocument(
+        val strokes: List<InkStroke>,
+        val diagramArea: DiagramArea
+    )
+
+    /**
+     * Generate a complete showcase document for the README screenshot.
+     * Includes text lines, a diagram area with shapes and arrows.
+     *
+     * @param font Hershey font for text generation
+     * @param canvasWidth canvas width in pixels
+     * @param lineSpacing line spacing in pixels
+     * @param topMargin top margin in pixels
+     */
+    fun generateShowcaseDocument(
+        font: HersheyFont,
+        canvasWidth: Float,
+        lineSpacing: Float,
+        topMargin: Float
+    ): ShowcaseDocument {
+        val strokes = mutableListOf<InkStroke>()
+        val scale = lineSpacing * 0.8f / 24f
+        val jitter = scale * 0.25f
+        val margin = canvasWidth * 0.05f
+
+        // Line 0: "Meeting Notes" (heading)
+        strokes.addAll(font.textToStrokes("Meeting Notes", margin, topMargin + lineSpacing * 0.4f, scale, jitter))
+        // Underline for heading
+        strokes.add(InkStroke(points = listOf(
+            StrokePoint(margin, topMargin + lineSpacing * 0.85f, 0.5f, 0L),
+            StrokePoint(margin + canvasWidth * 0.55f, topMargin + lineSpacing * 0.85f, 0.5f, 100L)
+        )))
+
+        // Line 1: "- Review project goals"
+        strokes.addAll(font.textToStrokes("- Review goals", margin, topMargin + lineSpacing * 1.4f, scale, jitter))
+
+        // Line 2: "- Launch timeline"
+        strokes.addAll(font.textToStrokes("- Launch timeline", margin, topMargin + lineSpacing * 2.4f, scale, jitter))
+
+        // Lines 3-7: Diagram area — flowchart with 3 boxes + arrows
+        val diagY = topMargin + lineSpacing * 3.5f
+        val boxW = canvasWidth * 0.22f
+        val boxH = lineSpacing * 0.9f
+
+        // Box 1: "Plan" (left)
+        val b1x = canvasWidth * 0.18f
+        val b1y = diagY + lineSpacing * 0.5f
+        strokes.add(generateRectangle(b1x, b1y, boxW, boxH))
+        strokes.addAll(font.textToStrokes("Plan", b1x - boxW * 0.3f, b1y - boxH * 0.1f, scale * 0.8f, jitter * 0.5f))
+
+        // Box 2: "Build" (center)
+        val b2x = canvasWidth * 0.5f
+        val b2y = diagY + lineSpacing * 0.5f
+        strokes.add(generateRectangle(b2x, b2y, boxW, boxH))
+        strokes.addAll(font.textToStrokes("Build", b2x - boxW * 0.35f, b2y - boxH * 0.1f, scale * 0.8f, jitter * 0.5f))
+
+        // Box 3: "Ship" (right)
+        val b3x = canvasWidth * 0.82f
+        val b3y = diagY + lineSpacing * 0.5f
+        strokes.add(generateRectangle(b3x, b3y, boxW, boxH))
+        strokes.addAll(font.textToStrokes("Ship", b3x - boxW * 0.3f, b3y - boxH * 0.1f, scale * 0.8f, jitter * 0.5f))
+
+        // Arrow: Plan → Build
+        strokes.add(generateArrow(b1x + boxW / 2f, b1y, b2x - boxW / 2f, b2y))
+
+        // Arrow: Build → Ship
+        strokes.add(generateArrow(b2x + boxW / 2f, b2y, b3x - boxW / 2f, b3y))
+
+        // Ellipse below: "Launch!"
+        val ey = diagY + lineSpacing * 2.2f
+        strokes.add(generateEllipse(canvasWidth * 0.5f, ey, boxW * 0.6f, boxH * 0.5f))
+        strokes.addAll(font.textToStrokes("Launch!", canvasWidth * 0.38f, ey - boxH * 0.15f, scale * 0.7f, jitter * 0.5f))
+
+        // Arrow: Ship → Launch (downward)
+        strokes.add(generateArrow(b3x, b3y + boxH / 2f, canvasWidth * 0.58f, ey - boxH * 0.4f))
+
+        // Line 8: "Next steps"
+        strokes.addAll(font.textToStrokes("Next steps", margin, topMargin + lineSpacing * 7.4f, scale, jitter))
+
+        // Diagram area covering lines 3-7 (the flowchart region)
+        val diagramArea = DiagramArea(startLineIndex = 3, heightInLines = 4)
+
+        return ShowcaseDocument(strokes, diagramArea)
     }
 
     /**

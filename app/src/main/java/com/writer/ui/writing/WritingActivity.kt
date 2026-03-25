@@ -570,7 +570,8 @@ class WritingActivity : AppCompatActivity() {
         popupView.findViewById<android.view.View>(R.id.menuDebugReset).setOnClickListener {
             popup.dismiss()
             tutorialManager.resetSeen()
-            Toast.makeText(this, "Tutorial reset — will show on next launch", Toast.LENGTH_SHORT).show()
+            generateShowcaseDocument()
+            Toast.makeText(this, "Tutorial reset + demo doc loaded", Toast.LENGTH_SHORT).show()
         }
 
         // Position to the left of the floating icon, at the top of the text view
@@ -612,6 +613,39 @@ class WritingActivity : AppCompatActivity() {
     }
 
     // --- Bug report ---
+
+    private fun generateShowcaseDocument() {
+        val font = HersheyFont.loadScript(this)
+        val ls = com.writer.view.HandwritingCanvasView.LINE_SPACING
+        val tm = com.writer.view.HandwritingCanvasView.TOP_MARGIN
+        val cw = inkCanvas.width.toFloat()
+
+        // Clear current document
+        coordinator?.stop()
+        coordinator?.reset()
+        documentModel.activeStrokes.clear()
+        inkCanvas.clear()
+        inkCanvas.scrollOffsetY = 0f
+        recognizedTextView.setParagraphs(emptyList())
+
+        // Generate demo strokes + diagram area
+        val showcase = TutorialDemoContent.generateShowcaseDocument(font, cw, ls, tm)
+        documentModel.activeStrokes.addAll(showcase.strokes)
+        documentModel.diagramAreas.add(showcase.diagramArea)
+        inkCanvas.loadStrokes(showcase.strokes)
+        inkCanvas.diagramAreas = documentModel.diagramAreas.toList()
+        inkCanvas.drawToSurface()
+
+        // Restart coordinator
+        coordinator?.start()
+        coordinator?.onHeadingDetected = { heading -> autoRenameFromHeading(heading) }
+        coordinator?.onUndoRedoStateChanged = { updateUndoRedoButtons() }
+        coordinator?.onTutorialAction = { actionId -> tutorialManager.onStepAction(actionId) }
+
+        // Trigger recognition
+        coordinator?.recognizeAllLines()
+        inkCanvas.reinitializeRawDrawing()
+    }
 
     private fun generateAndShareBugReport() {
         val file = coordinator?.generateBugReport()
