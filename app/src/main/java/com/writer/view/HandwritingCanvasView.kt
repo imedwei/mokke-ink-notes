@@ -24,7 +24,7 @@ import com.onyx.android.sdk.pen.data.TouchPointList
 import com.writer.model.DiagramArea
 import com.writer.ui.writing.DiagramStrokeClassifier
 import com.writer.ui.writing.SpaceInsertMode
-import com.writer.model.DocumentModel
+import com.writer.model.ColumnModel
 import com.writer.model.InkStroke
 import com.writer.model.StrokePoint
 import com.writer.model.StrokeType
@@ -87,8 +87,8 @@ class HandwritingCanvasView @JvmOverloads constructor(
     /** Diagram areas in the current document. */
     var diagramAreas: List<DiagramArea> = emptyList()
 
-    /** Document model reference for magnetic snap access. */
-    var documentModel: DocumentModel? = null
+    /** Column model reference for magnetic snap access. */
+    var columnModel: ColumnModel? = null
 
     // Dwell indicator state (inside diagram → arrow tail; outside → freeform zone)
     private var dwellJob: Runnable? = null
@@ -761,7 +761,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
         var isGeometric = false
 
         // Magnetic snap: resolve arrow endpoints to nearest shape perimeters
-        val nodes = documentModel?.main?.diagram?.nodes ?: emptyMap()
+        val nodes = columnModel?.diagram?.nodes ?: emptyMap()
         val magnetThreshold = MAGNET_THRESHOLD_SPANS * LINE_SPACING
 
         fun magnetSnap(x1: Float, y1: Float, x2: Float, y2: Float): Pair<Pair<Float, Float>, Pair<Float, Float>> {

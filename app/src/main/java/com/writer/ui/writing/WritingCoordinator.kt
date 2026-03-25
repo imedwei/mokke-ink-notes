@@ -68,6 +68,11 @@ class WritingCoordinator(
     // Whether the user has manually renamed this document
     var userRenamed = false
     // Callback to notify activity when heading-based rename should happen
+    /** Called after any manual scroll — used by the activity for linked scroll sync. */
+    var onLinkedScroll: (() -> Unit)? = null
+    /** Called after space insert/remove — used by the activity to sync the other column.
+     *  Parameters: anchorLine, lineDelta (positive = inserted, negative = removed). */
+    var onSpaceChanged: ((anchorLine: Int, lineDelta: Int) -> Unit)? = null
     var onHeadingDetected: ((String) -> Unit)? = null
     // Callback to notify activity when undo/redo availability changes
     var onUndoRedoStateChanged: (() -> Unit)? = null
@@ -136,7 +141,7 @@ class WritingCoordinator(
         }
         displayManager = DisplayManager(inkCanvas, textView, scope, lineSegmenter, paragraphBuilder, displayHost)
 
-        inkCanvas.documentModel = documentModel
+        inkCanvas.columnModel = columnModel
         inkCanvas.onPenDown = { onTutorialAction?.invoke("pen_down") }
         inkCanvas.onRawStrokeCapture = { points ->
             lastStrokeIndex = eventLog.recordStroke(points)
@@ -151,6 +156,7 @@ class WritingCoordinator(
             }
             displayManager.displayHiddenLines()
             onTutorialAction?.invoke("manual_scroll")
+            onLinkedScroll?.invoke()
         }
         textView.onTextTap = { lineIndex -> displayManager.scrollToLine(lineIndex) }
         inkCanvas.onDiagramShapeDetected = { stroke ->
@@ -379,6 +385,7 @@ class WritingCoordinator(
         displayManager.clearEverHiddenLines()
         displayManager.displayHiddenLines()
         Log.i(TAG, "Insert space: $lines lines at anchor=$anchorLine")
+        onSpaceChanged?.invoke(anchorLine, lines)
     }
 
     /** Remove up to [lines] empty lines at [anchorLine]. Returns actual lines removed. */
@@ -392,6 +399,7 @@ class WritingCoordinator(
         displayManager.clearEverHiddenLines()
         displayManager.displayHiddenLines()
         Log.i(TAG, "Remove space: $removed lines at anchor=$anchorLine")
+        onSpaceChanged?.invoke(anchorLine, -removed)
         return removed
     }
 
@@ -404,8 +412,14 @@ class WritingCoordinator(
 
     // --- Markdown export ---
 
-    fun getMarkdownText(): String {
-        if (lineTextCache.isEmpty() && columnModel.diagramAreas.isEmpty()) return ""
+    /**
+     * Build markdown blocks from this coordinator's column, each tagged with its line range.
+     * Returns a list of (startLine, endLine, markdownText) triples.
+     */
+    data class MdBlock(val startLine: Int, val endLine: Int, val text: String)
+
+    fun getMarkdownBlocks(): List<MdBlock> {
+        if (lineTextCache.isEmpty() && columnModel.diagramAreas.isEmpty()) return emptyList()
 
         val strokesByLine = lineSegmenter.groupByLine(columnModel.activeStrokes)
         val writingWidth = inkCanvas.width.toFloat()
@@ -416,15 +430,14 @@ class WritingCoordinator(
 
         val grouped = paragraphBuilder.groupIntoParagraphs(classifiedLines, strokesByLine, writingWidth, columnModel.diagramAreas)
 
-        // Build text paragraphs with their starting line index
-        data class MdBlock(val lineIndex: Int, val text: String)
         val blocks = mutableListOf<MdBlock>()
 
         for (group in grouped) {
             val joined = group.joinToString(" ") { it.text }
             val first = group.first()
+            val last = group.last()
             val prefix = if (first.isHeading) "## " else if (first.isList) "- " else ""
-            blocks.add(MdBlock(first.lineIndex, "$prefix$joined"))
+            blocks.add(MdBlock(first.lineIndex, last.lineIndex, "$prefix$joined"))
         }
 
         // Insert diagram SVGs at correct positions
@@ -442,10 +455,48 @@ class WritingCoordinator(
                 offsetX = 0f, offsetY = areaTop
             )
             val dataUri = SvgExporter.toBase64DataUri(svg)
-            blocks.add(MdBlock(area.startLineIndex, "![diagram]($dataUri)"))
+            blocks.add(MdBlock(area.startLineIndex, area.endLineIndex, "![diagram]($dataUri)"))
         }
 
-        return blocks.sortedBy { it.lineIndex }.joinToString("\n\n") { it.text }
+        return blocks.sortedBy { it.startLine }
+    }
+
+    fun getMarkdownText(): String {
+        return getMarkdownText(cueBlocks = emptyList())
+    }
+
+    /**
+     * Generate markdown with interleaved cue blockquotes.
+     * Cue blocks from the cue column are appended after each main content paragraph
+     * that overlaps their line range.
+     */
+    fun getMarkdownText(cueBlocks: List<MdBlock>): String {
+        val mainBlocks = getMarkdownBlocks()
+        if (mainBlocks.isEmpty()) return ""
+
+        val result = StringBuilder()
+        for (block in mainBlocks) {
+            if (result.isNotEmpty()) result.append("\n\n")
+            result.append(block.text)
+
+            // Find cue blocks that overlap this main block's line range
+            val overlapping = cueBlocks.filter { cue ->
+                cue.startLine <= block.endLine && cue.endLine >= block.startLine
+            }
+            if (overlapping.isNotEmpty()) {
+                result.append("\n\n")
+                if (overlapping.size == 1) {
+                    result.append("> **Cue:** ${overlapping[0].text}")
+                } else {
+                    result.append("> **Cue:**")
+                    for (cue in overlapping) {
+                        result.append("\n> ${cue.text}")
+                    }
+                }
+            }
+        }
+
+        return result.toString()
     }
 
     // --- Diagram node rebuild ---
@@ -580,14 +631,19 @@ class WritingCoordinator(
 
     // --- State persistence ---
 
+    /** Get the column-level state for this coordinator's column. */
+    fun getColumnState(): ColumnData {
+        return ColumnData(
+            strokes = inkCanvas.getStrokes(),
+            lineTextCache = lineTextCache.toMap(),
+            everHiddenLines = displayManager.getEverHiddenLinesSnapshot(),
+            diagramAreas = columnModel.diagramAreas.toList()
+        )
+    }
+
     fun getState(): DocumentData {
         return DocumentData(
-            main = ColumnData(
-                strokes = inkCanvas.getStrokes(),
-                lineTextCache = lineTextCache.toMap(),
-                everHiddenLines = displayManager.getEverHiddenLinesSnapshot(),
-                diagramAreas = columnModel.diagramAreas.toList()
-            ),
+            main = getColumnState(),
             scrollOffsetY = inkCanvas.scrollOffsetY,
             highestLineIndex = highestLineIndex,
             currentLineIndex = currentLineIndex,
@@ -596,14 +652,19 @@ class WritingCoordinator(
     }
 
     fun restoreState(data: DocumentData) {
-        lineTextCache.putAll(data.main.lineTextCache)
-        displayManager.addEverHiddenLines(data.main.everHiddenLines)
+        restoreColumnState(data.main)
         highestLineIndex = data.highestLineIndex
         currentLineIndex = data.currentLineIndex
         userRenamed = data.userRenamed
+    }
+
+    /** Restore state for this coordinator's column from a ColumnData snapshot. */
+    fun restoreColumnState(col: ColumnData) {
+        lineTextCache.putAll(col.lineTextCache)
+        displayManager.addEverHiddenLines(col.everHiddenLines)
         columnModel.diagramAreas.clear()
-        columnModel.diagramAreas.addAll(data.main.diagramAreas)
-        inkCanvas.diagramAreas = data.main.diagramAreas
+        columnModel.diagramAreas.addAll(col.diagramAreas)
+        inkCanvas.diagramAreas = col.diagramAreas
         rebuildDiagramNodes(columnModel.activeStrokes)
         displayManager.displayHiddenLines()
     }
