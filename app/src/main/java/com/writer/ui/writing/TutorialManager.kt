@@ -234,13 +234,13 @@ class TutorialManager(
         val coordinator = getCoordinator()
 
         // Clear canvas between steps so each step has fresh demo content
-        if (stepId != "scroll") {
-            coordinator?.reset()
-            inkCanvas.clear()
-            inkCanvas.diagramAreas = emptyList()
-            inkCanvas.scrollOffsetY = 0f
-            coordinator?.start()
-        }
+        // Clear canvas between steps so each starts fresh with its own demo content
+        coordinator?.reset()
+        inkCanvas.clear()
+        inkCanvas.diagramAreas = emptyList()
+        inkCanvas.scrollOffsetY = 0f
+        textView.setParagraphs(emptyList())
+        coordinator?.start()
 
         val ghosts: List<InkStroke>
         val preloadedStrokes: List<InkStroke>
@@ -467,7 +467,7 @@ class TutorialManager(
         // Reset timer if they perform another action (e.g., write more strokes).
         stepActionReceived = true
         advanceHandler.removeCallbacks(advanceRunnable)
-        advanceHandler.postDelayed(advanceRunnable, 3000L)
+        advanceHandler.postDelayed(advanceRunnable, 1500L)
     }
 
     fun close() {
