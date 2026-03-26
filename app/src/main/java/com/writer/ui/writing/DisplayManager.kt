@@ -69,6 +69,13 @@ class DisplayManager(
     fun addEverHiddenLines(lines: Set<Int>) { everHiddenLines.addAll(lines) }
     fun getEverHiddenLinesSnapshot(): Set<Int> = everHiddenLines.toSet()
     fun isEverHidden(lineIndex: Int): Boolean = lineIndex in everHiddenLines
+    /** Called during auto-scroll animation so the activity can sync linked columns. */
+    var onAutoScroll: (() -> Unit)? = null
+
+    /** Optional check — if set and returns true, auto-scroll is suppressed.
+     *  Used to block scroll when pen is active on ANY canvas in landscape. */
+    var shouldBlockScroll: (() -> Boolean)? = null
+
     /** Auto-scroll animation state. */
     var scrollAnimating = false
         private set
@@ -84,6 +91,10 @@ class DisplayManager(
 
     fun checkAutoScroll(currentLineIndex: Int) {
         if (scrollAnimating) return
+        // Don't auto-scroll while the pen is actively drawing on ANY canvas —
+        // changing scrollOffsetY mid-stroke causes errant diagonal lines.
+        if (inkCanvas.isPenActive()) return
+        if (shouldBlockScroll?.invoke() == true) return
 
         val strokes = host.columnModel.activeStrokes
         if (strokes.isEmpty()) return
@@ -143,6 +154,7 @@ class DisplayManager(
                 inkCanvas.scrollOffsetY = fromOffset + distance * interpolated
                 inkCanvas.drawToSurface()
                 displayHiddenLines()
+                onAutoScroll?.invoke()
 
                 kotlinx.coroutines.delay(33) // ~30fps
             }
@@ -152,6 +164,7 @@ class DisplayManager(
             inkCanvas.resumeRawDrawing()
             scrollAnimating = false
             displayHiddenLines()
+            onAutoScroll?.invoke()
         }
     }
 

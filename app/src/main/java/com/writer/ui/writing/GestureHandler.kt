@@ -97,6 +97,35 @@ class GestureHandler(
         // Don't treat heading underlines as strikethroughs
         if (isHeadingUnderline(stroke, startLineIdx)) return false
 
+        // Must cross over OLD strokes — a horizontal line drawn as part of writing
+        // (like the crossbar of 't') should not erase adjacent recent strokes.
+        val strokeStartTime = stroke.startTime
+        val lineStrokes = lineSegmenter.getStrokesForLine(columnModel.activeStrokes, startLineIdx)
+        val oldStrokesOnLine = lineStrokes.filter { s ->
+            strokeStartTime - s.endTime > 1500L
+        }
+        if (oldStrokesOnLine.isEmpty()) return false
+
+        // Must span most of the target text's width — a short crossing (like a
+        // 't' crossbar) shouldn't trigger strikethrough.
+        val textMinX = oldStrokesOnLine.minOf { it.minX }
+        val textMaxX = oldStrokesOnLine.maxOf { it.maxX }
+        val textWidth = textMaxX - textMinX
+        if (textWidth > 0f && stroke.xRange < textWidth * 0.6f) return false
+
+        // Must be near the vertical center of the text — not at the top (ascender
+        // zone) or bottom (descender zone / underline zone). A strikethrough
+        // crosses through the middle of the text body.
+        val textMinY = oldStrokesOnLine.minOf { it.minY }
+        val textMaxY = oldStrokesOnLine.maxOf { it.maxY }
+        val textCenterY = (textMinY + textMaxY) / 2f
+        val textHeight = textMaxY - textMinY
+        val strokeCenterY = (stroke.minY + stroke.maxY) / 2f
+        if (textHeight > 0f) {
+            val distFromCenter = kotlin.math.abs(strokeCenterY - textCenterY)
+            if (distFromCenter > textHeight * 0.35f) return false
+        }
+
         return true
     }
 

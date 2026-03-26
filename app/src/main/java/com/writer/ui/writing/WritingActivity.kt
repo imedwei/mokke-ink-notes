@@ -802,17 +802,25 @@ class WritingActivity : AppCompatActivity() {
             ensureCueCoordinator()
             cueCoordinator?.start()
 
-            // Linked scroll: main canvas scroll → sync cue canvas
+            // Block auto-scroll on either coordinator if pen is active on either canvas
+            val penActiveOnEither = { inkCanvas.isPenActive() || cueInkCanvas.isPenActive() }
+            coordinator?.shouldBlockScroll = penActiveOnEither
+            cueCoordinator?.shouldBlockScroll = penActiveOnEither
+
+            // Linked scroll: skip entirely if pen is active on EITHER canvas
             coordinator?.onLinkedScroll = {
-                cueInkCanvas.scrollOffsetY = inkCanvas.scrollOffsetY
-                cueInkCanvas.drawToSurface()
-                cueCoordinator?.refreshDisplay()
+                if (!inkCanvas.isPenActive() && !cueInkCanvas.isPenActive()) {
+                    cueInkCanvas.scrollOffsetY = inkCanvas.scrollOffsetY
+                    cueInkCanvas.drawToSurface()
+                    cueCoordinator?.refreshDisplay()
+                }
             }
-            // Linked scroll: cue canvas scroll → sync main canvas
             cueCoordinator?.onLinkedScroll = {
-                inkCanvas.scrollOffsetY = cueInkCanvas.scrollOffsetY
-                inkCanvas.drawToSurface()
-                coordinator?.refreshDisplay()
+                if (!inkCanvas.isPenActive() && !cueInkCanvas.isPenActive()) {
+                    inkCanvas.scrollOffsetY = cueInkCanvas.scrollOffsetY
+                    inkCanvas.drawToSurface()
+                    coordinator?.refreshDisplay()
+                }
             }
 
             // Cross-column space insertion: sync via coordinator for undo support
@@ -958,8 +966,8 @@ class WritingActivity : AppCompatActivity() {
         cueInkCanvas.deferOnyxInit = true  // cue defers — gets session on hover
 
         // Wire up hover-based swap
-        cueInkCanvas.onRequestOnyxSession = { transferOnyxSession(toCue = true) }
-        inkCanvas.onRequestOnyxSession = { transferOnyxSession(toCue = false) }
+        cueInkCanvas.onRequestOnyxSession = { x, y -> transferOnyxSession(toCue = true, hoverX = x, hoverY = y) }
+        inkCanvas.onRequestOnyxSession = { x, y -> transferOnyxSession(toCue = false, hoverX = x, hoverY = y) }
 
         // Initialize main canvas SDK
         inkCanvas.reinitializeRawDrawing()
@@ -975,30 +983,43 @@ class WritingActivity : AppCompatActivity() {
         Log.i(TAG, "Dual-canvas Onyx SDK closed")
     }
 
-    /** Transfer the Onyx SDK session between canvases on hover. */
-    private fun transferOnyxSession(toCue: Boolean) {
+    /** Transfer the Onyx SDK session between canvases on hover.
+     *  Uses the hover position to reset the EPD controller's starting point,
+     *  preventing errant lines from stale positions. */
+    private var lastTransferTime = 0L
+    private fun transferOnyxSession(toCue: Boolean, hoverX: Float, hoverY: Float) {
+        // Cooldown to prevent rapid bouncing at the divider boundary
+        val now = System.currentTimeMillis()
+        if (now - lastTransferTime < 300) return
+        lastTransferTime = now
+
+        val recipient: HandwritingCanvasView
+        val donor: HandwritingCanvasView
         if (toCue) {
             if (cueInkCanvas.isUsingOnyxSdk()) return
-            inkCanvas.closeRawDrawing()
-            inkCanvas.drawToSurface() // clear SDK residue on donor
+            recipient = cueInkCanvas
+            donor = inkCanvas
             cueInkCanvas.deferOnyxInit = false
-            cueInkCanvas.reopenRawDrawing()
-            // Reset EPD state to avoid errant line from stale position
-            cueInkCanvas.pauseRawDrawing()
-            cueInkCanvas.drawToSurface()
-            cueInkCanvas.resumeRawDrawing()
-            Log.d(TAG, "Onyx SDK transferred to cue canvas")
         } else {
             if (inkCanvas.isUsingOnyxSdk()) return
-            cueInkCanvas.closeRawDrawing()
-            cueInkCanvas.drawToSurface()
+            recipient = inkCanvas
+            donor = cueInkCanvas
             cueInkCanvas.deferOnyxInit = true
-            inkCanvas.reopenRawDrawing()
-            inkCanvas.pauseRawDrawing()
-            inkCanvas.drawToSurface()
-            inkCanvas.resumeRawDrawing()
-            Log.d(TAG, "Onyx SDK transferred to main canvas")
         }
+
+        donor.closeRawDrawing()
+        donor.drawToSurface()
+        recipient.reopenRawDrawing()
+
+        // Reset EPD controller position to the hover point so the first stroke
+        // doesn't draw a line from the stale position.
+        try {
+            com.onyx.android.sdk.api.device.epd.EpdController.moveTo(
+                recipient, hoverX, hoverY, com.writer.view.CanvasTheme.DEFAULT_STROKE_WIDTH
+            )
+        } catch (_: Exception) {}
+
+        Log.d(TAG, "Onyx SDK transferred to ${if (toCue) "cue" else "main"} canvas at ($hoverX, $hoverY)")
     }
 
     /** Update the indicator strip with current cue line indices. */
