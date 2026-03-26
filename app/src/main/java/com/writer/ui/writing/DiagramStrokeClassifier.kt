@@ -25,8 +25,8 @@ import kotlin.math.max
 object DiagramStrokeClassifier {
 
     // Per-stroke thresholds (multiples of LINE_SPACING)
-    private const val HEIGHT_STRONG = 1.5f      // yRange > 1.5×LS → strong drawing signal
-    private const val HEIGHT_MODERATE = 1.2f    // yRange > 1.2×LS → moderate signal
+    private const val HEIGHT_STRONG = 2.5f      // yRange > 2.5×LS → strong drawing signal (clearly multi-line)
+    private const val HEIGHT_MODERATE = 2.0f    // yRange > 2.0×LS → moderate signal
     private const val COMPLEXITY_HIGH = 3.5f     // pathLength/diagonal ratio
     private const val COMPLEXITY_MODERATE = 2.5f
     private const val SIZE_THRESHOLD = 2.5f      // max(xRange,yRange) > 2.5×LS
@@ -34,6 +34,7 @@ object DiagramStrokeClassifier {
     private const val CLOSE_MIN_DIAGONAL = 0.5f  // minimum diagonal for closure check (×LS)
     private const val CONNECTOR_WIDTH = 2.0f     // width > 2×LS for connector filter
     private const val CONNECTOR_HEIGHT_RATIO = 0.3f // height < 30% of width
+    private const val LINE_DENSITY_THRESHOLD = 0.80f // if >80% of points within 1 LS of median → text
 
     // Score threshold
     private const val DRAWING_THRESHOLD = 0.5f
@@ -54,18 +55,34 @@ object DiagramStrokeClassifier {
         val pl = stroke.pathLength
         val diag = stroke.diagonal
 
-        var score = 0f
-
-        // A: Height relative to line spacing
-        when {
-            h > HEIGHT_STRONG * lineSpacing -> score += 0.6f
-            h > HEIGHT_MODERATE * lineSpacing -> score += 0.3f
+        // Early out: if most points are concentrated within one line height,
+        // this is text (possibly with ascenders/descenders that extend the
+        // bounding box). Descenders on 'g', 'y', 'p' push yRange beyond 1×LS
+        // but the stroke body stays on one line.
+        // Skip this check for closed loops (circles/ovals are single-line-height drawings).
+        if (stroke.points.size >= 10 && lineSpacing > 0f && diag > 0f) {
+            val first = stroke.points.first()
+            val last = stroke.points.last()
+            val closeDist = hypot((last.x - first.x).toDouble(), (last.y - first.y).toDouble()).toFloat()
+            val isClosed = closeDist < CLOSE_FRACTION * diag
+            if (!isClosed) {
+                val density = lineDensity(stroke, lineSpacing)
+                if (density >= LINE_DENSITY_THRESHOLD) return 0f
+            }
         }
 
-        // B: Path complexity — only contributes if stroke is already taller than
-        // one line. Cursive text naturally has high complexity (many letters = many
-        // direction changes) but stays within the line height.
-        val isTallEnough = h > HEIGHT_MODERATE * lineSpacing
+        var score = 0f
+
+        // A: Height relative to line spacing — diagrams span multiple lines
+        when {
+            h >= HEIGHT_STRONG * lineSpacing -> score += 0.6f
+            h >= HEIGHT_MODERATE * lineSpacing -> score += 0.3f
+        }
+
+        // B: Path complexity — only contributes if stroke extends beyond normal
+        // text height (1.5×LS). Cursive text with ascenders/descenders stays
+        // within ~1.3×LS; anything taller is suspicious enough for complexity to count.
+        val isTallEnough = h > 1.5f * lineSpacing
         if (diag > 0f && isTallEnough) {
             val complexity = pl / diag
             when {
@@ -181,6 +198,20 @@ object DiagramStrokeClassifier {
         val minY = group.minOf { it.minY }
         val maxY = group.maxOf { it.maxY }
         return (maxY - minY) <= GROUP_MAX_LINE_SPAN * lineSpacing
+    }
+
+    /**
+     * Compute what fraction of a stroke's points are within one line spacing
+     * of the Y median. High density (>0.80) means the stroke body is on one
+     * line — outlier points are ascenders/descenders, not multi-line drawing.
+     */
+    private fun lineDensity(stroke: InkStroke, lineSpacing: Float): Float {
+        val ys = stroke.points.map { it.y }
+        val sorted = ys.sorted()
+        val medianY = sorted[sorted.size / 2]
+        val halfLine = lineSpacing * 0.6f  // slightly generous to cover full letter body
+        val within = ys.count { kotlin.math.abs(it - medianY) <= halfLine }
+        return within.toFloat() / ys.size
     }
 
     // Grid-based proximity grouping — O(n) average instead of O(n²).

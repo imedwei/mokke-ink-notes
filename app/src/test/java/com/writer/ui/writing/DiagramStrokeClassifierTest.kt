@@ -76,22 +76,22 @@ class DiagramStrokeClassifierTest {
         assertTrue("Small text stroke should be text (score=$score)", score < 0.5f)
     }
 
-    @Test fun tallStroke_1_7xLS_classifiedAsDrawing() {
-        val stroke = makeTallStroke(100f, 200f, LS * 1.7f)
+    @Test fun tallStroke_2_6xLS_classifiedAsDrawing() {
+        val stroke = makeTallStroke(100f, 200f, LS * 2.6f)
         val score = DiagramStrokeClassifier.classifyStroke(stroke, LS)
-        assertTrue("Tall stroke (1.7×LS) should be drawing (score=$score)", score >= 0.5f)
+        assertTrue("Tall stroke (2.6×LS) should be drawing (score=$score)", score >= 0.5f)
     }
 
-    @Test fun tallStroke_1_2xLS_classifiedAsText() {
-        // Moderately tall but not enough alone (0.3 < 0.5)
-        val stroke = makeTallStroke(100f, 200f, LS * 1.2f)
+    @Test fun tallStroke_1_5xLS_classifiedAsText() {
+        // 1.5×LS is below the 2.0 moderate threshold — text with ascenders
+        val stroke = makeTallStroke(100f, 200f, LS * 1.5f)
         val score = DiagramStrokeClassifier.classifyStroke(stroke, LS)
-        assertTrue("Moderately tall stroke (1.2×LS) should be text (score=$score)", score < 0.5f)
+        assertTrue("Stroke at 1.5×LS should be text (score=$score)", score < 0.5f)
     }
 
     @Test fun complexCircle_classifiedAsDrawing() {
-        // Circle has pathLength/diagonal ≈ π ≈ 3.14 > 2.5, plus closure
-        val stroke = makeCircle(300f, 300f, LS * 0.8f)
+        // Circle: height = 2×LS (multi-line), closure, and complexity.
+        val stroke = makeCircle(300f, 300f, LS * 1.0f, n = 80)
         val score = DiagramStrokeClassifier.classifyStroke(stroke, LS)
         assertTrue("Complex circular stroke should be drawing (score=$score)", score >= 0.5f)
     }
@@ -142,6 +142,33 @@ class DiagramStrokeClassifierTest {
         return InkStroke(points = points)
     }
 
+    /** Simulate a word with a descender (like "entry") — most points on one line,
+     *  but the 'y' descender pushes yRange to ~1.3×LS. */
+    private fun makeWordWithDescender(startX: Float, baseY: Float, lineSpacing: Float): InkStroke {
+        val points = mutableListOf<StrokePoint>()
+        // Main body: "entr" — stays within line
+        for (i in 0..120) {
+            val t = i / 120f
+            val x = startX + t * lineSpacing * 2f
+            val y = baseY + (sin(t * 6 * PI) * lineSpacing * 0.12).toFloat()
+            points.add(StrokePoint(x.toFloat(), y, 0.5f, i.toLong()))
+        }
+        // Descender: "y" drops below
+        for (i in 0..30) {
+            val t = i / 30f
+            val x = startX + lineSpacing * 2f + t * lineSpacing * 0.3f
+            val y = baseY + t * lineSpacing * 0.5f  // drops 0.5×LS below baseline
+            points.add(StrokePoint(x.toFloat(), y, 0.5f, (121 + i).toLong()))
+        }
+        return InkStroke(points = points)
+    }
+
+    @Test fun wordWithDescender_classifiedAsText() {
+        val stroke = makeWordWithDescender(50f, 300f, LS)
+        val score = DiagramStrokeClassifier.classifyStroke(stroke, LS, includeConnector = false)
+        assertTrue("Word with descender should be text (score=$score)", score < 0.5f)
+    }
+
     @Test fun cursiveWord_wideFlatComplex_classifiedAsText() {
         // "undulating" style: wide (4×LS), slightly over 1×LS height, complex path
         val stroke = makeCursiveWord(50f, 200f, LS * 4f, LS)
@@ -154,7 +181,7 @@ class DiagramStrokeClassifierTest {
     @Test fun partitionByStroke_separatesTextAndDrawing() {
         val text1 = makeTextStroke(100f, 300f)
         val text2 = makeTextStroke(200f, 300f)
-        val drawing1 = makeTallStroke(300f, 200f, LS * 2f)
+        val drawing1 = makeTallStroke(300f, 200f, LS * 2.6f)
         val drawing2 = makeCircle(400f, 300f, LS * 1f)
 
         val (textResult, drawingResult) = DiagramStrokeClassifier.partitionByStroke(
@@ -205,7 +232,7 @@ class DiagramStrokeClassifierTest {
 
     @Test fun freehandAdjacentToTallDrawingStroke_becomesDrawing() {
         // A tall drawing stroke and a small freehand stroke nearby
-        val tallStroke = makeTallStroke(100f, 200f, LS * 2f)  // classified as drawing
+        val tallStroke = makeTallStroke(100f, 200f, LS * 2.6f)  // classified as drawing
         val smallStroke = makeTextStroke(110f, 200f + LS * 1.5f)  // adjacent, text-like
 
         val (text, drawing) = DiagramStrokeClassifier.partition(
@@ -220,7 +247,7 @@ class DiagramStrokeClassifierTest {
 
     @Test fun freehandFarFromDrawing_staysText() {
         // A tall drawing stroke far from a small text stroke
-        val tallStroke = makeTallStroke(100f, 200f, LS * 2f)
+        val tallStroke = makeTallStroke(100f, 200f, LS * 2.6f)
         val textStroke = makeTextStroke(500f, 800f)  // far away
 
         val (text, drawing) = DiagramStrokeClassifier.partition(
@@ -276,7 +303,7 @@ class DiagramStrokeClassifierTest {
         val titleText = makeTextStroke(200f, 10f)
 
         // Freehand arrow between shapes (tall, near shapes)
-        val arrow = makeTallStroke(190f, 210f, LS * 1.8f)
+        val arrow = makeTallStroke(190f, 210f, LS * 2.6f)
 
         // Small annotation near shape1
         val annotation = makeTextStroke(105f, 270f)

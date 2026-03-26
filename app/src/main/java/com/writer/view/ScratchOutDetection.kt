@@ -223,11 +223,18 @@ object ScratchOutDetection {
      * This prevents cursive text that merely grazes a descender from being
      * treated as a scratch-out.
      */
+    /** Minimum time gap (ms) between the newest candidate stroke's end and the
+     *  scratch-out stroke's start. Prevents a new cursive letter from scratching
+     *  out adjacent letters written in the same burst. */
+    private const val MIN_AGE_MS = 1500L
+
     fun isFocusedScratchOut(
         scratchPoints: List<StrokePoint>,
         existingStrokes: List<InkStroke>
     ): Boolean {
         if (scratchPoints.size < 2 || existingStrokes.isEmpty()) return false
+
+        val scratchStartTime = scratchPoints.first().timestamp
 
         val scratchMinX = scratchPoints.minOf { it.x }
         val scratchMaxX = scratchPoints.maxOf { it.x }
@@ -236,14 +243,19 @@ object ScratchOutDetection {
         val radius = ScreenMetrics.dp(COVERAGE_RADIUS_DP)
 
         // Pre-filter: only check strokes whose bounding box overlaps the scratch-out
-        // region (expanded by coverage radius). Avoids expensive intersection checks
-        // against distant strokes.
+        // region (expanded by coverage radius) AND that were written long enough ago
+        // that this isn't the same word being written. A new cursive letter should
+        // not scratch out adjacent letters from the same writing burst.
         val candidates = existingStrokes.filter { stroke ->
             val sMinX = stroke.minX
             val sMaxX = stroke.maxX
             val sMinY = stroke.minY
             val sMaxY = stroke.maxY
-            sMaxX >= scratchMinX - radius && sMinX <= scratchMaxX + radius &&
+            // Skip the age check if timestamps aren't set (e.g., test fixtures)
+            val oldEnough = scratchStartTime == 0L || stroke.endTime == 0L ||
+                scratchStartTime - stroke.endTime > MIN_AGE_MS
+            oldEnough &&
+                sMaxX >= scratchMinX - radius && sMinX <= scratchMaxX + radius &&
                 sMaxY >= scratchMinY - radius && sMinY <= scratchMaxY + radius
         }
         if (candidates.isEmpty()) return false
