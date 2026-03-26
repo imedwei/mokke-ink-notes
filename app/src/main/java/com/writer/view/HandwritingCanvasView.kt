@@ -207,6 +207,10 @@ class HandwritingCanvasView @JvmOverloads constructor(
 
     private val idleRunnable = Runnable { onIdleTimeout?.invoke() }
 
+    /** Called when the stylus hovers over this canvas but it doesn't have the
+     *  Onyx SDK session. The activity should transfer the session before pen-down. */
+    var onRequestOnyxSession: (() -> Unit)? = null
+
     private var useOnyxSdk = false
     private var touchHelper: TouchHelper? = null
     private var surfaceReady = false
@@ -311,6 +315,11 @@ class HandwritingCanvasView @JvmOverloads constructor(
     private var lastSurfaceHeight = 0
     private val reinitOnyxRunnable = Runnable { reinitializeRawDrawing() }
 
+    /** Cancel any pending delayed Onyx SDK reinitialize (e.g. from surfaceChanged). */
+    fun cancelPendingReinit() {
+        handler.removeCallbacks(reinitOnyxRunnable)
+    }
+
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
         drawToSurface()
         val dimensionsChanged = width != lastSurfaceWidth || height != lastSurfaceHeight
@@ -336,8 +345,17 @@ class HandwritingCanvasView @JvmOverloads constructor(
         useOnyxSdk = false
     }
 
+    /** When true, skip auto-init of Onyx SDK on surfaceCreated. The session
+     *  will be transferred here on demand via [onRequestOnyxSession]. */
+    var deferOnyxInit = false
+
+    /** When true, an external shared Onyx SDK handles stylus input — skip stylus
+     *  events in onTouchEvent to avoid double-processing. */
+    var externalOnyxActive = false
+
     private fun tryInitOnyx() {
         if (useOnyxSdk) return // already initialized
+        if (deferOnyxInit) return // will be initialized on demand
 
         try {
             val limit = Rect()
@@ -351,6 +369,13 @@ class HandwritingCanvasView @JvmOverloads constructor(
             touchHelper?.openRawDrawing()
             touchHelper?.setRawDrawingEnabled(true)
 
+            // Also set EPD controller region to full view to avoid hardware dead zone
+            try {
+                com.onyx.android.sdk.api.device.epd.EpdController.setScreenHandWritingRegionLimit(this)
+            } catch (e: Exception) {
+                Log.w(TAG, "EpdController.setScreenHandWritingRegionLimit failed: ${e.message}")
+            }
+
             useOnyxSdk = true
             Log.i(TAG, "Onyx SDK initialized: limitRect=$limit")
         } catch (e: Exception) {
@@ -358,6 +383,17 @@ class HandwritingCanvasView @JvmOverloads constructor(
             useOnyxSdk = false
             touchHelper = null
         }
+    }
+
+    // --- Hover handling (for Onyx SDK session swap between canvases) ---
+
+    override fun onHoverEvent(event: MotionEvent): Boolean {
+        if (event.getToolType(0) == MotionEvent.TOOL_TYPE_STYLUS && !useOnyxSdk) {
+            // Stylus is hovering over this canvas but SDK is on another canvas.
+            // Request transfer now — before pen-down — so the full stroke gets SDK speed.
+            onRequestOnyxSession?.invoke()
+        }
+        return super.onHoverEvent(event)
     }
 
     // --- Touch handling ---
@@ -377,8 +413,8 @@ class HandwritingCanvasView @JvmOverloads constructor(
         // In tutorial mode, block all writing input
         if (tutorialMode) return false
 
-        // If using Onyx SDK, pen input in the canvas area is handled by SDK callbacks
-        if (useOnyxSdk) return true
+        // If using Onyx SDK (per-canvas or shared), pen input is handled by SDK callbacks
+        if (useOnyxSdk || externalOnyxActive) return true
 
         // Stylus/mouse on canvas → writing (fallback for non-Boox devices)
         val x = event.x

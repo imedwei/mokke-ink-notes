@@ -2,6 +2,7 @@ package com.writer.ui.writing
 
 import android.content.Intent
 import android.content.res.Configuration
+import android.graphics.Rect
 import android.net.Uri
 import android.os.Bundle
 import android.util.Log
@@ -24,11 +25,12 @@ import androidx.lifecycle.lifecycleScope
 import com.writer.R
 import com.writer.model.ColumnData
 import com.writer.model.DocumentModel
-import com.writer.recognition.LineSegmenter
+import com.writer.model.StrokePoint
 import com.writer.recognition.TextRecognizer
 import com.writer.recognition.TextRecognizerFactory
 import com.writer.model.DocumentData
 import com.writer.storage.DocumentStorage
+import com.writer.view.CanvasTheme
 import com.writer.view.HandwritingCanvasView
 import com.writer.view.RecognizedTextView
 import com.writer.view.TouchFilter
@@ -59,6 +61,8 @@ class WritingActivity : AppCompatActivity() {
     private var cueCoordinator: WritingCoordinator? = null
     private var isLandscape = false
     private var isFoldedToCues = false
+
+    // Dual-canvas Onyx SDK: per-canvas TouchHelper with hover-based swap
 
     // Floating gutter overlay
     private lateinit var gutterOverlay: View
@@ -132,6 +136,12 @@ class WritingActivity : AppCompatActivity() {
             controller.systemBarsBehavior =
                 WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         }
+        // Boox-specific: request true fullscreen to eliminate nav bar EPD dead zone
+        try {
+            com.onyx.android.sdk.utils.DeviceUtils.setFullScreenOnResume(this, true)
+        } catch (e: Exception) {
+            Log.w(TAG, "DeviceUtils.setFullScreenOnResume not available: ${e.message}")
+        }
 
         inkCanvas = findViewById(R.id.inkCanvas)
         recognizedTextView = findViewById(R.id.recognizedTextView)
@@ -147,6 +157,9 @@ class WritingActivity : AppCompatActivity() {
         contextRail = findViewById(R.id.contextRail)
         mainSplitLayout = splitLayout
         isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+
+        // Cue canvas defers Onyx init — gets SDK session via hover-based swap in landscape.
+        cueInkCanvas.deferOnyxInit = true
 
         // Portrait fold/unfold: tap indicator strip to show cues, tap context rail to show notes
         cueIndicatorStrip.onTap = { foldToCues() }
@@ -694,17 +707,68 @@ class WritingActivity : AppCompatActivity() {
         val nowLandscape = newConfig.orientation == Configuration.ORIENTATION_LANDSCAPE
         if (nowLandscape == isLandscape) return
         isLandscape = nowLandscape
+
         if (isLandscape) {
-            // Unfold from any portrait state to landscape
             if (isFoldedToCues) unfoldToNotes()
             cueIndicatorStrip.visibility = View.GONE
-            showCueColumn()
         } else {
-            // Always return to notes view on portrait (design decision)
-            hideCueColumn()
-            cueIndicatorStrip.visibility = View.VISIBLE
-            updateCueIndicatorStrip()
+            // Close shared SDK first, before views change size
+            closeDualCanvasOnyx()
         }
+
+        // Reset to weight-based layout so the system recalculates for new orientation
+        resetToWeightBasedLayout()
+
+        // After layout settles, compute fixed heights and proceed
+        inkCanvas.viewTreeObserver.addOnGlobalLayoutListener(
+            object : android.view.ViewTreeObserver.OnGlobalLayoutListener {
+                override fun onGlobalLayout() {
+                    inkCanvas.viewTreeObserver.removeOnGlobalLayoutListener(this)
+                    applyFixedSplitHeights()
+
+                    if (isLandscape) {
+                        showCueColumn()
+                    } else {
+                        hideCueColumn()
+                        cueIndicatorStrip.visibility = View.VISIBLE
+                        updateCueIndicatorStrip()
+                    }
+                }
+            }
+        )
+    }
+
+    /** Reset text/canvas to weight-based sizing so the system can measure for new orientation. */
+    private fun resetToWeightBasedLayout() {
+        val textParams = recognizedTextView.layoutParams as LinearLayout.LayoutParams
+        textParams.height = 0
+        textParams.weight = 1f
+        recognizedTextView.layoutParams = textParams
+
+        val canvasParams = inkCanvas.layoutParams as LinearLayout.LayoutParams
+        canvasParams.height = 0
+        canvasParams.weight = 3f
+        inkCanvas.layoutParams = canvasParams
+    }
+
+    /** Compute and apply fixed pixel heights for the text/canvas split. */
+    private fun applyFixedSplitHeights() {
+        val totalHeight = recognizedTextView.height + inkCanvas.height
+        defaultCanvasHeight = ScreenMetrics.computeDefaultCanvasHeight(totalHeight)
+        defaultTextHeight = totalHeight - defaultCanvasHeight
+        splitOffset = 0f
+
+        val textParams = recognizedTextView.layoutParams as LinearLayout.LayoutParams
+        textParams.height = defaultTextHeight
+        textParams.weight = 0f
+        recognizedTextView.layoutParams = textParams
+
+        val canvasParams = inkCanvas.layoutParams as LinearLayout.LayoutParams
+        canvasParams.height = defaultCanvasHeight
+        canvasParams.weight = 0f
+        inkCanvas.layoutParams = canvasParams
+
+        Log.i(TAG, "Split heights: text=${defaultTextHeight}px, canvas=${defaultCanvasHeight}px")
     }
 
     private fun ensureCueCoordinator() {
@@ -725,55 +789,68 @@ class WritingActivity : AppCompatActivity() {
         columnDivider.visibility = View.VISIBLE
         cueSplitLayout.visibility = View.VISIBLE
 
-        // Restore cue strokes if they exist
-        cueInkCanvas.loadStrokes(documentModel.cue.activeStrokes.toList())
-        cueInkCanvas.diagramAreas = documentModel.cue.diagramAreas.toList()
-        cueInkCanvas.scrollOffsetY = inkCanvas.scrollOffsetY
-        cueInkCanvas.drawToSurface()
+        // Apply same text/canvas split heights as main column
+        applyCueSplitHeights()
 
-        ensureCueCoordinator()
-        cueCoordinator?.start()
-
-        // Linked scroll: main canvas scroll → sync cue canvas
-        coordinator?.onLinkedScroll = {
-            cueInkCanvas.scrollOffsetY = inkCanvas.scrollOffsetY
-            cueInkCanvas.drawToSurface()
-        }
-        // Linked scroll: cue canvas scroll → sync main canvas
-        cueCoordinator?.onLinkedScroll = {
-            inkCanvas.scrollOffsetY = cueInkCanvas.scrollOffsetY
-            inkCanvas.drawToSurface()
-        }
-
-        // Cross-column space insertion: sync the other column
-        coordinator?.onSpaceChanged = { anchorLine, delta ->
-            if (delta > 0) {
-                SpaceInsertMode.insertSpace(documentModel.cue, LineSegmenter(), anchorLine, delta)
-            } else if (delta < 0) {
-                SpaceInsertMode.removeSpace(documentModel.cue, LineSegmenter(), anchorLine, -delta)
-            }
+        // Restore cue strokes after layout is ready (surface needs to exist first)
+        cueInkCanvas.post {
             cueInkCanvas.loadStrokes(documentModel.cue.activeStrokes.toList())
             cueInkCanvas.diagramAreas = documentModel.cue.diagramAreas.toList()
+            cueInkCanvas.scrollOffsetY = inkCanvas.scrollOffsetY
             cueInkCanvas.drawToSurface()
-        }
-        cueCoordinator?.onSpaceChanged = { anchorLine, delta ->
-            if (delta > 0) {
-                SpaceInsertMode.insertSpace(documentModel.main, LineSegmenter(), anchorLine, delta)
-            } else if (delta < 0) {
-                SpaceInsertMode.removeSpace(documentModel.main, LineSegmenter(), anchorLine, -delta)
+
+            ensureCueCoordinator()
+            cueCoordinator?.start()
+
+            // Linked scroll: main canvas scroll → sync cue canvas
+            coordinator?.onLinkedScroll = {
+                cueInkCanvas.scrollOffsetY = inkCanvas.scrollOffsetY
+                cueInkCanvas.drawToSurface()
             }
-            inkCanvas.loadStrokes(documentModel.main.activeStrokes.toList())
-            inkCanvas.diagramAreas = documentModel.main.diagramAreas.toList()
-            inkCanvas.drawToSurface()
+            // Linked scroll: cue canvas scroll → sync main canvas
+            cueCoordinator?.onLinkedScroll = {
+                inkCanvas.scrollOffsetY = cueInkCanvas.scrollOffsetY
+                inkCanvas.drawToSurface()
+            }
+
+            // Cross-column space insertion: sync via coordinator for undo support
+            coordinator?.onSpaceChanged = { anchorLine, delta ->
+                cueCoordinator?.syncSpaceChange(anchorLine, delta)
+            }
+            cueCoordinator?.onSpaceChanged = { anchorLine, delta ->
+                coordinator?.syncSpaceChange(anchorLine, delta)
+            }
+
+            // Recognize existing cue content
+            cueCoordinator?.recognizeAllLines()
+
+            // Initialize shared Onyx SDK after the layout pass completes so
+            // canvas dimensions reflect landscape, not stale portrait values.
+            inkCanvas.cancelPendingReinit()
+            cueInkCanvas.cancelPendingReinit()
+            cueInkCanvas.viewTreeObserver.addOnGlobalLayoutListener(
+                object : android.view.ViewTreeObserver.OnGlobalLayoutListener {
+                    override fun onGlobalLayout() {
+                        cueInkCanvas.viewTreeObserver.removeOnGlobalLayoutListener(this)
+                        initDualCanvasOnyx()
+                        Log.i(TAG, "Cue column shown (landscape)")
+                    }
+                }
+            )
         }
+    }
 
-        // Reinitialize Onyx SDK for the cue canvas
-        cueInkCanvas.reinitializeRawDrawing()
+    /** Apply the same text/canvas split heights to the cue column as the main column. */
+    private fun applyCueSplitHeights() {
+        val textParams = cueRecognizedTextView.layoutParams as LinearLayout.LayoutParams
+        textParams.height = defaultTextHeight
+        textParams.weight = 0f
+        cueRecognizedTextView.layoutParams = textParams
 
-        // Recognize existing cue content
-        cueCoordinator?.recognizeAllLines()
-
-        Log.i(TAG, "Cue column shown (landscape)")
+        val canvasParams = cueInkCanvas.layoutParams as LinearLayout.LayoutParams
+        canvasParams.height = defaultCanvasHeight
+        canvasParams.weight = 0f
+        cueInkCanvas.layoutParams = canvasParams
     }
 
     private fun hideCueColumn() {
@@ -782,11 +859,14 @@ class WritingActivity : AppCompatActivity() {
         cueCoordinator?.onSpaceChanged = null
         coordinator?.onLinkedScroll = null
         coordinator?.onSpaceChanged = null
-        cueInkCanvas.closeRawDrawing()
+
+        // Remove landscape left gutter padding
+        closeDualCanvasOnyx()
         columnDivider.visibility = View.GONE
         cueSplitLayout.visibility = View.GONE
 
-        // Reinitialize main canvas after layout change
+        // Restore main canvas per-view Onyx SDK
+        inkCanvas.deferOnyxInit = false
         inkCanvas.reinitializeRawDrawing()
 
         Log.i(TAG, "Cue column hidden (portrait)")
@@ -808,21 +888,31 @@ class WritingActivity : AppCompatActivity() {
         params.weight = 1f
         cueSplitLayout.layoutParams = params
 
-        // Load cue content and start coordinator
-        cueInkCanvas.loadStrokes(documentModel.cue.activeStrokes.toList())
-        cueInkCanvas.diagramAreas = documentModel.cue.diagramAreas.toList()
-        cueInkCanvas.scrollOffsetY = inkCanvas.scrollOffsetY
-        cueInkCanvas.drawToSurface()
+        // Apply same split heights to cue column
+        applyCueSplitHeights()
 
-        ensureCueCoordinator()
-        cueCoordinator?.start()
-        cueInkCanvas.reinitializeRawDrawing()
-        cueCoordinator?.recognizeAllLines()
-
-        // Pause main canvas while hidden
+        // Close shared SDK if active (shouldn't be in portrait, but safety)
+        closeDualCanvasOnyx()
+        // Close main canvas SDK, cue will init its own after layout
         inkCanvas.closeRawDrawing()
 
-        Log.i(TAG, "Folded to cues (portrait)")
+        // Load cue content after layout is ready (surface needs to exist first)
+        cueInkCanvas.post {
+            cueInkCanvas.loadStrokes(documentModel.cue.activeStrokes.toList())
+            cueInkCanvas.diagramAreas = documentModel.cue.diagramAreas.toList()
+            cueInkCanvas.scrollOffsetY = inkCanvas.scrollOffsetY
+            cueInkCanvas.drawToSurface()
+
+            ensureCueCoordinator()
+            cueCoordinator?.start()
+            cueCoordinator?.recognizeAllLines()
+
+            // Give Onyx SDK to cue canvas since it's the only visible one
+            cueInkCanvas.deferOnyxInit = false
+            cueInkCanvas.reinitializeRawDrawing()
+
+            Log.i(TAG, "Folded to cues (portrait)")
+        }
     }
 
     /** Portrait: unfold from cues back to notes view. */
@@ -836,20 +926,77 @@ class WritingActivity : AppCompatActivity() {
         cueSplitLayout.visibility = View.GONE
         contextRail.visibility = View.GONE
 
-        // Stop cue coordinator
+        // Stop cue coordinator, transfer Onyx SDK back to main
         cueCoordinator?.stop()
         cueInkCanvas.closeRawDrawing()
+        cueInkCanvas.deferOnyxInit = true
 
         // Sync scroll position from cue to main (preserve position)
         inkCanvas.scrollOffsetY = cueInkCanvas.scrollOffsetY
 
-        // Restart main canvas
+        // Restart main canvas with Onyx SDK
         inkCanvas.reinitializeRawDrawing()
         inkCanvas.drawToSurface()
 
         updateCueIndicatorStrip()
 
         Log.i(TAG, "Unfolded to notes (portrait)")
+    }
+
+    /**
+     * Initialize per-canvas Onyx SDK with hover-based swap between canvases.
+     * Each canvas gets its own TouchHelper bound directly to the SurfaceView,
+     * avoiding the root-view dead zone. Only one is active at a time — the
+     * SDK session transfers on stylus hover (before pen-down) so the full
+     * stroke gets SDK speed with no dead zones.
+     */
+    private fun initDualCanvasOnyx() {
+        // Main canvas keeps its per-view SDK (already initialized or will init via surfaceCreated)
+        inkCanvas.deferOnyxInit = false
+        cueInkCanvas.deferOnyxInit = true  // cue defers — gets session on hover
+
+        // Wire up hover-based swap
+        cueInkCanvas.onRequestOnyxSession = { transferOnyxSession(toCue = true) }
+        inkCanvas.onRequestOnyxSession = { transferOnyxSession(toCue = false) }
+
+        // Initialize main canvas SDK
+        inkCanvas.reinitializeRawDrawing()
+
+        Log.i(TAG, "Dual-canvas Onyx SDK initialized (hover swap)")
+    }
+
+    private fun closeDualCanvasOnyx() {
+        inkCanvas.onRequestOnyxSession = null
+        cueInkCanvas.onRequestOnyxSession = null
+        cueInkCanvas.closeRawDrawing()
+        cueInkCanvas.deferOnyxInit = true
+        Log.i(TAG, "Dual-canvas Onyx SDK closed")
+    }
+
+    /** Transfer the Onyx SDK session between canvases on hover. */
+    private fun transferOnyxSession(toCue: Boolean) {
+        if (toCue) {
+            if (cueInkCanvas.isUsingOnyxSdk()) return
+            inkCanvas.closeRawDrawing()
+            inkCanvas.drawToSurface() // clear SDK residue on donor
+            cueInkCanvas.deferOnyxInit = false
+            cueInkCanvas.reopenRawDrawing()
+            // Reset EPD state to avoid errant line from stale position
+            cueInkCanvas.pauseRawDrawing()
+            cueInkCanvas.drawToSurface()
+            cueInkCanvas.resumeRawDrawing()
+            Log.d(TAG, "Onyx SDK transferred to cue canvas")
+        } else {
+            if (inkCanvas.isUsingOnyxSdk()) return
+            cueInkCanvas.closeRawDrawing()
+            cueInkCanvas.drawToSurface()
+            cueInkCanvas.deferOnyxInit = true
+            inkCanvas.reopenRawDrawing()
+            inkCanvas.pauseRawDrawing()
+            inkCanvas.drawToSurface()
+            inkCanvas.resumeRawDrawing()
+            Log.d(TAG, "Onyx SDK transferred to main canvas")
+        }
     }
 
     /** Update the indicator strip with current cue line indices. */
@@ -864,13 +1011,8 @@ class WritingActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        // Reinitialize Onyx SDK to clear stale system-level state from other apps
-        // (e.g. toolbar exclude rects that persist across app switches)
         if (!tutorialManager.isActive) {
             inkCanvas.reinitializeRawDrawing()
-            if (isLandscape) {
-                cueInkCanvas.reinitializeRawDrawing()
-            }
         }
     }
 
@@ -965,6 +1107,7 @@ class WritingActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        closeDualCanvasOnyx()
         coordinator?.stop()
         cueCoordinator?.stop()
         recognizer.close()
