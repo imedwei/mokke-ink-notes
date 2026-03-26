@@ -127,6 +127,28 @@ class DiagramStrokeClassifierTest {
         assertTrue("Letter A should be text (score=$score)", score < 0.5f)
     }
 
+    /** Simulate a long cursive word like "undulating" — wide, slightly taller than
+     *  line spacing due to descenders, with complex path from many letter curves. */
+    private fun makeCursiveWord(startX: Float, y: Float, width: Float, lineSpacing: Float): InkStroke {
+        // Simulate cursive with sinusoidal humps — high path complexity, wide+flat
+        val numHumps = 8
+        val points = (0..200).map { i ->
+            val t = i / 200f
+            val x = startX + t * width
+            val humpY = (sin(t * numHumps * 2 * PI) * lineSpacing * 0.15).toFloat()
+            val baseY = y + lineSpacing * 0.5f
+            StrokePoint(x.toFloat(), baseY + humpY, 0.5f, i.toLong())
+        }
+        return InkStroke(points = points)
+    }
+
+    @Test fun cursiveWord_wideFlatComplex_classifiedAsText() {
+        // "undulating" style: wide (4×LS), slightly over 1×LS height, complex path
+        val stroke = makeCursiveWord(50f, 200f, LS * 4f, LS)
+        val score = DiagramStrokeClassifier.classifyStroke(stroke, LS, includeConnector = false)
+        assertTrue("Cursive word should be text (score=$score)", score < 0.5f)
+    }
+
     // ── Per-stroke partition ─────────────────────────────────────────────────
 
     @Test fun partitionByStroke_separatesTextAndDrawing() {
