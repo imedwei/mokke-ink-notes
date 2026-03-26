@@ -324,9 +324,14 @@ class WritingCoordinator(
         }
         if (overlapping.isEmpty()) return
 
+        // Expand to include the full connected word: strokes on the same line
+        // that were written close in time and are spatially adjacent. This ensures
+        // e.g. the crossbar of 't' is removed along with the rest of "entry".
+        val expanded = expandToConnectedWord(overlapping, columnModel.activeStrokes)
+
         saveSnapshot(UndoCoalescer.ActionType.SCRATCH_OUT)
 
-        val idsToRemove = overlapping.map { it.strokeId }.toSet()
+        val idsToRemove = expanded.map { it.strokeId }.toSet()
         columnModel.activeStrokes.removeAll { it.strokeId in idsToRemove }
         for (id in idsToRemove) { columnModel.diagram.nodes.remove(id) }
 
@@ -334,15 +339,64 @@ class WritingCoordinator(
 
         // Delegate diagram cache invalidation and shrinking to DiagramManager.
         // If it redraws (diagram shrink), skip our own drawToSurface to avoid double-draw.
-        val diagramRedrew = diagramManager.onStrokesErased(idsToRemove, overlapping)
+        val diagramRedrew = diagramManager.onStrokesErased(idsToRemove, expanded)
         if (!diagramRedrew) {
             inkCanvas.drawToSurface()
         }
 
         eventLog.recordEvent(lastStrokeIndex, StrokeEventLog.EventType.SCRATCH_OUT,
             "erased=${idsToRemove.joinToString(",")}", elapsedMs = inkCanvas.lastFinishStrokeMs)
-        Log.i(TAG, "Scratch-out erase: removed ${overlapping.size} strokes in [$left,$top,$right,$bottom]")
+        Log.i(TAG, "Scratch-out erase: removed ${expanded.size} strokes (${overlapping.size} direct + ${expanded.size - overlapping.size} connected) in [$left,$top,$right,$bottom]")
         onTutorialAction?.invoke("scratch_out")
+    }
+
+    /**
+     * Expand a set of directly-overlapping strokes to include the full connected word.
+     * A stroke is "connected" if it's on the same line, spatially adjacent (X gap < LS),
+     * and was written close in time (< 2s gap). This ensures that e.g. the crossbar
+     * of 't' is removed along with the rest of the word.
+     */
+    private fun expandToConnectedWord(
+        directHits: List<InkStroke>,
+        allStrokes: List<InkStroke>
+    ): List<InkStroke> {
+        if (directHits.isEmpty()) return directHits
+
+        val ls = ScreenMetrics.lineSpacing
+        val maxXGap = ls * 1.5f  // spatial adjacency threshold
+        val maxTimeGap = 2000L   // temporal adjacency (ms)
+
+        // Find the line(s) the direct hits are on
+        val hitLines = directHits.map { lineSegmenter.getStrokeLineIndex(it) }.toSet()
+
+        // Gather all strokes on the same lines as candidates for expansion
+        val sameLine = allStrokes.filter { stroke ->
+            lineSegmenter.getStrokeLineIndex(stroke) in hitLines
+        }
+
+        // BFS expansion: start from direct hits, grow to include adjacent strokes
+        val included = directHits.map { it.strokeId }.toMutableSet()
+        var changed = true
+        while (changed) {
+            changed = false
+            for (candidate in sameLine) {
+                if (candidate.strokeId in included) continue
+                // Check if candidate is adjacent to any included stroke
+                val isAdjacent = sameLine.filter { it.strokeId in included }.any { inc ->
+                    val xGap = kotlin.math.max(0f,
+                        kotlin.math.max(candidate.minX - inc.maxX, inc.minX - candidate.maxX)
+                    )
+                    val timeGap = kotlin.math.abs(candidate.startTime - inc.endTime)
+                    xGap < maxXGap && timeGap < maxTimeGap
+                }
+                if (isAdjacent) {
+                    included.add(candidate.strokeId)
+                    changed = true
+                }
+            }
+        }
+
+        return allStrokes.filter { it.strokeId in included }
     }
 
     // --- Recognition ---

@@ -151,8 +151,8 @@ class DwellDisambiguationTest {
 
     @Test
     fun `circle should create diagram with dwell`() {
-        val n = 40
-        val cx = 300f; val cy = 400f; val r = LS * 0.8f
+        val n = 80
+        val cx = 300f; val cy = 400f; val r = LS * 1.1f
         val points = (0..n).map { i ->
             StrokePoint(
                 (cx + r * cos(2 * PI * i / n)).toFloat(),
