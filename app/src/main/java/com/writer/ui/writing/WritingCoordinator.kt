@@ -348,6 +348,11 @@ class WritingCoordinator(
     // --- Recognition ---
 
     /** Recognize all lines that have strokes but no cached text or failed recognition. */
+    /** Refresh the text preview display (e.g. after linked scroll from another column). */
+    fun refreshDisplay() {
+        displayManager.displayHiddenLines()
+    }
+
     fun recognizeAllLines() {
         val strokesByLine = lineSegmenter.groupByLine(columnModel.activeStrokes)
         if (strokesByLine.isEmpty()) return

@@ -806,11 +806,13 @@ class WritingActivity : AppCompatActivity() {
             coordinator?.onLinkedScroll = {
                 cueInkCanvas.scrollOffsetY = inkCanvas.scrollOffsetY
                 cueInkCanvas.drawToSurface()
+                cueCoordinator?.refreshDisplay()
             }
             // Linked scroll: cue canvas scroll → sync main canvas
             cueCoordinator?.onLinkedScroll = {
                 inkCanvas.scrollOffsetY = cueInkCanvas.scrollOffsetY
                 inkCanvas.drawToSurface()
+                coordinator?.refreshDisplay()
             }
 
             // Cross-column space insertion: sync via coordinator for undo support

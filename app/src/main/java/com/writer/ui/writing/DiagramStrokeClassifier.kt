@@ -26,7 +26,7 @@ object DiagramStrokeClassifier {
 
     // Per-stroke thresholds (multiples of LINE_SPACING)
     private const val HEIGHT_STRONG = 1.5f      // yRange > 1.5×LS → strong drawing signal
-    private const val HEIGHT_MODERATE = 1.0f     // yRange > 1.0×LS → moderate signal
+    private const val HEIGHT_MODERATE = 1.2f    // yRange > 1.2×LS → moderate signal
     private const val COMPLEXITY_HIGH = 3.5f     // pathLength/diagonal ratio
     private const val COMPLEXITY_MODERATE = 2.5f
     private const val SIZE_THRESHOLD = 2.5f      // max(xRange,yRange) > 2.5×LS
@@ -62,8 +62,11 @@ object DiagramStrokeClassifier {
             h > HEIGHT_MODERATE * lineSpacing -> score += 0.3f
         }
 
-        // B: Path complexity
-        if (diag > 0f) {
+        // B: Path complexity — only contributes if stroke is already taller than
+        // one line. Cursive text naturally has high complexity (many letters = many
+        // direction changes) but stays within the line height.
+        val isTallEnough = h > HEIGHT_MODERATE * lineSpacing
+        if (diag > 0f && isTallEnough) {
             val complexity = pl / diag
             when {
                 complexity > COMPLEXITY_HIGH -> score += 0.4f
