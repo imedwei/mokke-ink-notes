@@ -208,8 +208,9 @@ class HandwritingCanvasView @JvmOverloads constructor(
     private val idleRunnable = Runnable { onIdleTimeout?.invoke() }
 
     /** Called when the stylus hovers over this canvas but it doesn't have the
-     *  Onyx SDK session. The activity should transfer the session before pen-down. */
-    var onRequestOnyxSession: (() -> Unit)? = null
+     *  Onyx SDK session. Parameters: hover x, y in view-local coordinates.
+     *  The activity should transfer the session before pen-down. */
+    var onRequestOnyxSession: ((Float, Float) -> Unit)? = null
 
     private var useOnyxSdk = false
     private var touchHelper: TouchHelper? = null
@@ -391,7 +392,8 @@ class HandwritingCanvasView @JvmOverloads constructor(
         if (event.getToolType(0) == MotionEvent.TOOL_TYPE_STYLUS && !useOnyxSdk) {
             // Stylus is hovering over this canvas but SDK is on another canvas.
             // Request transfer now — before pen-down — so the full stroke gets SDK speed.
-            onRequestOnyxSession?.invoke()
+            // Pass hover coordinates so the EPD controller position can be reset.
+            onRequestOnyxSession?.invoke(event.x, event.y)
         }
         return super.onHoverEvent(event)
     }
@@ -1389,4 +1391,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
     }
 
     fun isUsingOnyxSdk(): Boolean = useOnyxSdk
+
+    /** True if a stroke is currently being drawn (pen is in contact). */
+    fun isPenActive(): Boolean = touchFilter?.penActive == true
 }
