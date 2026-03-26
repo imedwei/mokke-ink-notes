@@ -802,21 +802,21 @@ class WritingActivity : AppCompatActivity() {
             ensureCueCoordinator()
             cueCoordinator?.start()
 
-            // Block auto-scroll on either coordinator if pen is active on either canvas
-            val penActiveOnEither = { inkCanvas.isPenActive() || cueInkCanvas.isPenActive() }
-            coordinator?.shouldBlockScroll = penActiveOnEither
-            cueCoordinator?.shouldBlockScroll = penActiveOnEither
+            // Block auto-scroll and linked scroll if pen was recently active on either canvas.
+            // Uses a 2s window to cover gaps between strokes during cursive writing.
+            val penRecentOnEither = { inkCanvas.isPenRecentlyActive() || cueInkCanvas.isPenRecentlyActive() }
+            coordinator?.shouldBlockScroll = penRecentOnEither
+            cueCoordinator?.shouldBlockScroll = penRecentOnEither
 
-            // Linked scroll: skip entirely if pen is active on EITHER canvas
             coordinator?.onLinkedScroll = {
-                if (!inkCanvas.isPenActive() && !cueInkCanvas.isPenActive()) {
+                if (!penRecentOnEither()) {
                     cueInkCanvas.scrollOffsetY = inkCanvas.scrollOffsetY
                     cueInkCanvas.drawToSurface()
                     cueCoordinator?.refreshDisplay()
                 }
             }
             cueCoordinator?.onLinkedScroll = {
-                if (!inkCanvas.isPenActive() && !cueInkCanvas.isPenActive()) {
+                if (!penRecentOnEither()) {
                     inkCanvas.scrollOffsetY = cueInkCanvas.scrollOffsetY
                     inkCanvas.drawToSurface()
                     coordinator?.refreshDisplay()

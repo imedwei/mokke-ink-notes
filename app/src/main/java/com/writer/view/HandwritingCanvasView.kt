@@ -264,6 +264,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
             it.penActive = false
             it.penUpTimestamp = android.os.SystemClock.uptimeMillis()
         }
+        lastPenUpTime = System.currentTimeMillis()
         onPenStateChanged?.invoke(false)
         currentStrokePoints.add(lastPoint)
         finishStroke()
@@ -1394,4 +1395,13 @@ class HandwritingCanvasView @JvmOverloads constructor(
 
     /** True if a stroke is currently being drawn (pen is in contact). */
     fun isPenActive(): Boolean = touchFilter?.penActive == true
+
+    /** Timestamp of the last pen-up event. */
+    private var lastPenUpTime = 0L
+
+    /** True if the pen is currently active OR was active within the last [windowMs]. */
+    fun isPenRecentlyActive(windowMs: Long = 2000L): Boolean {
+        if (isPenActive()) return true
+        return System.currentTimeMillis() - lastPenUpTime < windowMs
+    }
 }

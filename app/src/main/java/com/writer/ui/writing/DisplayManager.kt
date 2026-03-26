@@ -91,9 +91,9 @@ class DisplayManager(
 
     fun checkAutoScroll(currentLineIndex: Int) {
         if (scrollAnimating) return
-        // Don't auto-scroll while the pen is actively drawing on ANY canvas —
-        // changing scrollOffsetY mid-stroke causes errant diagonal lines.
-        if (inkCanvas.isPenActive()) return
+        // Don't auto-scroll while the pen is active or was recently active on ANY canvas.
+        // Changing scrollOffsetY mid-word causes broken text across multiple lines.
+        if (inkCanvas.isPenRecentlyActive()) return
         if (shouldBlockScroll?.invoke() == true) return
 
         val strokes = host.columnModel.activeStrokes
