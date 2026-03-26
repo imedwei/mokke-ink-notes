@@ -403,6 +403,26 @@ class WritingCoordinator(
         return removed
     }
 
+    /**
+     * Apply a space change originating from the other column.
+     * Saves an undo snapshot so the shift can be independently undone.
+     * Does NOT fire [onSpaceChanged] to avoid recursion.
+     */
+    fun syncSpaceChange(anchorLine: Int, lineDelta: Int) {
+        saveSnapshot(UndoCoalescer.ActionType.SPACE_INSERTED)
+        if (lineDelta > 0) {
+            SpaceInsertMode.insertSpace(columnModel, lineSegmenter, anchorLine, lineDelta)
+        } else if (lineDelta < 0) {
+            SpaceInsertMode.removeSpace(columnModel, lineSegmenter, anchorLine, -lineDelta)
+        }
+        lineTextCache.keys.filter { it >= anchorLine }.forEach { lineTextCache.remove(it) }
+        inkCanvas.loadStrokes(columnModel.activeStrokes.toList())
+        inkCanvas.diagramAreas = columnModel.diagramAreas.toList()
+        displayManager.clearEverHiddenLines()
+        displayManager.displayHiddenLines()
+        Log.i(TAG, "Sync space change from other column: delta=$lineDelta at anchor=$anchorLine")
+    }
+
     // --- Text display sync ---
 
     /** Called when the text view is scrolled via overscroll. */
