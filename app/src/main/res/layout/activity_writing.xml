@@ -168,6 +168,18 @@
             android:contentDescription="Switch to cues"
             />
 
+        <ImageView
+            android:id="@+id/rotateButton"
+            android:layout_marginTop="16dp"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:padding="6dp"
+            android:src="@drawable/ic_screen_rotation"
+            android:background="?android:attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Rotate screen"
+            android:visibility="gone"
+            />
+
     </LinearLayout>
 
     <!-- Tutorial overlay: dimmed background + cutout + tooltip (covers entire screen) -->

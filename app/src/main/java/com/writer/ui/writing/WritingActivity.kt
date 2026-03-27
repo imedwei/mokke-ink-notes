@@ -81,6 +81,7 @@ class WritingActivity : AppCompatActivity() {
     private lateinit var menuButton: TextView
     private lateinit var undoButton: ImageView
     private lateinit var redoButton: ImageView
+    private lateinit var orientationManager: OrientationManager
     private lateinit var documentModel: DocumentModel
     private lateinit var recognizer: TextRecognizer
     @androidx.annotation.VisibleForTesting
@@ -97,6 +98,11 @@ class WritingActivity : AppCompatActivity() {
 
     // Current document name
     private var currentDocumentName: String = ""
+
+    // Auto-save: debounced 5s after last pen lift
+    private val autoSaveHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val autoSaveRunnable = Runnable { saveDocument() }
+    private val AUTO_SAVE_DELAY_MS = 5000L
 
     // Rename handwriting activity
     private val renameLauncher = registerForActivityResult(
@@ -173,6 +179,11 @@ class WritingActivity : AppCompatActivity() {
         // View toggle button in gutter — switches between Notes and Cues
         viewToggleButton = findViewById(R.id.viewToggleButton)
         viewToggleButton.setOnClickListener { toggleNotesCues() }
+
+        // Rotation button — manual landscape toggle when auto-rotate is off
+        val rotateButton = findViewById<ImageView>(R.id.rotateButton)
+        orientationManager = OrientationManager(this, rotateButton)
+        rotateButton.setOnClickListener { orientationManager.toggleOrientation() }
 
         // Cue canvas defers Onyx init — gets SDK session via hover-based swap in landscape.
         cueInkCanvas.deferOnyxInit = true
@@ -263,14 +274,25 @@ class WritingActivity : AppCompatActivity() {
         pendingRestore = DocumentStorage.load(this, currentDocumentName)
         restoreDocumentVisuals()
 
+        // Ensure search index exists (rebuild in background if missing)
+        lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            DocumentStorage.ensureSearchIndex(this@WritingActivity)
+        }
+
         // Update undo/redo buttons when pen lifts and track active canvas
         inkCanvas.onPenStateChanged = { active ->
             if (active) isCueCanvasActive = false
-            if (!active) gutterOverlay.post { updateUndoRedoButtons() }
+            if (!active) {
+                gutterOverlay.post { updateUndoRedoButtons() }
+                scheduleAutoSave()
+            }
         }
         cueInkCanvas.onPenStateChanged = { active ->
             if (active) isCueCanvasActive = true
-            if (!active) gutterOverlay.post { updateUndoRedoButtons() }
+            if (!active) {
+                gutterOverlay.post { updateUndoRedoButtons() }
+                scheduleAutoSave()
+            }
         }
 
         // Text view scroll drives canvas scroll (complementary views)
@@ -520,7 +542,7 @@ class WritingActivity : AppCompatActivity() {
 
     // --- Document operations ---
 
-    private fun switchToDocument(name: String) {
+    private fun switchToDocument(name: String, scrollToLine: Int? = null) {
         saveDocument()
 
         // Clear current state
@@ -572,6 +594,11 @@ class WritingActivity : AppCompatActivity() {
             coordinator?.start()
         }
         updateCueIndicatorStrip()
+
+        // Scroll to the specified line (from search match selection)
+        if (scrollToLine != null) {
+            inkCanvas.post { coordinator?.scrollToLine(scrollToLine) }
+        }
     }
 
     private fun newDocument() {
@@ -630,7 +657,19 @@ class WritingActivity : AppCompatActivity() {
         }
         container.addView(title)
 
-        // Divider under title
+        // Search field
+        val searchField = android.widget.EditText(this).apply {
+            hint = "Search documents..."
+            textSize = 20f
+            setTextColor(android.graphics.Color.BLACK)
+            setHintTextColor(android.graphics.Color.parseColor("#999999"))
+            setPadding(48, 16, 48, 16)
+            inputType = android.text.InputType.TYPE_CLASS_TEXT
+            background = null
+        }
+        container.addView(searchField)
+
+        // Divider under search
         container.addView(android.view.View(this).apply {
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, 2
@@ -638,29 +677,124 @@ class WritingActivity : AppCompatActivity() {
             setBackgroundColor(android.graphics.Color.parseColor("#AAAAAA"))
         })
 
+        // Scrollable document list
+        val scrollView = android.widget.ScrollView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f
+            )
+        }
+        val itemContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+        scrollView.addView(itemContainer)
+        container.addView(scrollView)
+
+        // Track item views for filtering
+        data class DocItem(
+            val name: String,
+            val nameView: View, val matchContainer: LinearLayout, val dividerView: View
+        )
+        val docItems = mutableListOf<DocItem>()
+        val activity = this
+
         // Document items
-        for (name in names) {
-            val item = android.widget.TextView(this).apply {
-                text = name
+        for (doc in docs) {
+            val itemLayout = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(48, 32, 48, 32)
+            }
+            val nameView = android.widget.TextView(this).apply {
+                text = doc.name
                 textSize = 24f
                 setTextColor(android.graphics.Color.BLACK)
-                setPadding(48, 32, 48, 32)
                 setBackgroundResource(android.R.drawable.list_selector_background)
                 setOnClickListener {
                     dialog.dismiss()
-                    switchToDocument(name)
+                    switchToDocument(doc.name)
                 }
             }
-            container.addView(item)
+            itemLayout.addView(nameView)
+
+            // Container for match snippets (populated dynamically during search)
+            val matchContainer = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+            }
+            itemLayout.addView(matchContainer)
+            itemContainer.addView(itemLayout)
 
             // Divider between items
-            container.addView(android.view.View(this).apply {
+            val divider = android.view.View(this).apply {
                 layoutParams = LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT, 1
                 ).apply { setMargins(32, 0, 32, 0) }
                 setBackgroundColor(android.graphics.Color.parseColor("#DDDDDD"))
-            })
+            }
+            itemContainer.addView(divider)
+            docItems.add(DocItem(doc.name, itemLayout, matchContainer, divider))
         }
+
+        // Load search index in background so dialog opens instantly
+        var index: Map<String, List<DocumentStorage.SearchMatch>> = emptyMap()
+        lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            val loaded = DocumentStorage.loadSearchIndex(this@WritingActivity)
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                index = loaded
+                // Re-trigger filter if user already typed something
+                val currentQuery = searchField.text?.toString() ?: ""
+                if (currentQuery.isNotEmpty()) {
+                    searchField.setText(searchField.text) // triggers afterTextChanged
+                    searchField.setSelection(currentQuery.length)
+                }
+            }
+        }
+
+        // Filter documents as user types
+        searchField.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: android.text.Editable?) {
+                val query = s?.toString()?.lowercase() ?: ""
+
+                for (doc in docItems) {
+                    val nameMatch = query.isEmpty() || doc.name.lowercase().contains(query)
+                    val lines = index[doc.name] ?: emptyList()
+                    val matchingLines = if (query.isNotEmpty()) {
+                        lines.filter { it.text.contains(query) }
+                    } else emptyList()
+                    val visible = nameMatch || matchingLines.isNotEmpty()
+                    doc.nameView.visibility = if (visible) View.VISIBLE else View.GONE
+                    doc.dividerView.visibility = if (visible) View.VISIBLE else View.GONE
+
+                    // Show clickable match snippets
+                    doc.matchContainer.removeAllViews()
+                    if (query.isNotEmpty() && matchingLines.isNotEmpty()) {
+                        for (match in matchingLines) {
+                            val matchIdx = match.text.indexOf(query)
+                            val snippetStart = (matchIdx - 20).coerceAtLeast(0)
+                            val snippetEnd = (matchIdx + query.length + 40).coerceAtMost(match.text.length)
+                            val prefix = if (snippetStart > 0) "..." else ""
+                            val suffix = if (snippetEnd < match.text.length) "..." else ""
+                            val snippet = "$prefix${match.text.substring(snippetStart, snippetEnd)}$suffix"
+
+                            val matchView = android.widget.TextView(activity).apply {
+                                text = snippet
+                                textSize = 16f
+                                setTextColor(android.graphics.Color.parseColor("#666666"))
+                                maxLines = 1
+                                ellipsize = android.text.TextUtils.TruncateAt.END
+                                setPadding(16, 8, 0, 8)
+                                setBackgroundResource(android.R.drawable.list_selector_background)
+                                setOnClickListener {
+                                    dialog.dismiss()
+                                    switchToDocument(doc.name, match.lineIndex)
+                                }
+                            }
+                            doc.matchContainer.addView(matchView)
+                        }
+                    }
+                }
+            }
+        })
 
         // Cancel button
         val cancel = android.widget.TextView(this).apply {
@@ -677,9 +811,10 @@ class WritingActivity : AppCompatActivity() {
 
         // Remove default dialog background so our border isn't clipped
         dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
+        val maxHeight = (resources.displayMetrics.heightPixels * 0.8).toInt()
         dialog.window?.setLayout(
             (resources.displayMetrics.density * 600).toInt(),
-            android.view.WindowManager.LayoutParams.WRAP_CONTENT
+            maxHeight.coerceAtMost(android.view.WindowManager.LayoutParams.WRAP_CONTENT)
         )
     }
 
@@ -808,6 +943,8 @@ class WritingActivity : AppCompatActivity() {
                 }
             }
         )
+
+        orientationManager.updateButtonVisibility()
     }
 
     /** Reset text/canvas to weight-based sizing so the system can measure for new orientation. */
@@ -1133,7 +1270,15 @@ class WritingActivity : AppCompatActivity() {
             viewToggleButton.contentDescription = "Switch to cues"
         }
         // Dim during tutorial basics (inactive), bright during Cornell phase or normal use
-        viewToggleButton.imageAlpha = if (tutorialManager.isActive && !tutorialManager.isCornellPhase()) 40 else 255
+        val dimmed = tutorialManager.isActive && !tutorialManager.isCornellPhase()
+        viewToggleButton.imageAlpha = if (dimmed) 40 else 255
+        // Hide rotate button during tutorial
+        val rotateBtn = findViewById<ImageView>(R.id.rotateButton)
+        if (tutorialManager.isActive) {
+            rotateBtn.visibility = View.GONE
+        } else {
+            orientationManager.updateButtonVisibility()
+        }
     }
 
     /** Show a floating preview of main content strokes (from context rail long-press). */
@@ -1251,14 +1396,25 @@ class WritingActivity : AppCompatActivity() {
         if (!tutorialManager.isActive) {
             inkCanvas.reinitializeRawDrawing()
         }
+        orientationManager.start()
     }
 
     override fun onStop() {
         super.onStop()
+        orientationManager.stop()
         saveDocument()
     }
 
+    private fun scheduleAutoSave() {
+        autoSaveHandler.removeCallbacks(autoSaveRunnable)
+        // Trigger recognition for uncached lines so the save captures all text
+        coordinator?.recognizeAllLines()
+        cueCoordinator?.recognizeAllLines()
+        autoSaveHandler.postDelayed(autoSaveRunnable, AUTO_SAVE_DELAY_MS)
+    }
+
     private fun saveDocument() {
+        autoSaveHandler.removeCallbacks(autoSaveRunnable)
         if (tutorialManager.isActive) return // Don't save tutorial state as a document
         val mainState = coordinator?.getState() ?: return
         // Merge cue column state if active
