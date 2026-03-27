@@ -285,10 +285,60 @@ class DiagramManager(
                     }
                 }
             }
-            diagramTextCache[area.startLineIndex] = results
-            Log.d(TAG, "Diagram area ${area.startLineIndex}: recognized ${results.size} groups: ${results.map { it.text }}")
+            // Merge adjacent text groups on the same visual row — fixes cases where
+            // a capital letter (e.g., "E" in "Empathy") gets separated from the rest
+            // of the word by the grouping/splitting pipeline.
+            for (r in results) {
+                Log.d(TAG, "  Pre-merge group: \"${r.text}\" center=(${r.centerX.toInt()},${r.centerY.toInt()})")
+            }
+            val merged = mergeAdjacentTextGroups(results, ls)
+            diagramTextCache[area.startLineIndex] = merged
+            Log.d(TAG, "Diagram area ${area.startLineIndex}: recognized ${merged.size} groups (${results.size} before merge): ${merged.map { it.text }}")
             host.onDiagramAreasChanged()
         }
+    }
+
+    /**
+     * Merge adjacent text groups that are on the same visual row.
+     * Two groups merge if their Y-centers are within 0.5×LS and they are
+     * horizontally adjacent. Uses center-to-center X distance with a generous
+     * threshold since we don't have bounding boxes for recognized groups.
+     */
+    private fun mergeAdjacentTextGroups(
+        groups: List<DiagramTextGroup>,
+        lineSpacing: Float
+    ): List<DiagramTextGroup> {
+        if (groups.size < 2) return groups
+
+        val maxYGap = lineSpacing * 0.6f
+
+        // Sort by Y then X for left-to-right, top-to-bottom ordering
+        val sorted = groups.sortedWith(compareBy({ it.centerY }, { it.centerX }))
+        val merged = mutableListOf<DiagramTextGroup>()
+        var current = sorted.first()
+
+        for (i in 1 until sorted.size) {
+            val next = sorted[i]
+            val yGap = kotlin.math.abs(next.centerY - current.centerY)
+            // X threshold: generous — center-to-center can be large even for adjacent text.
+            // Use 2×LS as base plus allowance for text width.
+            val maxXGap = lineSpacing * 2.0f
+
+            if (yGap < maxYGap && next.centerX > current.centerX && next.centerX - current.centerX < maxXGap) {
+                // Merge: concatenate text, update center, union stroke IDs
+                current = DiagramTextGroup(
+                    text = current.text + next.text,
+                    centerX = (current.centerX + next.centerX) / 2f,
+                    centerY = (current.centerY + next.centerY) / 2f,
+                    strokeIds = current.strokeIds + next.strokeIds
+                )
+            } else {
+                merged.add(current)
+                current = next
+            }
+        }
+        merged.add(current)
+        return merged
     }
 
     private fun buildPreContext(lineIndex: Int, lineTextCache: Map<Int, String>): String =
