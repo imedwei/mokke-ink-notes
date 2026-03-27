@@ -30,14 +30,26 @@ class ParagraphBuilder(private val strokeClassifier: StrokeClassifier) {
         lineIndex: Int,
         text: String?,
         lineStrokes: List<InkStroke>?,
-        writingWidth: Float
+        writingWidth: Float,
+        nextLineStrokes: List<InkStroke>? = null
     ): LineInfo? {
         if (text.isNullOrEmpty() || text == "[?]") return null
 
         val isList = lineStrokes != null &&
             strokeClassifier.findListMarkerStrokeId(lineStrokes, writingWidth) != null
-        val isHeading = lineStrokes != null &&
+
+        // Check for underline on the same line first
+        var isHeading = lineStrokes != null &&
             strokeClassifier.findUnderlineStrokeId(lineStrokes, lineIndex) != null
+
+        // If no underline on same line, check the next line — the underline's center
+        // of mass may have placed it on line N+1 (drawn at the bottom of text).
+        // Use line N's text strokes for the width comparison.
+        if (!isHeading && lineStrokes != null && !nextLineStrokes.isNullOrEmpty()) {
+            isHeading = strokeClassifier.findUnderlineStrokeIdFromAdjacentLine(
+                nextLineStrokes, lineIndex, lineStrokes
+            ) != null
+        }
 
         return LineInfo(lineIndex, text, isList, isHeading)
     }

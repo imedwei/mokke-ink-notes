@@ -328,10 +328,12 @@ class WritingCoordinator(
         }
         if (overlapping.isEmpty()) return
 
-        // Expand to include the full connected word: strokes on the same line
-        // that were written close in time and are spatially adjacent. This ensures
-        // e.g. the crossbar of 't' is removed along with the rest of "entry".
-        val expanded = expandToConnectedWord(overlapping, columnModel.activeStrokes)
+        // Expand to include the full connected word within the scratch-out region:
+        // strokes on the same line that were written close in time and overlap or
+        // are near the scratch-out bounding box. This ensures e.g. the crossbar of
+        // 't' is removed along with the rest of "entry", but doesn't jump to
+        // adjacent words outside the scratch-out region.
+        val expanded = expandToConnectedWord(overlapping, columnModel.activeStrokes, left, top, right, bottom)
 
         saveSnapshot(UndoCoalescer.ActionType.SCRATCH_OUT)
 
@@ -355,48 +357,43 @@ class WritingCoordinator(
     }
 
     /**
-     * Expand a set of directly-overlapping strokes to include the full connected word.
-     * A stroke is "connected" if it's on the same line, spatially adjacent (X gap < LS),
-     * and was written close in time (< 2s gap). This ensures that e.g. the crossbar
-     * of 't' is removed along with the rest of the word.
+     * Expand a set of directly-overlapping strokes to include the full connected word
+     * within the scratch-out region. A stroke is included if it's on the same line,
+     * overlaps or is near the scratch-out bounding box, and was written close in time.
+     * This catches fragments like the crossbar of 't' without jumping to adjacent words.
      */
     private fun expandToConnectedWord(
         directHits: List<InkStroke>,
-        allStrokes: List<InkStroke>
+        allStrokes: List<InkStroke>,
+        scratchLeft: Float, scratchTop: Float, scratchRight: Float, scratchBottom: Float
     ): List<InkStroke> {
         if (directHits.isEmpty()) return directHits
 
         val ls = ScreenMetrics.lineSpacing
-        val maxXGap = ls * 1.5f  // spatial adjacency threshold
-        val maxTimeGap = 2000L   // temporal adjacency (ms)
+        val margin = ls * 0.5f  // small margin around scratch-out box for nearby fragments
+        val maxTimeGap = 2000L
 
-        // Find the line(s) the direct hits are on
         val hitLines = directHits.map { lineSegmenter.getStrokeLineIndex(it) }.toSet()
 
-        // Gather all strokes on the same lines as candidates for expansion
-        val sameLine = allStrokes.filter { stroke ->
-            lineSegmenter.getStrokeLineIndex(stroke) in hitLines
+        // Candidates: same line, within or near the scratch-out bounding box
+        val candidates = allStrokes.filter { stroke ->
+            lineSegmenter.getStrokeLineIndex(stroke) in hitLines &&
+                stroke.maxX >= scratchLeft - margin &&
+                stroke.minX <= scratchRight + margin &&
+                stroke.maxY >= scratchTop - margin &&
+                stroke.minY <= scratchBottom + margin
         }
 
-        // BFS expansion: start from direct hits, grow to include adjacent strokes
+        // Include candidates that are temporally connected to the direct hits
         val included = directHits.map { it.strokeId }.toMutableSet()
-        var changed = true
-        while (changed) {
-            changed = false
-            for (candidate in sameLine) {
-                if (candidate.strokeId in included) continue
-                // Check if candidate is adjacent to any included stroke
-                val isAdjacent = sameLine.filter { it.strokeId in included }.any { inc ->
-                    val xGap = kotlin.math.max(0f,
-                        kotlin.math.max(candidate.minX - inc.maxX, inc.minX - candidate.maxX)
-                    )
-                    val timeGap = kotlin.math.abs(candidate.startTime - inc.endTime)
-                    xGap < maxXGap && timeGap < maxTimeGap
-                }
-                if (isAdjacent) {
-                    included.add(candidate.strokeId)
-                    changed = true
-                }
+        for (candidate in candidates) {
+            if (candidate.strokeId in included) continue
+            val isTemporallyConnected = directHits.any { hit ->
+                kotlin.math.abs(candidate.startTime - hit.endTime) < maxTimeGap ||
+                    kotlin.math.abs(hit.startTime - candidate.endTime) < maxTimeGap
+            }
+            if (isTemporallyConnected) {
+                included.add(candidate.strokeId)
             }
         }
 
@@ -508,7 +505,7 @@ class WritingCoordinator(
         val writingWidth = inkCanvas.width.toFloat()
 
         val classifiedLines = lineTextCache.keys.sorted().filter { !diagramManager.isDiagramLine(it) }.mapNotNull { lineIdx ->
-            paragraphBuilder.classifyLine(lineIdx, lineTextCache[lineIdx], strokesByLine[lineIdx], writingWidth)
+            paragraphBuilder.classifyLine(lineIdx, lineTextCache[lineIdx], strokesByLine[lineIdx], writingWidth, strokesByLine[lineIdx + 1])
         }
 
         val grouped = paragraphBuilder.groupIntoParagraphs(classifiedLines, strokesByLine, writingWidth, columnModel.diagramAreas)
