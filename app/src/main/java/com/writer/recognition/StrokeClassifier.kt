@@ -106,9 +106,64 @@ class StrokeClassifier(private val lineSegmenter: LineSegmenter) {
     }
 
     /**
-     * Filter out the list marker and underline strokes before recognition.
+     * Find an underline stroke on the NEXT line that visually belongs to the line above.
+     * The underline's center of mass may place it on line N+1, but it spans the text
+     * width of line N. Uses line N's position for the bottom-of-line check.
+     *
+     * @param nextLineStrokes strokes assigned to line N+1
+     * @param textLineIndex the line index of the text (N)
+     * @param textLineStrokes strokes on line N (used for text width measurement)
      */
-    fun filterMarkerStrokes(strokes: List<InkStroke>, writingWidth: Float): List<InkStroke> {
+    fun findUnderlineStrokeIdFromAdjacentLine(
+        nextLineStrokes: List<InkStroke>,
+        textLineIndex: Int,
+        textLineStrokes: List<InkStroke>
+    ): String? {
+        if (nextLineStrokes.isEmpty() || textLineStrokes.isEmpty()) return null
+
+        val lineTop = lineSegmenter.getLineY(textLineIndex)
+        val textMinX = textLineStrokes.minOf { s -> s.minX }
+        val textMaxX = textLineStrokes.maxOf { s -> s.maxX }
+        val textWidth = textMaxX - textMinX
+        if (textWidth <= 0f) return null
+
+        for (stroke in nextLineStrokes) {
+            // Must be horizontal, flat, simple
+            if (stroke.yRange > stroke.xRange * UNDERLINE_MAX_HEIGHT_RATIO) continue
+            if (stroke.xRange < UNDERLINE_MIN_WIDTH) continue
+            if (stroke.pathLength > stroke.diagonal * SIMPLICITY_MAX_RATIO) continue
+
+            // Must be near the bottom of line N (between 50%-120% of line N's spacing)
+            if (stroke.minY < lineTop + HandwritingCanvasView.LINE_SPACING * UNDERLINE_TOP_FRACTION) continue
+
+            // Must span at least 80% of the text on line N
+            if (stroke.xRange >= textWidth * UNDERLINE_MIN_TEXT_COVERAGE) {
+                return stroke.strokeId
+            }
+        }
+
+        return null
+    }
+
+    /**
+     * Filter out the list marker and underline strokes before recognition.
+     * @param additionalExcludeIds stroke IDs consumed as heading underlines
+     *        for the line above (their center of mass placed them on this line).
+     */
+    /**
+     * Filter out the list marker and underline strokes before recognition.
+     * Also checks if any stroke on this line is a heading underline for the
+     * line above (its center of mass placed it here, but it visually belongs
+     * to the line above as a heading marker).
+     *
+     * @param prevLineStrokes strokes on the line above, used to check if
+     *        a stroke here is a heading underline for that line.
+     */
+    fun filterMarkerStrokes(
+        strokes: List<InkStroke>,
+        writingWidth: Float,
+        prevLineStrokes: List<InkStroke>? = null
+    ): List<InkStroke> {
         val excludeIds = mutableSetOf<String>()
 
         val markerId = findListMarkerStrokeId(strokes, writingWidth)
@@ -117,6 +172,14 @@ class StrokeClassifier(private val lineSegmenter: LineSegmenter) {
         val lineIndex = lineSegmenter.getStrokeLineIndex(strokes.first())
         val underlineId = findUnderlineStrokeId(strokes, lineIndex)
         if (underlineId != null) excludeIds.add(underlineId)
+
+        // Check if any stroke here is a heading underline for the line above
+        if (!prevLineStrokes.isNullOrEmpty()) {
+            val adjacentUnderlineId = findUnderlineStrokeIdFromAdjacentLine(
+                strokes, lineIndex - 1, prevLineStrokes
+            )
+            if (adjacentUnderlineId != null) excludeIds.add(adjacentUnderlineId)
+        }
 
         return if (excludeIds.isEmpty()) strokes else strokes.filter { it.strokeId !in excludeIds }
     }

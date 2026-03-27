@@ -224,7 +224,7 @@ class DisplayManager(
         val classifiedLines = currentlyHidden.sorted()
             .filter { !host.diagramManager.isDiagramLine(it) }
             .mapNotNull { lineIdx ->
-                paragraphBuilder.classifyLine(lineIdx, host.lineTextCache[lineIdx], strokesByLine[lineIdx], writingWidth)
+                paragraphBuilder.classifyLine(lineIdx, host.lineTextCache[lineIdx], strokesByLine[lineIdx], writingWidth, strokesByLine[lineIdx + 1])
             }
 
         val grouped = paragraphBuilder.groupIntoParagraphs(classifiedLines, strokesByLine, writingWidth, host.columnModel.diagramAreas)

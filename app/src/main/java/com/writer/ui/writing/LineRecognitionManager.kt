@@ -102,7 +102,10 @@ class LineRecognitionManager(
                 recognizingLines.remove(lineIndex)
                 return null
             }
-            val strokes = strokeClassifier.filterMarkerStrokes(allStrokes, canvasWidthProvider())
+            val prevLineStrokes = lineSegmenter.getStrokesForLine(
+                columnModel.activeStrokes, lineIndex - 1
+            ).takeIf { it.isNotEmpty() }
+            val strokes = strokeClassifier.filterMarkerStrokes(allStrokes, canvasWidthProvider(), prevLineStrokes)
             if (strokes.isEmpty()) {
                 recognizingLines.remove(lineIndex)
                 return null
