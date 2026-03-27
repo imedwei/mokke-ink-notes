@@ -725,10 +725,14 @@ class WritingActivity : AppCompatActivity() {
         super.onConfigurationChanged(newConfig)
         val nowLandscape = newConfig.orientation == Configuration.ORIENTATION_LANDSCAPE
         if (nowLandscape == isLandscape) return
+
+        // Unfold from cue view BEFORE updating isLandscape — unfoldToNotes()
+        // checks isLandscape and returns early if already landscape.
+        if (nowLandscape && isFoldedToCues) unfoldToNotes()
+
         isLandscape = nowLandscape
 
         if (isLandscape) {
-            if (isFoldedToCues) unfoldToNotes()
             cueIndicatorStrip.visibility = View.GONE
         } else {
             // Close shared SDK first, before views change size
