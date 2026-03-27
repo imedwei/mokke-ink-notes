@@ -253,36 +253,57 @@ object TutorialDemoContent {
     }
 
     /**
-     * Generate a realistic scratch-out: tight back-and-forth horizontal scribble
-     * concentrated over the target, like a human rapidly scribbling to erase.
+     * Generate a realistic scratch-out: dense diagonal back-and-forth scribble
+     * with varying stroke angles and irregular spacing, like a human rapidly
+     * scribbling to obliterate content.
      */
     fun generateScratchOut(cx: Float, cy: Float, width: Float, height: Float): InkStroke {
         val halfW = width / 2f
+        val halfH = height / 2f
         val pts = mutableListOf<StrokePoint>()
         var t = 0L
         val random = java.util.Random(cx.toLong() + cy.toLong())
 
-        // 6 rapid back-and-forth sweeps, each with slight vertical drift
-        val sweeps = 6
+        // 10 dense diagonal sweeps with varying angles
+        val sweeps = 10
         for (sweep in 0 until sweeps) {
-            val goingRight = sweep % 2 == 0
-            val yBase = cy + (sweep - sweeps / 2f + 0.5f) * (height * 0.15f)
-            // ~8 points per sweep with random variation
-            val numPoints = 8 + random.nextInt(4)
+            // Alternate between top-left→bottom-right and bottom-left→top-right
+            val goingDown = sweep % 2 == 0
+            // Each sweep has a slightly different angle (±15° from diagonal)
+            val angleOffset = (random.nextFloat() - 0.5f) * 0.5f
+            // Shift each sweep horizontally so they don't all overlap perfectly
+            val xShift = (random.nextFloat() - 0.5f) * width * 0.3f
+            val yShift = (random.nextFloat() - 0.5f) * height * 0.2f
+
+            val numPoints = 6 + random.nextInt(5)
             for (i in 0..numPoints) {
                 val frac = i.toFloat() / numPoints
-                val xFrac = if (goingRight) frac else 1f - frac
-                // Add horizontal jitter so strokes aren't perfectly uniform
-                val xJitter = (random.nextFloat() - 0.5f) * width * 0.06f
-                // Slight vertical wobble
-                val yJitter = (random.nextFloat() - 0.5f) * height * 0.15f
+                val progress = if (goingDown) frac else 1f - frac
+
+                // Diagonal path from one corner to the opposite
+                val baseX = cx - halfW + width * frac + xShift
+                val baseY = if (goingDown) {
+                    cy - halfH + height * progress + yShift
+                } else {
+                    cy + halfH - height * progress + yShift
+                }
+
+                // Apply angle offset as perpendicular displacement
+                val perpX = -angleOffset * (progress - 0.5f) * height
+                val perpY = angleOffset * (frac - 0.5f) * width * 0.3f
+
+                // Irregular jitter — more at the edges, less at center
+                val edgeFactor = 1f + 2f * kotlin.math.abs(frac - 0.5f)
+                val xJitter = (random.nextFloat() - 0.5f) * width * 0.08f * edgeFactor
+                val yJitter = (random.nextFloat() - 0.5f) * height * 0.12f * edgeFactor
+
                 pts.add(StrokePoint(
-                    x = cx - halfW + width * xFrac + xJitter,
-                    y = yBase + yJitter,
-                    pressure = 0.5f,
+                    x = baseX + perpX + xJitter,
+                    y = baseY + perpY + yJitter,
+                    pressure = 0.4f + random.nextFloat() * 0.3f,
                     timestamp = t
                 ))
-                t += 8L
+                t += 6L
             }
         }
         return InkStroke(points = pts)
