@@ -54,6 +54,10 @@ class DiagramManager(
     // Diagram text: recognized text groups keyed by diagram area start line
     private val diagramTextCache = mutableMapOf<Int, List<DiagramTextGroup>>()
 
+    /** Get all recognized diagram text groups for the context rail minimap. */
+    fun getAllDiagramTextGroups(): List<DiagramTextGroup> =
+        diagramTextCache.values.flatten()
+
     /** Check if a line index falls inside any diagram area. */
     fun isDiagramLine(lineIdx: Int): Boolean =
         columnModel.diagramAreas.any { it.containsLine(lineIdx) }

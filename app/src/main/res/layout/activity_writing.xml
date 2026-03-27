@@ -91,13 +91,14 @@
         android:layout_gravity="end"
         android:visibility="gone" />
 
-    <!-- Context rail (portrait cue view: left edge, minimap of main content) -->
-    <com.writer.view.ContextRail
+    <!-- Context rail (portrait cue view: left edge, main content indicator + peek) -->
+    <com.writer.view.CueIndicatorStrip
         android:id="@+id/contextRail"
         android:layout_width="40dp"
         android:layout_height="match_parent"
         android:layout_gravity="start"
         android:visibility="gone" />
+
 
     <!-- Floating gutter overlay: menu + undo + redo (top-right, independent of views) -->
     <LinearLayout

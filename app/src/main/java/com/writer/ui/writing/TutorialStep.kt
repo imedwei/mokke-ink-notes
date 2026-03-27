@@ -18,7 +18,13 @@ data class TutorialStep(
     /** Where to position the tooltip relative to the cutout. */
     val tooltipPosition: TooltipPosition,
     /** What input type this step accepts in the cutout zone. */
-    val acceptsInput: InputType
+    val acceptsInput: InputType,
+    /** True for the final step — changes "Skip" to "Finish" with filled style. */
+    val isLastStep: Boolean = false,
+    /** Optional secondary tooltip anchored to a specific screen rect (e.g., the cue strip). */
+    val anchorTooltipText: String? = null,
+    /** Screen rect of the anchor element — tooltip is drawn adjacent to it. */
+    val anchorTooltipRect: Rect? = null
 ) {
     enum class TooltipPosition {
         ABOVE, BELOW, CENTER

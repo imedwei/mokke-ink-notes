@@ -146,6 +146,25 @@ object TutorialDemoContent {
     }
 
     /**
+     * Generate demo cue strokes for the peek tutorial step.
+     * Places short annotations at lines 0 and 1 so cue dots appear on the indicator strip.
+     */
+    fun generateCueStrokes(
+        font: HersheyFont,
+        canvasWidth: Float,
+        lineSpacing: Float,
+        topMargin: Float
+    ): List<InkStroke> {
+        val scale = lineSpacing * 0.8f / 24f
+        val jitter = scale * 0.25f
+        val margin = canvasWidth * 0.05f
+        val strokes = mutableListOf<InkStroke>()
+        strokes.addAll(font.textToStrokes("Key topic", margin, topMargin + lineSpacing * 0.4f, scale, jitter))
+        strokes.addAll(font.textToStrokes("Why?", margin, topMargin + lineSpacing * 1.4f, scale, jitter))
+        return strokes
+    }
+
+    /**
      * Data class for the showcase document: strokes + diagram area.
      */
     data class ShowcaseDocument(

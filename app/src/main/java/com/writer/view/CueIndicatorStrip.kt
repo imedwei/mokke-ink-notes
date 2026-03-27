@@ -47,8 +47,6 @@ class CueIndicatorStrip @JvmOverloads constructor(
         for (area in cueDiagramAreas) {
             for (l in area.startLineIndex..area.endLineIndex) diagramLines.add(l)
         }
-        val allOccupied = (cueLineIndices + diagramLines).filter { it in cueLineIndices || it in diagramLines }.sorted()
-        // Only include lines that are actually occupied (stroke or diagram)
         val occupied = (cueLineIndices + diagramLines).sorted()
         if (occupied.isEmpty()) { visualBlocks = emptyList(); return }
 
@@ -77,6 +75,10 @@ class CueIndicatorStrip @JvmOverloads constructor(
             field = value
             post { invalidate() }
         }
+
+    /** If true, visual elements are left-aligned (for left-side rail).
+     *  If false (default), right-aligned (for right-side cue strip). */
+    var alignLeft: Boolean = false
 
     /** Called when the strip is tapped — triggers fold to cue view. */
     var onTap: (() -> Unit)? = null
@@ -112,11 +114,12 @@ class CueIndicatorStrip @JvmOverloads constructor(
         super.onDraw(canvas)
 
         val visualWidth = ScreenMetrics.dp(16f)
-        val stripLeft = width - visualWidth
+        val stripX = if (alignLeft) 0f else width - visualWidth
+        val lineX = if (alignLeft) visualWidth else stripX
 
-        canvas.drawLine(stripLeft, canvasTopOffset, stripLeft, height.toFloat(), linePaint)
+        canvas.drawLine(lineX, canvasTopOffset, lineX, height.toFloat(), linePaint)
 
-        val cx = stripLeft + visualWidth / 2
+        val cx = stripX + visualWidth / 2
         for (block in visualBlocks) {
             if (block.first == block.last) {
                 // Single-line block: draw a dot
@@ -133,6 +136,21 @@ class CueIndicatorStrip @JvmOverloads constructor(
                 }
             }
         }
+    }
+
+    /** Returns the screen rect bounding all visible content indicators (dots/segments). */
+    fun getContentScreenRect(): android.graphics.Rect? {
+        if (visualBlocks.isEmpty()) return null
+        val loc = IntArray(2)
+        getLocationOnScreen(loc)
+        val topY = dotScreenY(visualBlocks.first().first)
+        val bottomY = dotScreenY(visualBlocks.last().last)
+        return android.graphics.Rect(
+            loc[0],
+            loc[1] + topY.toInt(),
+            loc[0] + width,
+            loc[1] + bottomY.toInt()
+        )
     }
 
     /** Compute the screen Y position of a dot for a given line index. */
