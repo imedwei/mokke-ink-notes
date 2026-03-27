@@ -24,16 +24,20 @@ class LineSegmenter {
     }
 
     /**
-     * Returns the line index for a stroke, based on its vertical centroid.
+     * Returns the line index for a stroke, based on the vertical center of mass
+     * of all sample points.
      *
-     * The centroid (midpoint of Y bounding box) is more stable than the first
-     * point because it represents where the bulk of the stroke sits, regardless
-     * of stroke direction or starting position.
+     * Unlike the bounding box centroid ((minY + maxY) / 2), the center of mass
+     * naturally weights the x-height zone where most points concentrate. A 'p'
+     * has many points in the letter body and fewer in the descender, so the
+     * center of mass stays on the correct line. This is the approach recommended
+     * by handwriting recognition literature for stroke-to-line assignment.
      */
     fun getStrokeLineIndex(stroke: InkStroke): Int {
-        val minY = stroke.points.minOf { it.y }
-        val maxY = stroke.points.maxOf { it.y }
-        return getLineIndex((minY + maxY) / 2f)
+        if (stroke.points.isEmpty()) return 0
+        // Center of mass of all Y-coordinates — weighted toward the letter body
+        val yMean = stroke.points.sumOf { it.y.toDouble() }.toFloat() / stroke.points.size
+        return getLineIndex(yMean)
     }
 
     /** Returns the document-space Y for the top of a line index. */
