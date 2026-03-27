@@ -571,6 +571,7 @@ class WritingActivity : AppCompatActivity() {
             inkCanvas.drawToSurface()
             coordinator?.start()
         }
+        updateCueIndicatorStrip()
     }
 
     private fun newDocument() {
@@ -596,6 +597,7 @@ class WritingActivity : AppCompatActivity() {
 
         coordinator?.start()
         inkCanvas.drawToSurface()
+        updateCueIndicatorStrip()
     }
 
     private fun showOpenDialog() {

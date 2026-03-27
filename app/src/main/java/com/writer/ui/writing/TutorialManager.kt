@@ -5,6 +5,10 @@ import android.graphics.Rect
 import android.widget.LinearLayout
 import com.writer.model.DocumentData
 import com.writer.model.InkStroke
+import com.writer.model.minX
+import com.writer.model.maxX
+import com.writer.model.minY
+import com.writer.model.maxY
 import com.writer.view.HandwritingCanvasView
 import com.writer.view.RecognizedTextView
 import com.writer.view.TutorialOverlay
@@ -168,7 +172,7 @@ class TutorialManager(
             TutorialStep(
                 id = "erase",
                 cutoutRect = null,
-                tooltipText = "Scribble over content to erase",
+                tooltipText = "Scribble/strike content to erase",
                 tooltipPosition = TutorialStep.TooltipPosition.CENTER,
                 acceptsInput = TutorialStep.InputType.PEN
             ),
@@ -316,27 +320,8 @@ class TutorialManager(
 
     /** Load ghost animations for the current step (overlay on the persistent showcase doc). */
     private fun loadStepGhosts(stepId: String) {
-        val ls = com.writer.view.HandwritingCanvasView.LINE_SPACING
-        val tm = com.writer.view.HandwritingCanvasView.TOP_MARGIN
-        val canvasWidth = inkCanvas.width.toFloat()
-
         val ghosts = when (stepId) {
-            "erase" -> {
-                // Ghost strikethrough over the text area + scratch-out over diagram
-                listOf(
-                    TutorialDemoContent.generateStrikethrough(
-                        startX = canvasWidth * 0.05f,
-                        endX = canvasWidth * 0.5f,
-                        y = tm + ls * 1.55f
-                    ),
-                    TutorialDemoContent.generateScratchOut(
-                        cx = canvasWidth * 0.35f,
-                        cy = tm + ls * 4f,
-                        width = ls * 2f,
-                        height = ls * 1f
-                    )
-                )
-            }
+            "erase" -> buildEraseGhosts()
             else -> emptyList()
         }
 
@@ -361,6 +346,42 @@ class TutorialManager(
         inkCanvas.resumeRawDrawing()
     }
     private var stepActionReceived = false
+    /** Build erase ghost strokes by looking up actual content positions. */
+    private fun buildEraseGhosts(): List<InkStroke> {
+        val segmenter = com.writer.recognition.LineSegmenter()
+        val colModel = inkCanvas.columnModel ?: return emptyList()
+        val strokesByLine = segmenter.groupByLine(colModel.activeStrokes)
+        val ghosts = mutableListOf<InkStroke>()
+
+        // Strikethrough over "timeline" — right half of line 2 strokes
+        val line2 = strokesByLine[2]
+        if (line2 != null && line2.isNotEmpty()) {
+            val allMinX = line2.minOf { it.minX }
+            val allMaxX = line2.maxOf { it.maxX }
+            val midX = (allMinX + allMaxX) / 2f
+            // "timeline" is the right portion of "- Launch timeline"
+            val rightStrokes = line2.filter { it.minX > midX }
+            if (rightStrokes.isNotEmpty()) {
+                val startX = rightStrokes.minOf { it.minX }
+                val endX = rightStrokes.maxOf { it.maxX }
+                val centerY = rightStrokes.flatMap { it.points }.map { it.y }.average().toFloat()
+                ghosts.add(TutorialDemoContent.generateStrikethrough(startX, endX, centerY))
+            }
+        }
+
+        // Scratch-out over "Launch!" — strokes in lines 5-6 (ellipse + text in diagram)
+        val diagramLines = (5..6).flatMap { strokesByLine[it] ?: emptyList() }
+        if (diagramLines.isNotEmpty()) {
+            val cx = (diagramLines.minOf { it.minX } + diagramLines.maxOf { it.maxX }) / 2f
+            val cy = (diagramLines.minOf { it.minY } + diagramLines.maxOf { it.maxY }) / 2f
+            val width = diagramLines.maxOf { it.maxX } - diagramLines.minOf { it.minX }
+            val height = diagramLines.maxOf { it.maxY } - diagramLines.minOf { it.minY }
+            ghosts.add(TutorialDemoContent.generateScratchOut(cx, cy, width, height))
+        }
+
+        return ghosts
+    }
+
     private var scrollTextAppeared = false
 
     private val scrollCheckRunnable = Runnable {
