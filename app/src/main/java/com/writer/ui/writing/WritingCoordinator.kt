@@ -711,7 +711,10 @@ class WritingCoordinator(
 
     // --- State persistence ---
 
-    /** Get the column-level state for this coordinator's column. */
+    /** Get a snapshot of the recognized text cache. */
+    fun getLineTextCacheSnapshot(): Map<Int, String> = lineTextCache.toMap()
+
+
     fun getColumnState(): ColumnData {
         return ColumnData(
             strokes = inkCanvas.getStrokes(),

@@ -39,6 +39,19 @@ class TutorialManager(
     var isActive = false
         private set
 
+    /** The ID of the current tutorial step (e.g., "write", "peek_cue"). */
+    val currentStepId: String?
+        get() = if (isActive && currentStepIndex < steps.size) steps[currentStepIndex].id else null
+
+    /** Called when the tutorial step changes — activity can update UI (e.g., toggle button). */
+    var onStepChanged: (() -> Unit)? = null
+
+    /** Returns the screen rect of the context rail strip (for anchored tooltips). */
+    var getContextRailRect: (() -> Rect?)? = null
+
+    /** Called when the user taps Next — activity can perform the skipped action (e.g., fold to cues). */
+    var onNextStep: ((stepId: String) -> Unit)? = null
+
     private var overlay: TutorialOverlay? = null
     private var hersheyFont: HersheyFont? = null
     private var currentStepIndex = 0
@@ -67,6 +80,25 @@ class TutorialManager(
     fun setOverlay(overlay: TutorialOverlay) {
         this.overlay = overlay
         overlay.onSkip = { close() }
+        overlay.onNext = { next() }
+    }
+
+    /** Advance to the next step (called from the Next button). */
+    fun next() {
+        if (!isActive) return
+        if (currentStepIndex >= steps.size - 1) {
+            close()
+            return
+        }
+        val skippedStepId = steps[currentStepIndex].id
+        advanceHandler.removeCallbacks(advanceRunnable)
+        // Let the activity perform the skipped step's action (e.g., fold to cues)
+        onNextStep?.invoke(skippedStepId)
+        currentStepIndex++
+        showCurrentStep()
+        inkCanvas.pauseRawDrawing()
+        inkCanvas.drawToSurface()
+        inkCanvas.resumeRawDrawing()
     }
 
     fun show() {
@@ -118,6 +150,7 @@ class TutorialManager(
         // Canvas rect in screen coordinates for the cutout
         // (computed when showing each step since layout may change)
         return listOf(
+            // Phase 1: Editor basics
             TutorialStep(
                 id = "write",
                 cutoutRect = null,  // computed dynamically
@@ -145,8 +178,36 @@ class TutorialManager(
                 tooltipText = "Scroll with your finger",
                 tooltipPosition = TutorialStep.TooltipPosition.CENTER,
                 acceptsInput = TutorialStep.InputType.FINGER
+            ),
+            // Phase 2: Cornell Notes
+            TutorialStep(
+                id = "switch_to_cues",
+                cutoutRect = null,
+                tooltipText = "Tap the lightbulb to add cues",
+                tooltipPosition = TutorialStep.TooltipPosition.CENTER,
+                acceptsInput = TutorialStep.InputType.ANY
+            ),
+            TutorialStep(
+                id = "peek_note",
+                cutoutRect = null,
+                tooltipText = "Peek at your notes",
+                tooltipPosition = TutorialStep.TooltipPosition.CENTER,
+                acceptsInput = TutorialStep.InputType.FINGER
+            ),
+            TutorialStep(
+                id = "write_cue",
+                cutoutRect = null,
+                tooltipText = "Write a cue — annotate your notes",
+                tooltipPosition = TutorialStep.TooltipPosition.CENTER,
+                acceptsInput = TutorialStep.InputType.PEN
             )
         )
+    }
+
+    /** Whether the current step is in the Cornell Notes phase (toggle button should be active). */
+    fun isCornellPhase(): Boolean {
+        if (!isActive || currentStepIndex >= steps.size) return false
+        return steps[currentStepIndex].id in listOf("switch_to_cues", "write_cue", "peek_note")
     }
 
     private fun getCanvasScreenRect(): Rect {
@@ -203,17 +264,38 @@ class TutorialManager(
 
         val step = steps[currentStepIndex]
         // For scroll step, reveal the full screen (canvas + preview) so user sees text appear
-        val cutout = if (step.id == "scroll") {
+        val cutout = if (step.id == "scroll" || step.id == "switch_to_cues" || step.id == "peek_note") {
+            // Full screen so user can access scroll, gutter toggle, or cue strip
             Rect(0, 0, inkCanvas.rootView.width, inkCanvas.rootView.height)
         } else {
             getCanvasScreenRect()
         }
-        overlay.currentStep = step.copy(cutoutRect = cutout)
+        val isLast = currentStepIndex == steps.size - 1
+        overlay.currentStep = step.copy(
+            cutoutRect = cutout,
+            isLastStep = isLast
+        )
         overlay.stepIndex = currentStepIndex
         overlay.totalSteps = steps.size
 
+        // Defer anchor tooltip for peek_note — layout must complete after fold
+        if (step.id == "peek_note") {
+            overlay.post {
+                val anchorRect = getContextRailRect?.invoke()
+                if (anchorRect != null) {
+                    overlay.currentStep = overlay.currentStep?.copy(
+                        anchorTooltipText = "Press and hold",
+                        anchorTooltipRect = anchorRect
+                    )
+                }
+            }
+        }
+
         // Load ghost animations for this step (showcase document persists)
         loadStepGhosts(step.id)
+
+        // Notify activity to update UI (e.g., toggle button visibility)
+        onStepChanged?.invoke()
     }
 
     /** Load the showcase document once at tutorial start. Called from show(). */
@@ -332,6 +414,9 @@ class TutorialManager(
             "draw" -> actionId == "stroke_replaced" || actionId == "diagram_created"
             "erase" -> actionId == "scratch_out" || actionId == "gesture_consumed"
             "scroll" -> actionId == "manual_scroll"
+            "switch_to_cues" -> actionId == "folded_to_cues"
+            "write_cue" -> actionId == "stroke_completed"
+            "peek_note" -> actionId == "note_peeked"
             else -> false
         }
 

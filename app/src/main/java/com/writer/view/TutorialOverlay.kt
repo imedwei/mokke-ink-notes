@@ -42,8 +42,11 @@ class TutorialOverlay @JvmOverloads constructor(
     /** Total number of steps for the step indicator. */
     var totalSteps: Int = 0
 
-    /** Called when the user taps "Skip". */
+    /** Called when the user taps "Skip" or "Finish". */
     var onSkip: (() -> Unit)? = null
+
+    /** Called when the user taps "Next". */
+    var onNext: (() -> Unit)? = null
 
     // Dim overlay paint
     private val dimPaint = Paint().apply {
@@ -81,14 +84,31 @@ class TutorialOverlay @JvmOverloads constructor(
         textAlign = Paint.Align.CENTER
     }
 
-    // Skip button
-    private val skipPaint = Paint().apply {
-        color = Color.WHITE
+    // Button text paint
+    private val btnTextPaint = Paint().apply {
+        color = Color.BLACK
+        textSize = ScreenMetrics.dp(16f)
+        isAntiAlias = true
+        textAlign = Paint.Align.CENTER
+    }
+    // Filled button paint (for "Finish tutorial")
+    private val filledBtnPaint = Paint().apply {
+        color = Color.BLACK
+        style = Paint.Style.FILL
+    }
+    // Anchor tooltip paint (smaller text for strip-anchored hints)
+    private val anchorTextPaint = Paint().apply {
+        color = Color.BLACK
         textSize = ScreenMetrics.dp(14f)
         isAntiAlias = true
-        textAlign = Paint.Align.RIGHT
+    }
+    private val arrowPaint = Paint().apply {
+        color = Color.BLACK
+        style = Paint.Style.FILL
+        isAntiAlias = true
     }
     private val skipRect = Rect()
+    private val nextRect = Rect()
 
     override fun onDraw(canvas: Canvas) {
         val step = currentStep ?: return
@@ -152,55 +172,142 @@ class TutorialOverlay @JvmOverloads constructor(
         val textY = cardY + cardPadV + tooltipTextPaint.textSize * 0.85f
         canvas.drawText(tooltipText, textX, textY, tooltipTextPaint)
 
+        // Anchor tooltip (small label with arrow pointing at a strip/rail)
+        val anchorText = step.anchorTooltipText
+        val anchorRect = step.anchorTooltipRect
+        if (anchorText != null && anchorRect != null) {
+            // Convert screen coordinates to overlay-local coordinates
+            val overlayLoc = IntArray(2)
+            getLocationOnScreen(overlayLoc)
+            val localRect = Rect(
+                anchorRect.left - overlayLoc[0],
+                anchorRect.top - overlayLoc[1],
+                anchorRect.right - overlayLoc[0],
+                anchorRect.bottom - overlayLoc[1]
+            )
+
+            val aPadH = ScreenMetrics.dp(12f)
+            val aPadV = ScreenMetrics.dp(8f)
+            val aTextWidth = anchorTextPaint.measureText(anchorText)
+            val aCardWidth = aTextWidth + 2 * aPadH
+            val aCardHeight = anchorTextPaint.textSize + 2 * aPadV
+            val arrowSize = ScreenMetrics.dp(8f)
+
+            // Position to the right of the anchor strip, vertically centered
+            val aCardX = localRect.right + arrowSize
+            val aCardY = localRect.centerY() - aCardHeight / 2f
+            val aCardRect = RectF(aCardX, aCardY, aCardX + aCardWidth, aCardY + aCardHeight)
+
+            // Card background + border
+            val corner = ScreenMetrics.dp(4f)
+            canvas.drawRoundRect(aCardRect, corner, corner, cardPaint)
+            canvas.drawRoundRect(aCardRect, corner, corner, cardBorderPaint)
+
+            // Arrow pointing left toward the strip
+            val path = android.graphics.Path()
+            val arrowTipX = localRect.right.toFloat()
+            val arrowTipY = localRect.centerY().toFloat()
+            path.moveTo(arrowTipX, arrowTipY)
+            path.lineTo(aCardX, arrowTipY - arrowSize)
+            path.lineTo(aCardX, arrowTipY + arrowSize)
+            path.close()
+            canvas.drawPath(path, cardPaint)
+            canvas.drawPath(path, arrowPaint)
+            // Redraw the card edge where the arrow meets it
+            canvas.drawLine(aCardX, arrowTipY - arrowSize, aCardX, arrowTipY + arrowSize, cardPaint)
+
+            // Text
+            canvas.drawText(anchorText, aCardX + aPadH,
+                aCardY + aPadV + anchorTextPaint.textSize * 0.85f, anchorTextPaint)
+        }
+
         // Step indicator (bottom center)
         val indicatorText = "${stepIndex + 1} of $totalSteps"
         canvas.drawText(indicatorText, width / 2f, height - ScreenMetrics.dp(16f), indicatorPaint)
 
-        // Skip button — Material outlined button style, centered below the tooltip card
-        val skipText = "Skip tutorial"
-        val skipBtnPadH = ScreenMetrics.dp(24f)
-        val skipBtnPadV = ScreenMetrics.dp(10f)
-        val skipTextWidth = skipPaint.measureText(skipText)
-        skipPaint.textAlign = Paint.Align.CENTER
-        skipPaint.textSize = ScreenMetrics.dp(16f)
-        val skipBtnWidth = skipTextWidth + 2 * skipBtnPadH
-        val skipBtnHeight = skipPaint.textSize + 2 * skipBtnPadV
-        val skipBtnX = cardX + (cardWidth - skipBtnWidth) / 2f
-        val skipBtnY = cardY + cardHeight + ScreenMetrics.dp(12f)
-        val skipBtnRect = RectF(skipBtnX, skipBtnY, skipBtnX + skipBtnWidth, skipBtnY + skipBtnHeight)
+        // Buttons below the tooltip card
+        val isLast = step.isLastStep
+        val btnPadH = ScreenMetrics.dp(24f)
+        val btnPadV = ScreenMetrics.dp(10f)
+        val btnCorner = ScreenMetrics.dp(20f)
+        val btnGap = ScreenMetrics.dp(12f)
+        val btnTopY = cardY + cardHeight + ScreenMetrics.dp(12f)
 
-        // Button background (white) + border (black, 2dp, rounded corners per Material)
-        val btnCorner = ScreenMetrics.dp(20f)  // Material full-rounded for small buttons
-        canvas.drawRoundRect(skipBtnRect, btnCorner, btnCorner, cardPaint)
-        cardBorderPaint.strokeWidth = ScreenMetrics.dp(1.5f)
-        canvas.drawRoundRect(skipBtnRect, btnCorner, btnCorner, cardBorderPaint)
-        cardBorderPaint.strokeWidth = 3f  // restore
+        if (isLast) {
+            // Single filled "Finish tutorial" button
+            val finishText = "Finish tutorial"
+            val finishTextWidth = btnTextPaint.measureText(finishText)
+            val finishBtnWidth = finishTextWidth + 2 * btnPadH
+            val finishBtnHeight = btnTextPaint.textSize + 2 * btnPadV
+            val finishBtnX = cardX + (cardWidth - finishBtnWidth) / 2f
+            val finishBtnRect = RectF(finishBtnX, btnTopY, finishBtnX + finishBtnWidth, btnTopY + finishBtnHeight)
 
-        // Button text centered
-        val skipTextX = skipBtnX + skipBtnWidth / 2f
-        val skipTextY = skipBtnY + skipBtnPadV + skipPaint.textSize * 0.8f
-        skipPaint.color = Color.BLACK
-        canvas.drawText(skipText, skipTextX, skipTextY, skipPaint)
-        skipPaint.color = Color.WHITE  // restore
+            // Filled black background
+            canvas.drawRoundRect(finishBtnRect, btnCorner, btnCorner, filledBtnPaint)
 
-        // Track button bounds for tap detection
-        skipRect.set(
-            skipBtnX.toInt(),
-            skipBtnY.toInt(),
-            (skipBtnX + skipBtnWidth).toInt(),
-            (skipBtnY + skipBtnHeight).toInt()
-        )
+            // White text on black
+            btnTextPaint.color = Color.WHITE
+            canvas.drawText(finishText, finishBtnX + finishBtnWidth / 2f,
+                btnTopY + btnPadV + btnTextPaint.textSize * 0.8f, btnTextPaint)
+            btnTextPaint.color = Color.BLACK
+
+            skipRect.set(finishBtnRect.left.toInt(), finishBtnRect.top.toInt(),
+                finishBtnRect.right.toInt(), finishBtnRect.bottom.toInt())
+            nextRect.set(0, 0, 0, 0)
+        } else {
+            // Two buttons side by side: "Skip tutorial" (outlined) + "Next" (outlined)
+            val skipText = "Skip tutorial"
+            val nextText = "Next"
+            val skipTextWidth = btnTextPaint.measureText(skipText)
+            val nextTextWidth = btnTextPaint.measureText(nextText)
+            val skipBtnWidth = skipTextWidth + 2 * btnPadH
+            val nextBtnWidth = nextTextWidth + 2 * btnPadH
+            val btnHeight = btnTextPaint.textSize + 2 * btnPadV
+            val totalWidth = skipBtnWidth + btnGap + nextBtnWidth
+            val startX = cardX + (cardWidth - totalWidth) / 2f
+
+            // Skip button (outlined)
+            val skipBtnRect = RectF(startX, btnTopY, startX + skipBtnWidth, btnTopY + btnHeight)
+            canvas.drawRoundRect(skipBtnRect, btnCorner, btnCorner, cardPaint)
+            cardBorderPaint.strokeWidth = ScreenMetrics.dp(1.5f)
+            canvas.drawRoundRect(skipBtnRect, btnCorner, btnCorner, cardBorderPaint)
+            cardBorderPaint.strokeWidth = 3f
+            btnTextPaint.color = Color.BLACK
+            canvas.drawText(skipText, startX + skipBtnWidth / 2f,
+                btnTopY + btnPadV + btnTextPaint.textSize * 0.8f, btnTextPaint)
+
+            // Next button (outlined)
+            val nextBtnX = startX + skipBtnWidth + btnGap
+            val nextBtnRect = RectF(nextBtnX, btnTopY, nextBtnX + nextBtnWidth, btnTopY + btnHeight)
+            canvas.drawRoundRect(nextBtnRect, btnCorner, btnCorner, cardPaint)
+            cardBorderPaint.strokeWidth = ScreenMetrics.dp(1.5f)
+            canvas.drawRoundRect(nextBtnRect, btnCorner, btnCorner, cardBorderPaint)
+            cardBorderPaint.strokeWidth = 3f
+            canvas.drawText(nextText, nextBtnX + nextBtnWidth / 2f,
+                btnTopY + btnPadV + btnTextPaint.textSize * 0.8f, btnTextPaint)
+
+            skipRect.set(skipBtnRect.left.toInt(), skipBtnRect.top.toInt(),
+                skipBtnRect.right.toInt(), skipBtnRect.bottom.toInt())
+            nextRect.set(nextBtnRect.left.toInt(), nextBtnRect.top.toInt(),
+                nextBtnRect.right.toInt(), nextBtnRect.bottom.toInt())
+        }
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         val step = currentStep ?: return false
 
-        // Skip button takes priority over cutout pass-through
+        // Buttons take priority over cutout pass-through
         if (skipRect.contains(event.x.toInt(), event.y.toInt())) {
             if (event.action == MotionEvent.ACTION_UP) {
                 onSkip?.invoke()
             }
-            return true  // consume all events on the skip button
+            return true
+        }
+        if (nextRect.contains(event.x.toInt(), event.y.toInt())) {
+            if (event.action == MotionEvent.ACTION_UP) {
+                onNext?.invoke()
+            }
+            return true
         }
 
         // If touch is inside the cutout, let it pass through to views below

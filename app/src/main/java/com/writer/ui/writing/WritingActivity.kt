@@ -57,7 +57,7 @@ class WritingActivity : AppCompatActivity() {
     private lateinit var cueSplitLayout: View
     private lateinit var columnDivider: View
     private lateinit var cueIndicatorStrip: com.writer.view.CueIndicatorStrip
-    private lateinit var contextRail: com.writer.view.ContextRail
+    private lateinit var contextRail: com.writer.view.CueIndicatorStrip
     private lateinit var mainSplitLayout: View
     private var cueCoordinator: WritingCoordinator? = null
     private var isLandscape = false
@@ -180,7 +180,9 @@ class WritingActivity : AppCompatActivity() {
         // Portrait fold/unfold: tap indicator strip to show cues, tap context rail to show notes
         cueIndicatorStrip.onTap = { foldToCues() }
         cueIndicatorStrip.onDotLongPress = { lineIndex, screenY -> showCuePeek(lineIndex, screenY) }
+        contextRail.alignLeft = true
         contextRail.onTap = { unfoldToNotes() }
+        contextRail.onDotLongPress = { lineIndex, screenY -> showMainPeek(lineIndex, screenY) }
 
         // Floating gutter overlay
         gutterOverlay = findViewById(R.id.gutterOverlay)
@@ -223,9 +225,31 @@ class WritingActivity : AppCompatActivity() {
             getCoordinator = { coordinator },
             getPendingRestore = { pendingRestore },
             clearPendingRestore = { pendingRestore = null },
-            onClosed = { updateUndoRedoButtons() }
+            onClosed = {
+                // Unfold from cue view if tutorial ended there
+                if (isFoldedToCues) unfoldToNotes()
+                // Restore cue data that was cleared for tutorial
+                restoreCueDataAfterTutorial()
+                updateUndoRedoButtons()
+            }
         )
         tutorialManager.setOverlay(tutorialOverlay)
+        tutorialManager.onStepChanged = {
+            updateViewToggleIcon()
+            onTutorialStepChanged()
+        }
+        tutorialManager.getContextRailRect = {
+            if (contextRail.visibility == View.VISIBLE) {
+                contextRail.getContentScreenRect()
+            } else null
+        }
+        tutorialManager.onNextStep = { stepId ->
+            when (stepId) {
+                "switch_to_cues" -> {
+                    if (!isFoldedToCues) foldToCues()
+                }
+            }
+        }
 
         // Migrate old single-file storage if needed, then determine current document
         val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
@@ -312,7 +336,7 @@ class WritingActivity : AppCompatActivity() {
             // Show tutorial on first launch
             if (tutorialManager.shouldAutoShow()) {
                 inkCanvas.pauseRawDrawing()
-                tutorialManager.show()
+                showTutorial()
             }
         }
 
@@ -326,10 +350,11 @@ class WritingActivity : AppCompatActivity() {
             val raw = cueInkCanvas.scrollOffsetY - dy
             cueInkCanvas.scrollOffsetY = raw.coerceAtLeast(0f)
             cueInkCanvas.drawToSurface()
-            // Linked scroll: sync main column
+            // Linked scroll: sync main column + context rail
             inkCanvas.scrollOffsetY = cueInkCanvas.scrollOffsetY
             inkCanvas.drawToSurface()
             inkCanvas.onManualScroll?.invoke()
+            contextRail.scrollOffsetY = cueInkCanvas.scrollOffsetY
         }
         cueRecognizedTextView.onScrollEnd = {
             cueInkCanvas.scrollOffsetY = cueInkCanvas.snapToLine(cueInkCanvas.scrollOffsetY)
@@ -337,6 +362,7 @@ class WritingActivity : AppCompatActivity() {
             inkCanvas.scrollOffsetY = cueInkCanvas.scrollOffsetY
             inkCanvas.drawToSurface()
             inkCanvas.onManualScroll?.invoke()
+            contextRail.scrollOffsetY = cueInkCanvas.scrollOffsetY
         }
 
         // Show cue column if starting in landscape, otherwise show indicator strip
@@ -713,7 +739,7 @@ class WritingActivity : AppCompatActivity() {
         popupView.findViewById<android.view.View>(R.id.menuTutorial).setOnClickListener {
             openingTutorial = true
             popup.dismiss()
-            tutorialManager.show()
+            showTutorial()
         }
         popupView.findViewById<android.view.View>(R.id.menuBugReport).setOnClickListener {
             popup.dismiss()
@@ -943,6 +969,9 @@ class WritingActivity : AppCompatActivity() {
         contextRail.visibility = View.VISIBLE
         updateViewToggleIcon()
 
+        // Populate context rail with main content indicators
+        populateContextRail()
+
         // Set cue column weight to fill
         val params = cueSplitLayout.layoutParams as LinearLayout.LayoutParams
         params.weight = 1f
@@ -965,6 +994,8 @@ class WritingActivity : AppCompatActivity() {
 
             ensureCueCoordinator()
             cueCoordinator?.start()
+            // Sync context rail scroll with cue canvas
+            cueCoordinator?.onLinkedScroll = { contextRail.scrollOffsetY = cueInkCanvas.scrollOffsetY }
             cueCoordinator?.recognizeAllLines()
 
             // Give Onyx SDK to cue canvas since it's the only visible one
@@ -1077,36 +1108,55 @@ class WritingActivity : AppCompatActivity() {
     /** Toggle between Notes and Cues view in portrait. */
     private fun toggleNotesCues() {
         if (isLandscape) return
-        if (isFoldedToCues) unfoldToNotes() else foldToCues()
+        // During tutorial basics, toggle is disabled
+        if (tutorialManager.isActive && !tutorialManager.isCornellPhase()) return
+        if (isFoldedToCues) {
+            unfoldToNotes()
+            // Notify tutorial that user unfolded to notes
+            tutorialManager.onStepAction("unfolded_to_notes")
+        } else {
+            foldToCues()
+            // Notify tutorial that user folded to cues
+            tutorialManager.onStepAction("folded_to_cues")
+        }
     }
 
     /** Update the gutter toggle icon to show what tapping will switch TO. */
     private fun updateViewToggleIcon() {
         if (isFoldedToCues) {
-            // Currently in cues — icon shows notes (tap to go back)
             viewToggleButton.setImageResource(R.drawable.ic_notes)
             viewToggleButton.contentDescription = "Switch to notes"
         } else {
-            // Currently in notes — icon shows cue (tap to switch)
             viewToggleButton.setImageResource(R.drawable.ic_cue)
             viewToggleButton.contentDescription = "Switch to cues"
         }
+        // Dim during tutorial basics (inactive), bright during Cornell phase or normal use
+        viewToggleButton.imageAlpha = if (tutorialManager.isActive && !tutorialManager.isCornellPhase()) 40 else 255
     }
 
-    /** Show a floating preview of cue strokes for the contiguous block around [lineIndex]. */
-    private fun showCuePeek(lineIndex: Int, screenY: Float) {
-        val segmenter = com.writer.recognition.LineSegmenter()
-        val cueStrokes = documentModel.cue.activeStrokes
+    /** Show a floating preview of main content strokes (from context rail long-press). */
+    private fun showMainPeek(lineIndex: Int, screenY: Float) {
+        showStrokePeek(lineIndex, screenY, documentModel.main.activeStrokes, documentModel.main.diagramAreas, contextRail)
+    }
 
-        // Find contiguous block of cue lines around the pressed line.
-        // Include lines covered by cue diagram areas (which may have empty lines
-        // between strokes but are still part of the diagram).
-        val strokeLines = cueStrokes.map { segmenter.getStrokeLineIndex(it) }.toSet()
+    /** Show a floating preview of cue strokes (from cue indicator strip long-press). */
+    private fun showCuePeek(lineIndex: Int, screenY: Float) {
+        showStrokePeek(lineIndex, screenY, documentModel.cue.activeStrokes, documentModel.cue.diagramAreas, cueIndicatorStrip)
+    }
+
+    /** Show a floating preview of strokes for a contiguous block around [lineIndex]. */
+    private fun showStrokePeek(
+        lineIndex: Int, screenY: Float,
+        strokes: List<com.writer.model.InkStroke>,
+        diagramAreas: List<com.writer.model.DiagramArea>,
+        anchorView: View
+    ) {
+        val segmenter = com.writer.recognition.LineSegmenter()
+
+        val strokeLines = strokes.map { segmenter.getStrokeLineIndex(it) }.toSet()
         val diagramLines = mutableSetOf<Int>()
-        for (area in documentModel.cue.diagramAreas) {
-            for (l in area.startLineIndex..area.endLineIndex) {
-                diagramLines.add(l)
-            }
+        for (area in diagramAreas) {
+            for (l in area.startLineIndex..area.endLineIndex) diagramLines.add(l)
         }
         val occupiedLines = strokeLines + diagramLines
         if (lineIndex !in occupiedLines) return
@@ -1117,30 +1167,32 @@ class WritingActivity : AppCompatActivity() {
         while (bottom + 1 in occupiedLines) bottom++
 
         val blockLines = (top..bottom).toSet()
-        val blockStrokes = cueStrokes.filter { segmenter.getStrokeLineIndex(it) in blockLines }
+        val blockStrokes = strokes.filter { segmenter.getStrokeLineIndex(it) in blockLines }
         if (blockStrokes.isEmpty()) return
 
-        // Create preview view
         val previewWidth = (inkCanvas.width * 0.6f).toInt()
         val previewView = com.writer.view.CuePreviewView(this)
         previewView.setStrokes(blockStrokes, previewWidth)
 
-        // Measure
         previewView.measure(
             View.MeasureSpec.makeMeasureSpec(previewWidth, View.MeasureSpec.EXACTLY),
             View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
         )
         val previewHeight = previewView.measuredHeight.coerceAtMost((inkCanvas.height * 0.6f).toInt())
 
-        // Create popup
         val popup = android.widget.PopupWindow(previewView, previewWidth, previewHeight, true)
-        popup.elevation = 0f // e-ink friendly
+        popup.elevation = 0f
         popup.setBackgroundDrawable(null)
 
-        // Position: to the left of the strip, vertically centered on the pressed dot
-        val stripLoc = IntArray(2)
-        cueIndicatorStrip.getLocationOnScreen(stripLoc)
-        val popupX = stripLoc[0] - previewWidth - com.writer.view.ScreenMetrics.dp(4f).toInt()
+        // Position near the anchor view
+        val anchorLoc = IntArray(2)
+        anchorView.getLocationOnScreen(anchorLoc)
+        val isLeftSide = anchorLoc[0] < resources.displayMetrics.widthPixels / 2
+        val popupX = if (isLeftSide) {
+            anchorLoc[0] + anchorView.width + com.writer.view.ScreenMetrics.dp(4f).toInt()
+        } else {
+            anchorLoc[0] - previewWidth - com.writer.view.ScreenMetrics.dp(4f).toInt()
+        }
         val popupY = (screenY - previewHeight / 2).toInt()
             .coerceIn(0, resources.displayMetrics.heightPixels - previewHeight)
 
@@ -1148,9 +1200,30 @@ class WritingActivity : AppCompatActivity() {
         popup.setOnDismissListener {
             inkCanvas.resumeRawDrawing()
             cuePeekPopup = null
+            // Notify tutorial that user dismissed a peek popup
+            tutorialManager.onStepAction("cue_peeked")
+            tutorialManager.onStepAction("note_peeked")
         }
         cuePeekPopup = popup
         popup.showAtLocation(inkCanvas, android.view.Gravity.NO_GRAVITY, popupX, popupY)
+    }
+
+    /** Populate the context rail with main content indicators (dots/segments). */
+    private fun populateContextRail() {
+        val segmenter = com.writer.recognition.LineSegmenter()
+        val mainLines = documentModel.main.activeStrokes.map { segmenter.getStrokeLineIndex(it) }.toSet()
+        contextRail.cueLineIndices = mainLines
+        contextRail.cueDiagramAreas = documentModel.main.diagramAreas.toList()
+        contextRail.scrollOffsetY = cueInkCanvas.scrollOffsetY
+        // Set canvasTopOffset to match cue canvas position
+        cueInkCanvas.post {
+            val canvasLoc = IntArray(2)
+            val railLoc = IntArray(2)
+            cueInkCanvas.getLocationOnScreen(canvasLoc)
+            contextRail.getLocationOnScreen(railLoc)
+            contextRail.canvasTopOffset = (canvasLoc[1] - railLoc[1]).toFloat()
+            contextRail.invalidate()
+        }
     }
 
     private fun updateCueIndicatorStrip() {
@@ -1207,6 +1280,75 @@ class WritingActivity : AppCompatActivity() {
     }
 
     // --- Bug report ---
+
+    // --- Tutorial helpers ---
+
+    /** Saved cue data cleared during tutorial, restored on close. */
+    private var savedCueStrokes: List<com.writer.model.InkStroke>? = null
+    private var savedCueDiagramAreas: List<com.writer.model.DiagramArea>? = null
+
+    /** Show tutorial, clearing cue data and hiding the cue indicator strip. */
+    private fun showTutorial() {
+        // Save cue data before clearing
+        savedCueStrokes = documentModel.cue.activeStrokes.toList()
+        savedCueDiagramAreas = documentModel.cue.diagramAreas.toList()
+
+        // Clear cue column
+        documentModel.cue.activeStrokes.clear()
+        documentModel.cue.diagramAreas.clear()
+
+        // Hide cue indicator strip
+        cueIndicatorStrip.cueLineIndices = emptySet()
+        cueIndicatorStrip.cueDiagramAreas = emptyList()
+        cueIndicatorStrip.visibility = View.GONE
+
+        // If in cue portrait view, unfold first
+        if (isFoldedToCues) unfoldToNotes()
+
+        tutorialManager.show()
+    }
+
+    /** Handle tutorial step changes — load demo content for Cornell Notes steps. */
+    private fun onTutorialStepChanged() {
+        when (tutorialManager.currentStepId) {
+            "switch_to_cues" -> {
+                // Pre-load demo cue strokes so content exists when user folds to cue view
+                val font = HersheyFont.loadScript(this) ?: return
+                val ls = HandwritingCanvasView.LINE_SPACING
+                val tm = HandwritingCanvasView.TOP_MARGIN
+                val cw = inkCanvas.width.toFloat()
+                val cueStrokes = TutorialDemoContent.generateCueStrokes(font, cw, ls, tm)
+                documentModel.cue.activeStrokes.addAll(cueStrokes)
+                cueIndicatorStrip.visibility = View.VISIBLE
+                updateCueIndicatorStrip()
+                inkCanvas.pauseRawDrawing()
+                inkCanvas.drawToSurface()
+                inkCanvas.resumeRawDrawing()
+            }
+            "peek_note" -> {
+                // Ensure context rail shows main content for peeking
+                populateContextRail()
+            }
+        }
+    }
+
+    /** Restore cue data after tutorial closes. */
+    private fun restoreCueDataAfterTutorial() {
+        // Clear tutorial cue content before restoring saved data
+        documentModel.cue.activeStrokes.clear()
+        documentModel.cue.diagramAreas.clear()
+
+        savedCueStrokes?.let { documentModel.cue.activeStrokes.addAll(it) }
+        savedCueDiagramAreas?.let { documentModel.cue.diagramAreas.addAll(it) }
+        savedCueStrokes = null
+        savedCueDiagramAreas = null
+
+        // Restore cue indicator strip
+        if (!isLandscape) {
+            cueIndicatorStrip.visibility = View.VISIBLE
+            updateCueIndicatorStrip()
+        }
+    }
 
     private fun generateShowcaseDocument() {
         val font = HersheyFont.loadScript(this)
