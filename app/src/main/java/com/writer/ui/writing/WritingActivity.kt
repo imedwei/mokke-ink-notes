@@ -66,6 +66,9 @@ class WritingActivity : AppCompatActivity() {
     // View toggle button in gutter (Notes ↔ Cues)
     private lateinit var viewToggleButton: ImageView
 
+    // Active cue peek popup (dismissed on orientation change)
+    private var cuePeekPopup: android.widget.PopupWindow? = null
+
     /** The active coordinator — routes undo/redo to the right column.
      *  In portrait cue view, always use cue coordinator.
      *  In landscape, use whichever canvas the pen last wrote on. */
@@ -176,6 +179,7 @@ class WritingActivity : AppCompatActivity() {
 
         // Portrait fold/unfold: tap indicator strip to show cues, tap context rail to show notes
         cueIndicatorStrip.onTap = { foldToCues() }
+        cueIndicatorStrip.onDotLongPress = { lineIndex, screenY -> showCuePeek(lineIndex, screenY) }
         contextRail.onTap = { unfoldToNotes() }
 
         // Floating gutter overlay
@@ -252,6 +256,8 @@ class WritingActivity : AppCompatActivity() {
             inkCanvas.scrollOffsetY = raw.coerceAtLeast(0f)
             inkCanvas.drawToSurface()
             inkCanvas.onManualScroll?.invoke()
+            // Sync cue indicator strip scroll
+            cueIndicatorStrip.scrollOffsetY = inkCanvas.scrollOffsetY
             // Linked scroll: sync cue column
             if (isLandscape) {
                 cueInkCanvas.scrollOffsetY = inkCanvas.scrollOffsetY
@@ -263,6 +269,7 @@ class WritingActivity : AppCompatActivity() {
             inkCanvas.scrollOffsetY = inkCanvas.snapToLine(inkCanvas.scrollOffsetY)
             inkCanvas.drawToSurface()
             inkCanvas.onManualScroll?.invoke()
+            cueIndicatorStrip.scrollOffsetY = inkCanvas.scrollOffsetY
             if (isLandscape) {
                 cueInkCanvas.scrollOffsetY = inkCanvas.scrollOffsetY
                 cueInkCanvas.drawToSurface()
@@ -337,6 +344,15 @@ class WritingActivity : AppCompatActivity() {
             showCueColumn()
         } else {
             cueIndicatorStrip.visibility = View.VISIBLE
+            // Set canvas top offset after layout so dots align with the canvas, not the preview
+            inkCanvas.post {
+                val canvasLoc = IntArray(2)
+                val stripLoc = IntArray(2)
+                inkCanvas.getLocationOnScreen(canvasLoc)
+                cueIndicatorStrip.getLocationOnScreen(stripLoc)
+                cueIndicatorStrip.canvasTopOffset = (canvasLoc[1] - stripLoc[1]).toFloat()
+            }
+            updateCueIndicatorStrip()
         }
 
         // Initialize recognizer in the background
@@ -429,6 +445,8 @@ class WritingActivity : AppCompatActivity() {
         coordinator?.onHeadingDetected = { heading -> autoRenameFromHeading(heading) }
         coordinator?.onUndoRedoStateChanged = { updateUndoRedoButtons() }
         coordinator?.onTutorialAction = { actionId -> tutorialManager.onStepAction(actionId) }
+        // Sync cue indicator strip scroll with canvas (portrait mode)
+        coordinator?.onLinkedScroll = { cueIndicatorStrip.scrollOffsetY = inkCanvas.scrollOffsetY }
         coordinator?.start()
 
     }
@@ -726,6 +744,9 @@ class WritingActivity : AppCompatActivity() {
         val nowLandscape = newConfig.orientation == Configuration.ORIENTATION_LANDSCAPE
         if (nowLandscape == isLandscape) return
 
+        // Dismiss cue peek popup — landscape shows full cue column
+        cuePeekPopup?.dismiss()
+
         // Unfold from cue view BEFORE updating isLandscape — unfoldToNotes()
         // checks isLandscape and returns early if already landscape.
         if (nowLandscape && isFoldedToCues) unfoldToNotes()
@@ -892,8 +913,9 @@ class WritingActivity : AppCompatActivity() {
         cueCoordinator?.stop()
         cueCoordinator?.onLinkedScroll = null
         cueCoordinator?.onSpaceChanged = null
-        coordinator?.onLinkedScroll = null
         coordinator?.onSpaceChanged = null
+        // Restore portrait strip scroll sync (landscape overwrote it)
+        coordinator?.onLinkedScroll = { cueIndicatorStrip.scrollOffsetY = inkCanvas.scrollOffsetY }
 
         // Remove landscape left gutter padding
         closeDualCanvasOnyx()
@@ -1071,13 +1093,82 @@ class WritingActivity : AppCompatActivity() {
         }
     }
 
+    /** Show a floating preview of cue strokes for the contiguous block around [lineIndex]. */
+    private fun showCuePeek(lineIndex: Int, screenY: Float) {
+        val segmenter = com.writer.recognition.LineSegmenter()
+        val cueStrokes = documentModel.cue.activeStrokes
+
+        // Find contiguous block of cue lines around the pressed line.
+        // Include lines covered by cue diagram areas (which may have empty lines
+        // between strokes but are still part of the diagram).
+        val strokeLines = cueStrokes.map { segmenter.getStrokeLineIndex(it) }.toSet()
+        val diagramLines = mutableSetOf<Int>()
+        for (area in documentModel.cue.diagramAreas) {
+            for (l in area.startLineIndex..area.endLineIndex) {
+                diagramLines.add(l)
+            }
+        }
+        val occupiedLines = strokeLines + diagramLines
+        if (lineIndex !in occupiedLines) return
+
+        var top = lineIndex
+        while (top - 1 in occupiedLines) top--
+        var bottom = lineIndex
+        while (bottom + 1 in occupiedLines) bottom++
+
+        val blockLines = (top..bottom).toSet()
+        val blockStrokes = cueStrokes.filter { segmenter.getStrokeLineIndex(it) in blockLines }
+        if (blockStrokes.isEmpty()) return
+
+        // Create preview view
+        val previewWidth = (inkCanvas.width * 0.6f).toInt()
+        val previewView = com.writer.view.CuePreviewView(this)
+        previewView.setStrokes(blockStrokes, previewWidth)
+
+        // Measure
+        previewView.measure(
+            View.MeasureSpec.makeMeasureSpec(previewWidth, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
+        )
+        val previewHeight = previewView.measuredHeight.coerceAtMost((inkCanvas.height * 0.6f).toInt())
+
+        // Create popup
+        val popup = android.widget.PopupWindow(previewView, previewWidth, previewHeight, true)
+        popup.elevation = 0f // e-ink friendly
+        popup.setBackgroundDrawable(null)
+
+        // Position: to the left of the strip, vertically centered on the pressed dot
+        val stripLoc = IntArray(2)
+        cueIndicatorStrip.getLocationOnScreen(stripLoc)
+        val popupX = stripLoc[0] - previewWidth - com.writer.view.ScreenMetrics.dp(4f).toInt()
+        val popupY = (screenY - previewHeight / 2).toInt()
+            .coerceIn(0, resources.displayMetrics.heightPixels - previewHeight)
+
+        inkCanvas.pauseRawDrawing()
+        popup.setOnDismissListener {
+            inkCanvas.resumeRawDrawing()
+            cuePeekPopup = null
+        }
+        cuePeekPopup = popup
+        popup.showAtLocation(inkCanvas, android.view.Gravity.NO_GRAVITY, popupX, popupY)
+    }
+
     private fun updateCueIndicatorStrip() {
+        val segmenter = com.writer.recognition.LineSegmenter()
         val cueLines = documentModel.cue.activeStrokes.map { stroke ->
-            val y = stroke.points.firstOrNull()?.y ?: 0f
-            ((y - ScreenMetrics.topMargin) / ScreenMetrics.lineSpacing).toInt()
+            segmenter.getStrokeLineIndex(stroke)
         }.toSet()
         cueIndicatorStrip.cueLineIndices = cueLines
+        cueIndicatorStrip.cueDiagramAreas = documentModel.cue.diagramAreas.toList()
         cueIndicatorStrip.scrollOffsetY = inkCanvas.scrollOffsetY
+        // Update canvas top offset in case layout changed
+        inkCanvas.post {
+            val canvasLoc = IntArray(2)
+            val stripLoc = IntArray(2)
+            inkCanvas.getLocationOnScreen(canvasLoc)
+            cueIndicatorStrip.getLocationOnScreen(stripLoc)
+            cueIndicatorStrip.canvasTopOffset = (canvasLoc[1] - stripLoc[1]).toFloat()
+        }
     }
 
     override fun onResume() {
