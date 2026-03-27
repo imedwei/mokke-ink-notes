@@ -390,11 +390,20 @@ class HandwritingCanvasView @JvmOverloads constructor(
     // --- Hover handling (for Onyx SDK session swap between canvases) ---
 
     override fun onHoverEvent(event: MotionEvent): Boolean {
-        if (event.getToolType(0) == MotionEvent.TOOL_TYPE_STYLUS && !useOnyxSdk) {
-            // Stylus is hovering over this canvas but SDK is on another canvas.
-            // Request transfer now — before pen-down — so the full stroke gets SDK speed.
-            // Pass hover coordinates so the EPD controller position can be reset.
-            onRequestOnyxSession?.invoke(event.x, event.y)
+        if (event.getToolType(0) == MotionEvent.TOOL_TYPE_STYLUS) {
+            // Track hover state for palm rejection — reject all finger events while
+            // the stylus is in proximity range (Apple Pencil-style suppression).
+            when (event.action) {
+                MotionEvent.ACTION_HOVER_ENTER, MotionEvent.ACTION_HOVER_MOVE ->
+                    touchFilter?.penHovering = true
+                MotionEvent.ACTION_HOVER_EXIT ->
+                    touchFilter?.penHovering = false
+            }
+
+            // SDK session transfer — request if this canvas doesn't have the SDK
+            if (!useOnyxSdk) {
+                onRequestOnyxSession?.invoke(event.x, event.y)
+            }
         }
         return super.onHoverEvent(event)
     }

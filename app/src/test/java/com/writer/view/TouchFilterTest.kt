@@ -23,10 +23,43 @@ class TouchFilterTest {
         ScreenMetrics.init(DENSITY, smallestWidthDp = 674, widthPixels = 1264, heightPixels = 1680)
         filter = TouchFilter(
             palmSizeThresholdDp = 40f,
-            penCooldownMs = 150L,
+            penCooldownMs = 500L,
             stationarySlopDp = 8f,
             stationaryTimeoutMs = 200L,
         )
+    }
+
+    // ── Layer 0: Pen hovering (proximity suppression) ──────────────────────
+
+    @Test
+    fun rejects_finger_when_pen_is_hovering() {
+        filter.penHovering = true
+        val result = filter.evaluateDown(
+            pointerCount = 1, touchMinorDp = 10f, eventTime = 1000L, x = 100f, y = 100f
+        )
+        assertEquals(TouchFilter.Decision.REJECT, result)
+    }
+
+    @Test
+    fun accepts_finger_when_pen_not_hovering() {
+        filter.penHovering = false
+        val result = filter.evaluateDown(
+            pointerCount = 1, touchMinorDp = 10f, eventTime = 1000L, x = 100f, y = 100f
+        )
+        assertEquals(TouchFilter.Decision.ACCEPT, result)
+    }
+
+    @Test
+    fun rejects_move_when_pen_starts_hovering() {
+        filter.evaluateDown(
+            pointerCount = 1, touchMinorDp = 10f, eventTime = 1000L, x = 100f, y = 100f
+        )
+        filter.penHovering = true
+        val result = filter.evaluateMove(
+            pointerCount = 1, touchMinorDp = 10f, eventTime = 1050L,
+            x = 100f, y = 150f, checkStationary = false
+        )
+        assertEquals(TouchFilter.Decision.REJECT, result)
     }
 
     // ── Layer 1: Pen active ────────────────────────────────────────────────
@@ -61,8 +94,19 @@ class TouchFilterTest {
     }
 
     @Test
-    fun accepts_finger_after_pen_cooldown() {
+    fun rejects_finger_during_extended_cooldown() {
+        // 200ms after pen up — still within 500ms cooldown
         filter.penUpTimestamp = 800L
+        val result = filter.evaluateDown(
+            pointerCount = 1, touchMinorDp = 10f, eventTime = 1000L, x = 100f, y = 100f
+        )
+        assertEquals(TouchFilter.Decision.REJECT, result)
+    }
+
+    @Test
+    fun accepts_finger_after_full_cooldown() {
+        // 600ms after pen up — past 500ms cooldown
+        filter.penUpTimestamp = 400L
         val result = filter.evaluateDown(
             pointerCount = 1, touchMinorDp = 10f, eventTime = 1000L, x = 100f, y = 100f
         )
@@ -71,7 +115,8 @@ class TouchFilterTest {
 
     @Test
     fun accepts_finger_exactly_at_cooldown_boundary() {
-        filter.penUpTimestamp = 850L
+        // Exactly 500ms after pen up
+        filter.penUpTimestamp = 500L
         val result = filter.evaluateDown(
             pointerCount = 1, touchMinorDp = 10f, eventTime = 1000L, x = 100f, y = 100f
         )

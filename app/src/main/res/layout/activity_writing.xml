@@ -94,7 +94,7 @@
     <!-- Context rail (portrait cue view: left edge, minimap of main content) -->
     <com.writer.view.ContextRail
         android:id="@+id/contextRail"
-        android:layout_width="24dp"
+        android:layout_width="40dp"
         android:layout_height="match_parent"
         android:layout_gravity="start"
         android:visibility="gone" />
@@ -154,6 +154,17 @@
             android:src="@drawable/ic_unfold_more"
             android:background="?android:attr/selectableItemBackgroundBorderless"
             android:contentDescription="Insert or remove space"
+            />
+
+        <ImageView
+            android:id="@+id/viewToggleButton"
+            android:layout_marginTop="16dp"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:padding="6dp"
+            android:src="@drawable/ic_cue"
+            android:background="?android:attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Switch to cues"
             />
 
     </LinearLayout>

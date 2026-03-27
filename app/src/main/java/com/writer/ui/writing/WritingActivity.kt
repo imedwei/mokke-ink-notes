@@ -12,6 +12,7 @@ import android.app.Activity
 import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
+import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.PopupWindow
@@ -62,7 +63,15 @@ class WritingActivity : AppCompatActivity() {
     private var isLandscape = false
     private var isFoldedToCues = false
 
-    // Dual-canvas Onyx SDK: per-canvas TouchHelper with hover-based swap
+    // View toggle button in gutter (Notes ↔ Cues)
+    private lateinit var viewToggleButton: ImageView
+
+    /** The active coordinator — routes undo/redo to the right column.
+     *  In portrait cue view, always use cue coordinator.
+     *  In landscape, use whichever canvas the pen last wrote on. */
+    private val activeCoordinator: WritingCoordinator?
+        get() = if (isFoldedToCues || (isLandscape && isCueCanvasActive)) cueCoordinator else coordinator
+    private var isCueCanvasActive = false
 
     // Floating gutter overlay
     private lateinit var gutterOverlay: View
@@ -158,6 +167,10 @@ class WritingActivity : AppCompatActivity() {
         mainSplitLayout = splitLayout
         isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
 
+        // View toggle button in gutter — switches between Notes and Cues
+        viewToggleButton = findViewById(R.id.viewToggleButton)
+        viewToggleButton.setOnClickListener { toggleNotesCues() }
+
         // Cue canvas defers Onyx init — gets SDK session via hover-based swap in landscape.
         cueInkCanvas.deferOnyxInit = true
 
@@ -176,8 +189,8 @@ class WritingActivity : AppCompatActivity() {
         undoButton.imageAlpha = 77
         redoButton.imageAlpha = 77
         menuButton.setOnClickListener { showMenu() }
-        undoButton.setOnClickListener { debounceUndoRedo { coordinator?.undo(); updateUndoRedoButtons() } }
-        redoButton.setOnClickListener { debounceUndoRedo { coordinator?.redo(); updateUndoRedoButtons() } }
+        undoButton.setOnClickListener { debounceUndoRedo { activeCoordinator?.undo(); updateUndoRedoButtons() } }
+        redoButton.setOnClickListener { debounceUndoRedo { activeCoordinator?.redo(); updateUndoRedoButtons() } }
         spaceInsertButton.setOnClickListener { inkCanvas.spaceInsertMode = !inkCanvas.spaceInsertMode }
 
         inkCanvas.onSpaceInsert = { anchorLine, lines ->
@@ -192,6 +205,8 @@ class WritingActivity : AppCompatActivity() {
         val touchFilter = TouchFilter()
         inkCanvas.touchFilter = touchFilter
         recognizedTextView.touchFilter = touchFilter
+        cueIndicatorStrip.touchFilter = touchFilter
+        contextRail.touchFilter = touchFilter
 
         documentModel = DocumentModel()
 
@@ -220,11 +235,14 @@ class WritingActivity : AppCompatActivity() {
         pendingRestore = DocumentStorage.load(this, currentDocumentName)
         restoreDocumentVisuals()
 
-        // Update undo/redo buttons when pen lifts (new strokes may have been added)
+        // Update undo/redo buttons when pen lifts and track active canvas
         inkCanvas.onPenStateChanged = { active ->
-            if (!active) {
-                gutterOverlay.post { updateUndoRedoButtons() }
-            }
+            if (active) isCueCanvasActive = false
+            if (!active) gutterOverlay.post { updateUndoRedoButtons() }
+        }
+        cueInkCanvas.onPenStateChanged = { active ->
+            if (active) isCueCanvasActive = true
+            if (!active) gutterOverlay.post { updateUndoRedoButtons() }
         }
 
         // Text view scroll drives canvas scroll (complementary views)
@@ -442,8 +460,9 @@ class WritingActivity : AppCompatActivity() {
     /** Update undo/redo button visibility based on availability.
      *  Only forces e-ink refresh when the state actually changes. */
     fun updateUndoRedoButtons() {
-        val undoAlpha = if (coordinator?.canUndo() == true) 255 else 77
-        val redoAlpha = if (coordinator?.canRedo() == true) 255 else 77
+        val active = activeCoordinator
+        val undoAlpha = if (active?.canUndo() == true) 255 else 77
+        val redoAlpha = if (active?.canRedo() == true) 255 else 77
         if (undoAlpha == lastUndoAlpha && redoAlpha == lastRedoAlpha) return
         lastUndoAlpha = undoAlpha
         lastRedoAlpha = redoAlpha
@@ -788,6 +807,8 @@ class WritingActivity : AppCompatActivity() {
     private fun showCueColumn() {
         columnDivider.visibility = View.VISIBLE
         cueSplitLayout.visibility = View.VISIBLE
+        // Hide toggle in landscape — both columns visible
+        viewToggleButton.visibility = View.GONE
 
         // Apply same text/canvas split heights as main column
         applyCueSplitHeights()
@@ -874,6 +895,8 @@ class WritingActivity : AppCompatActivity() {
         closeDualCanvasOnyx()
         columnDivider.visibility = View.GONE
         cueSplitLayout.visibility = View.GONE
+        viewToggleButton.visibility = View.VISIBLE
+        updateViewToggleIcon()
 
         // Restore main canvas per-view Onyx SDK
         inkCanvas.deferOnyxInit = false
@@ -892,6 +915,7 @@ class WritingActivity : AppCompatActivity() {
         cueIndicatorStrip.visibility = View.GONE
         cueSplitLayout.visibility = View.VISIBLE
         contextRail.visibility = View.VISIBLE
+        updateViewToggleIcon()
 
         // Set cue column weight to fill
         val params = cueSplitLayout.layoutParams as LinearLayout.LayoutParams
@@ -935,6 +959,7 @@ class WritingActivity : AppCompatActivity() {
         cueIndicatorStrip.visibility = View.VISIBLE
         cueSplitLayout.visibility = View.GONE
         contextRail.visibility = View.GONE
+        updateViewToggleIcon()
 
         // Stop cue coordinator, transfer Onyx SDK back to main
         cueCoordinator?.stop()
@@ -1023,6 +1048,25 @@ class WritingActivity : AppCompatActivity() {
     }
 
     /** Update the indicator strip with current cue line indices. */
+    /** Toggle between Notes and Cues view in portrait. */
+    private fun toggleNotesCues() {
+        if (isLandscape) return
+        if (isFoldedToCues) unfoldToNotes() else foldToCues()
+    }
+
+    /** Update the gutter toggle icon to show what tapping will switch TO. */
+    private fun updateViewToggleIcon() {
+        if (isFoldedToCues) {
+            // Currently in cues — icon shows notes (tap to go back)
+            viewToggleButton.setImageResource(R.drawable.ic_notes)
+            viewToggleButton.contentDescription = "Switch to notes"
+        } else {
+            // Currently in notes — icon shows cue (tap to switch)
+            viewToggleButton.setImageResource(R.drawable.ic_cue)
+            viewToggleButton.contentDescription = "Switch to cues"
+        }
+    }
+
     private fun updateCueIndicatorStrip() {
         val cueLines = documentModel.cue.activeStrokes.map { stroke ->
             val y = stroke.points.firstOrNull()?.y ?: 0f

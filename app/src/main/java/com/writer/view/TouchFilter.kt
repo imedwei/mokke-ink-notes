@@ -15,7 +15,7 @@ package com.writer.view
  */
 class TouchFilter(
     private val palmSizeThresholdDp: Float = 40f,
-    private val penCooldownMs: Long = 150L,
+    private val penCooldownMs: Long = 500L,
     private val stationarySlopDp: Float = 8f,
     private val stationaryTimeoutMs: Long = 200L,
 ) {
@@ -23,6 +23,10 @@ class TouchFilter(
     enum class Decision { ACCEPT, REJECT }
 
     // --- Pen state, set by the view ---
+
+    /** True when the stylus is in hover range (proximity, not contact).
+     *  Rejects all finger events while set — Apple Pencil-style proximity suppression. */
+    @Volatile var penHovering: Boolean = false
 
     @Volatile var penActive: Boolean = false
 
@@ -52,10 +56,13 @@ class TouchFilter(
         x: Float,
         y: Float,
     ): Decision {
+        // Layer 0: pen is in hover range (proximity suppression)
+        if (penHovering) return Decision.REJECT
+
         // Layer 1: pen is currently down
         if (penActive) return Decision.REJECT
 
-        // Layer 2: pen lifted recently
+        // Layer 2: pen lifted recently (500ms cooldown)
         if (penUpTimestamp > 0L && (eventTime - penUpTimestamp) < penCooldownMs) {
             return Decision.REJECT
         }
@@ -94,6 +101,9 @@ class TouchFilter(
         y: Float,
         checkStationary: Boolean,
     ): Decision {
+        // Layer 0: pen entered hover range mid-gesture
+        if (penHovering) return Decision.REJECT
+
         // Layer 1: pen went down mid-gesture
         if (penActive) return Decision.REJECT
 
