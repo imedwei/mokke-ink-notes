@@ -136,7 +136,11 @@ object DiagramTextGrouping {
 
         data class StrokeWithCentroid(val stroke: InkStroke, val centroidY: Float)
         val sorted = group.map { s ->
-            StrokeWithCentroid(s, (s.minY + s.maxY) / 2f)
+            // Use center of mass (not bounding box centroid) — handles tall capitals
+            // like "E" in "Empathy" that have a different bounding box center than
+            // adjacent lowercase letters but similar center of mass.
+            val yMean = s.points.sumOf { it.y.toDouble() }.toFloat() / s.points.size
+            StrokeWithCentroid(s, yMean)
         }.sortedBy { it.centroidY }
 
         val rows = mutableListOf(mutableListOf(sorted.first().stroke))
