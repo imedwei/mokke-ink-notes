@@ -19,7 +19,9 @@ import java.util.Locale
 
 data class DocumentInfo(
     val name: String,
-    val lastModified: Long
+    val lastModified: Long,
+    /** Concatenated recognized text from the document (for search). */
+    val textContent: String = ""
 )
 
 object DocumentStorage {
@@ -27,6 +29,7 @@ object DocumentStorage {
     private const val TAG = "DocumentStorage"
     private const val DOCS_DIR = "documents"
     private const val LEGACY_FILE = "document.json"
+    private const val SEARCH_INDEX_FILE = "search-index.json"
 
     private fun docsDir(context: Context): File {
         val dir = File(context.filesDir, DOCS_DIR)
@@ -62,6 +65,8 @@ object DocumentStorage {
             val file = docFile(context, name)
             file.writeText(json.toString())
             Log.i(TAG, "Saved ${data.main.strokes.size} strokes to $name")
+            // Update search index with per-line recognized text
+            updateSearchIndex(context, name, buildLineIndex(data))
         } catch (e: Exception) {
             Log.e(TAG, "Failed to save document $name", e)
         }
@@ -83,14 +88,171 @@ object DocumentStorage {
     fun listDocuments(context: Context): List<DocumentInfo> {
         val dir = docsDir(context)
         return dir.listFiles()
-            ?.filter { it.extension == "json" }
-            ?.map { DocumentInfo(it.nameWithoutExtension, it.lastModified()) }
+            ?.filter { it.extension == "json" && it.name != SEARCH_INDEX_FILE }
+            ?.map { file -> DocumentInfo(file.nameWithoutExtension, file.lastModified()) }
             ?.sortedByDescending { it.lastModified }
             ?: emptyList()
     }
 
+    // --- Search index ---
+    // Format: { "docName": { "lineIndex": "lowercase text", ... }, ... }
+
+    /** A search match: line index and the text on that line. */
+    data class SearchMatch(val lineIndex: Int, val text: String)
+
+    /** Load the search index. Returns doc name → list of (lineIndex, lowercased text). */
+    fun loadSearchIndex(context: Context): Map<String, List<SearchMatch>> {
+        return try {
+            val file = File(docsDir(context), SEARCH_INDEX_FILE)
+            if (!file.exists()) return emptyMap()
+            val json = org.json.JSONObject(file.readText())
+            val result = mutableMapOf<String, List<SearchMatch>>()
+            for (docName in json.keys()) {
+                val docEntry = json.get(docName)
+                if (docEntry is org.json.JSONObject) {
+                    val matches = mutableListOf<SearchMatch>()
+                    for (lineKey in docEntry.keys()) {
+                        // Cue lines are prefixed with "c" (e.g., "c0"), main lines are plain numbers
+                        val lineIndex = lineKey.removePrefix("c").toIntOrNull() ?: continue
+                        matches.add(SearchMatch(lineIndex, docEntry.getString(lineKey)))
+                    }
+                    result[docName] = matches.sortedBy { it.lineIndex }
+                } else if (docEntry is String) {
+                    // Legacy flat format — treat as single entry
+                    if (docEntry.isNotEmpty()) {
+                        result[docName] = listOf(SearchMatch(0, docEntry))
+                    }
+                }
+            }
+            result
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to load search index", e)
+            emptyMap()
+        }
+    }
+
+    /** Build per-line text index from DocumentData (main + cue). */
+    private fun buildLineIndex(data: DocumentData): org.json.JSONObject {
+        val linesJson = org.json.JSONObject()
+        for ((lineIdx, text) in data.main.lineTextCache) {
+            if (text.isNotEmpty()) linesJson.put(lineIdx.toString(), text.lowercase())
+        }
+        for ((lineIdx, text) in data.cue.lineTextCache) {
+            if (text.isNotEmpty()) {
+                // Prefix cue lines with "c" to distinguish from main
+                linesJson.put("c$lineIdx", text.lowercase())
+            }
+        }
+        return linesJson
+    }
+
+    private fun updateSearchIndex(context: Context, name: String, linesJson: org.json.JSONObject) {
+        try {
+            val file = File(docsDir(context), SEARCH_INDEX_FILE)
+            val json = if (file.exists()) org.json.JSONObject(file.readText()) else org.json.JSONObject()
+            json.put(name, linesJson)
+            file.writeText(json.toString())
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to update search index", e)
+        }
+    }
+
+    private fun removeFromSearchIndex(context: Context, name: String) {
+        try {
+            val file = File(docsDir(context), SEARCH_INDEX_FILE)
+            if (!file.exists()) return
+            val json = org.json.JSONObject(file.readText())
+            json.remove(name)
+            file.writeText(json.toString())
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to update search index", e)
+        }
+    }
+
+    private fun renameInSearchIndex(context: Context, oldName: String, newName: String) {
+        try {
+            val file = File(docsDir(context), SEARCH_INDEX_FILE)
+            if (!file.exists()) return
+            val json = org.json.JSONObject(file.readText())
+            val entry = json.opt(oldName)
+            json.remove(oldName)
+            if (entry != null) json.put(newName, entry)
+            file.writeText(json.toString())
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to update search index", e)
+        }
+    }
+
+    /** Check if the search index needs rebuilding (file missing, stale, or wrong format). */
+    fun ensureSearchIndex(context: Context) {
+        val indexFile = File(docsDir(context), SEARCH_INDEX_FILE)
+        if (!indexFile.exists()) {
+            rebuildSearchIndex(context)
+            return
+        }
+        // Check if any documents are missing from the index
+        try {
+            val json = org.json.JSONObject(indexFile.readText())
+            val docFiles = docsDir(context).listFiles()
+                ?.filter { it.extension == "json" && it.name != SEARCH_INDEX_FILE }
+                ?: emptyList()
+            val needsRebuild = docFiles.any { !json.has(it.nameWithoutExtension) }
+                || docFiles.any { json.opt(it.nameWithoutExtension) is String } // old flat format
+            if (needsRebuild) rebuildSearchIndex(context)
+        } catch (_: Exception) {
+            rebuildSearchIndex(context)
+        }
+    }
+
+    /** Rebuild the search index from all document files. Called once if index is missing. */
+    fun rebuildSearchIndex(context: Context) {
+        try {
+            val dir = docsDir(context)
+            val json = org.json.JSONObject()
+            dir.listFiles()?.filter { it.extension == "json" && it.name != SEARCH_INDEX_FILE }?.forEach { file ->
+                val linesJson = extractLineIndexFromFile(file)
+                json.put(file.nameWithoutExtension, linesJson)
+            }
+            File(dir, SEARCH_INDEX_FILE).writeText(json.toString())
+            Log.i(TAG, "Rebuilt search index with ${json.length()} documents")
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to rebuild search index", e)
+        }
+    }
+
+    /** Extract per-line recognized text from a document JSON file. */
+    private fun extractLineIndexFromFile(file: java.io.File): org.json.JSONObject {
+        val linesJson = org.json.JSONObject()
+        try {
+            val json = org.json.JSONObject(file.readText())
+            val mainJson = json.optJSONObject("main")
+            if (mainJson != null) {
+                extractTextCacheToLines(mainJson.optJSONObject("lineTextCache"), "", linesJson)
+            } else {
+                extractTextCacheToLines(json.optJSONObject("lineTextCache"), "", linesJson)
+            }
+            val cueJson = json.optJSONObject("cue")
+            if (cueJson != null) {
+                extractTextCacheToLines(cueJson.optJSONObject("lineTextCache"), "c", linesJson)
+            }
+        } catch (_: Exception) {}
+        return linesJson
+    }
+
+    private fun extractTextCacheToLines(
+        cacheObj: org.json.JSONObject?, prefix: String, out: org.json.JSONObject
+    ) {
+        if (cacheObj == null) return
+        for (key in cacheObj.keys()) {
+            val text = cacheObj.optString(key, "")
+            if (text.isNotEmpty()) out.put("$prefix$key", text.lowercase())
+        }
+    }
+
     fun delete(context: Context, name: String): Boolean {
-        return docFile(context, name).delete()
+        val deleted = docFile(context, name).delete()
+        if (deleted) removeFromSearchIndex(context, name)
+        return deleted
     }
 
     fun generateName(context: Context): String {
@@ -133,7 +295,9 @@ object DocumentStorage {
         val oldFile = docFile(context, oldName)
         val newFile = docFile(context, newName)
         if (!oldFile.exists() || newFile.exists()) return false
-        return oldFile.renameTo(newFile)
+        val renamed = oldFile.renameTo(newFile)
+        if (renamed) renameInSearchIndex(context, oldName, newName)
+        return renamed
     }
 
     // --- Sync folder export ---
@@ -178,6 +342,7 @@ object DocumentStorage {
 
     // --- Serialization ---
 
+    @androidx.annotation.VisibleForTesting
     internal fun serializeToJson(data: DocumentData): JSONObject {
         val json = JSONObject()
 
@@ -256,6 +421,7 @@ object DocumentStorage {
         return strokesArr
     }
 
+    @androidx.annotation.VisibleForTesting
     internal fun deserializeFromJson(text: String): DocumentData {
         val json = JSONObject(text)
 

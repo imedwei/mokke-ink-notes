@@ -206,8 +206,10 @@ class OnyxHwrTextRecognizer(private val context: Context) : TextRecognizer {
     }
 
     override fun close() {
-        ioScope.cancel()
-        if (!bound) return
+        if (!bound) {
+            ioScope.cancel()
+            return
+        }
         try {
             // closeRecognizer() is oneway (fire-and-forget); unbindService follows immediately
             // so the remote recognizer may not process the close before the transport tears down
@@ -219,6 +221,7 @@ class OnyxHwrTextRecognizer(private val context: Context) : TextRecognizer {
         bound = false
         service = null
         initialized = false
+        ioScope.cancel()
     }
 
     private fun readPfdAsString(pfd: ParcelFileDescriptor): String {

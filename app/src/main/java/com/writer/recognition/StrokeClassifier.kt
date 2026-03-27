@@ -147,11 +147,6 @@ class StrokeClassifier(private val lineSegmenter: LineSegmenter) {
 
     /**
      * Filter out the list marker and underline strokes before recognition.
-     * @param additionalExcludeIds stroke IDs consumed as heading underlines
-     *        for the line above (their center of mass placed them on this line).
-     */
-    /**
-     * Filter out the list marker and underline strokes before recognition.
      * Also checks if any stroke on this line is a heading underline for the
      * line above (its center of mass placed it here, but it visually belongs
      * to the line above as a heading marker).

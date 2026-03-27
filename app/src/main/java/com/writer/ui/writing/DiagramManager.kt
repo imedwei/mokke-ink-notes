@@ -201,7 +201,7 @@ class DiagramManager(
         canvas.pauseAndRedraw()
         host.onDiagramAreasChanged()
 
-        for (line in 0..area.endLineIndex) { lineTextCache.remove(line) }
+        for (line in area.startLineIndex..area.endLineIndex) { lineTextCache.remove(line) }
 
         val finalArea = columnModel.diagramAreas.find {
             it.heightInLines == shrunk.heightInLines

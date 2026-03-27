@@ -408,6 +408,10 @@ class WritingCoordinator(
         displayManager.displayHiddenLines()
     }
 
+    fun scrollToLine(lineIndex: Int) {
+        displayManager.scrollToLine(lineIndex)
+    }
+
     fun recognizeAllLines() {
         val strokesByLine = lineSegmenter.groupByLine(columnModel.activeStrokes)
         if (strokesByLine.isEmpty()) return

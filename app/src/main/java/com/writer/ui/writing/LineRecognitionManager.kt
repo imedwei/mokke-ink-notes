@@ -134,8 +134,6 @@ class LineRecognitionManager(
         if (host.userRenamed) return
         if (lineIndex != 0) return
         if (text.isEmpty() || text == "[?]") return
-        val isHeading = strokeClassifier.findUnderlineStrokeId(strokes, lineIndex) != null
-        if (!isHeading) return
         host.onHeadingDetected(text)
     }
 
