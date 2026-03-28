@@ -108,6 +108,14 @@ class WritingActivity : AppCompatActivity() {
     private val autoSaveRunnable = Runnable { saveDocument() }
     private val AUTO_SAVE_DELAY_MS = 5000L
 
+    // Debug: remote bug report generation via adb broadcast
+    private val bugReportReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: android.content.Context?, intent: android.content.Intent?) {
+            val file = coordinator?.generateBugReport()
+            Log.i(TAG, if (file != null) "Bug report generated: ${file.absolutePath}" else "No strokes to report")
+        }
+    }
+
     // Rename handwriting activity
     private val renameLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -158,6 +166,13 @@ class WritingActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        val filter = android.content.IntentFilter("${packageName}.GENERATE_BUG_REPORT")
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(bugReportReceiver, filter, RECEIVER_EXPORTED)
+        } else {
+            registerReceiver(bugReportReceiver, filter)
+        }
 
         setContentView(R.layout.activity_writing)
 
@@ -1661,6 +1676,7 @@ popupView.findViewById<android.view.View>(R.id.menuTutorial).setOnClickListener 
 
     override fun onDestroy() {
         super.onDestroy()
+        unregisterReceiver(bugReportReceiver)
         closeDualCanvasOnyx()
         coordinator?.stop()
         cueCoordinator?.stop()

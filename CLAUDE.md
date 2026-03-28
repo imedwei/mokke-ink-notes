@@ -46,12 +46,15 @@ Repeat steps 1-4 for each piece. After all pieces are complete:
 
 ## Device Debugging
 
-Bug reports are saved to `tmp/` (gitignored). When debugging a device issue:
+When debugging a device issue, use the Android MCP tools:
 
-1. **Capture a screenshot**: Use the Android MCP tool `get_screenshot` — returns the image inline, no file needed.
-2. **Generate a bug report** on the device: hamburger menu → Bug Report
-3. **Pull the bug report**: `./gradlew bugReport` — pulls the latest report to `tmp/`
-4. **Read the screenshot and bug report** to understand device state before making changes
+1. **Capture a screenshot**: Use the MCP tool `get_screenshot` — returns the image inline.
+2. **Generate and stream a bug report** (app must be on a writing screen with strokes):
+   ```bash
+   adb shell "am broadcast -W -a com.writer.dev.GENERATE_BUG_REPORT && content read --uri content://com.writer.dev.debug/bugreport"
+   ```
+   The broadcast triggers generation; the content provider streams the latest report.
+3. **Read the screenshot and bug report** to understand device state before making changes.
 
 Bug reports contain device info, recent stroke history, processing events, and document state.
 
