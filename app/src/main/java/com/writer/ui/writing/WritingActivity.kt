@@ -65,6 +65,7 @@ class WritingActivity : AppCompatActivity() {
     private var cueCoordinator: WritingCoordinator? = null
     private var isLandscape = false
     private var isFoldedToCues = false
+    private lateinit var columnLayoutLogic: ColumnLayoutLogic
 
     // View toggle button in gutter (Notes ↔ Cues)
     private lateinit var viewToggleButton: ImageView
@@ -74,9 +75,9 @@ class WritingActivity : AppCompatActivity() {
 
     /** The active coordinator — routes undo/redo to the right column.
      *  In portrait cue view, always use cue coordinator.
-     *  In landscape, use whichever canvas the pen last wrote on. */
+     *  In dual-column mode, use whichever canvas the pen last wrote on. */
     private val activeCoordinator: WritingCoordinator?
-        get() = if (isFoldedToCues || (isLandscape && isCueCanvasActive)) cueCoordinator else coordinator
+        get() = if (isFoldedToCues || (columnLayoutLogic.isDualColumn && isCueCanvasActive)) cueCoordinator else coordinator
     private var isCueCanvasActive = false
 
     // Floating gutter overlay
@@ -188,6 +189,12 @@ class WritingActivity : AppCompatActivity() {
         contextRail = findViewById(R.id.contextRail)
         mainSplitLayout = splitLayout
         isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+        columnLayoutLogic = ColumnLayoutLogic(object : ColumnLayoutLogic.Host {
+            override val isLargeScreen get() = ScreenMetrics.isLargeScreen
+            override var isLandscape
+                get() = this@WritingActivity.isLandscape
+                set(value) { this@WritingActivity.isLandscape = value }
+        })
 
         // View toggle button in gutter — switches between Notes and Cues
         viewToggleButton = findViewById(R.id.viewToggleButton)
@@ -337,7 +344,7 @@ class WritingActivity : AppCompatActivity() {
             // Sync cue indicator strip scroll
             cueIndicatorStrip.scrollOffsetY = inkCanvas.scrollOffsetY
             // Linked scroll: sync cue column
-            if (isLandscape) {
+            if (columnLayoutLogic.isDualColumn) {
                 cueInkCanvas.scrollOffsetY = inkCanvas.scrollOffsetY
                 cueInkCanvas.drawToSurface()
                 cueInkCanvas.onManualScroll?.invoke()
@@ -348,7 +355,7 @@ class WritingActivity : AppCompatActivity() {
             inkCanvas.drawToSurface()
             inkCanvas.onManualScroll?.invoke()
             cueIndicatorStrip.scrollOffsetY = inkCanvas.scrollOffsetY
-            if (isLandscape) {
+            if (columnLayoutLogic.isDualColumn) {
                 cueInkCanvas.scrollOffsetY = inkCanvas.scrollOffsetY
                 cueInkCanvas.drawToSurface()
                 cueInkCanvas.onManualScroll?.invoke()
@@ -419,8 +426,8 @@ class WritingActivity : AppCompatActivity() {
             contextRail.scrollOffsetY = cueInkCanvas.scrollOffsetY
         }
 
-        // Show cue column if starting in landscape, otherwise show indicator strip
-        if (isLandscape) {
+        // Show cue column if dual-column mode, otherwise show indicator strip
+        if (columnLayoutLogic.isDualColumn) {
             showCueColumn()
         } else {
             cueIndicatorStrip.visibility = View.VISIBLE
@@ -617,7 +624,7 @@ class WritingActivity : AppCompatActivity() {
                 coordinator?.start()
                 coordinator?.restoreState(data)
 
-                if (isLandscape) {
+                if (columnLayoutLogic.isDualColumn) {
                     cueInkCanvas.diagramAreas = data.cue.diagramAreas
                     cueInkCanvas.scrollOffsetY = data.scrollOffsetY
                     cueInkCanvas.loadStrokes(data.cue.strokes)
@@ -949,19 +956,28 @@ popupView.findViewById<android.view.View>(R.id.menuTutorial).setOnClickListener 
         val nowLandscape = newConfig.orientation == Configuration.ORIENTATION_LANDSCAPE
         if (nowLandscape == isLandscape) return
 
-        // Dismiss cue peek popup — landscape shows full cue column
+        // Dismiss cue peek popup
         cuePeekPopup?.dismiss()
 
-        // Unfold from cue view BEFORE updating isLandscape — unfoldToNotes()
-        // checks isLandscape and returns early if already landscape.
+        val wasDualColumn = columnLayoutLogic.isDualColumn
+
+        // Unfold from cue view BEFORE updating orientation — unfoldToNotes()
+        // checks isDualColumn and returns early if already dual.
         if (nowLandscape && isFoldedToCues) unfoldToNotes()
 
-        isLandscape = nowLandscape
+        // Update orientation state and refresh ScreenMetrics for new width
+        columnLayoutLogic.onOrientationChanged(nowLandscape)
+        ScreenMetrics.init(resources.displayMetrics, resources.configuration)
 
-        if (isLandscape) {
+        val nowDualColumn = columnLayoutLogic.isDualColumn
+
+        if (nowDualColumn) {
             cueIndicatorStrip.visibility = View.GONE
+        } else if (!wasDualColumn) {
+            // Was single column, staying single column — close shared SDK
+            closeDualCanvasOnyx()
         } else {
-            // Close shared SDK first, before views change size
+            // Was dual column, going to single — close shared SDK before views resize
             closeDualCanvasOnyx()
         }
 
@@ -975,7 +991,7 @@ popupView.findViewById<android.view.View>(R.id.menuTutorial).setOnClickListener 
                     inkCanvas.viewTreeObserver.removeOnGlobalLayoutListener(this)
                     applyFixedSplitHeights()
 
-                    if (isLandscape) {
+                    if (nowDualColumn) {
                         showCueColumn()
                     } else {
                         hideCueColumn()
@@ -1039,8 +1055,11 @@ popupView.findViewById<android.view.View>(R.id.menuTutorial).setOnClickListener 
     private fun showCueColumn() {
         columnDivider.visibility = View.VISIBLE
         cueSplitLayout.visibility = View.VISIBLE
-        // Hide toggle in landscape — both columns visible
-        viewToggleButton.visibility = View.GONE
+        // Toggle visibility based on layout logic
+        viewToggleButton.visibility = if (columnLayoutLogic.showToggleButton) View.VISIBLE else View.GONE
+
+        // Apply column widths (fixed pixel widths on large screens, weights on small)
+        applyColumnWidths()
 
         // Apply same text/canvas split heights as main column
         applyCueSplitHeights()
@@ -1103,6 +1122,29 @@ popupView.findViewById<android.view.View>(R.id.menuTutorial).setOnClickListener 
         }
     }
 
+    /** Apply column widths from ColumnLayoutLogic. Large screens use fixed pixel widths;
+     *  small screens use equal layout weights (50/50). */
+    private fun applyColumnWidths() {
+        val widths = columnLayoutLogic.columnWidths()
+        val mainParams = mainSplitLayout.layoutParams as LinearLayout.LayoutParams
+        val cueParams = cueSplitLayout.layoutParams as LinearLayout.LayoutParams
+        if (widths.mainWidthPx > 0) {
+            // Large screen: fixed pixel widths
+            mainParams.width = widths.mainWidthPx
+            mainParams.weight = 0f
+            cueParams.width = widths.cueWidthPx
+            cueParams.weight = 0f
+        } else {
+            // Small screen: equal weights (50/50)
+            mainParams.width = 0
+            mainParams.weight = 1f
+            cueParams.width = 0
+            cueParams.weight = 1f
+        }
+        mainSplitLayout.layoutParams = mainParams
+        cueSplitLayout.layoutParams = cueParams
+    }
+
     /** Apply the same text/canvas split heights to the cue column as the main column. */
     private fun applyCueSplitHeights() {
         val textParams = cueRecognizedTextView.layoutParams as LinearLayout.LayoutParams
@@ -1121,14 +1163,18 @@ popupView.findViewById<android.view.View>(R.id.menuTutorial).setOnClickListener 
         cueCoordinator?.onLinkedScroll = null
         cueCoordinator?.onSpaceChanged = null
         coordinator?.onSpaceChanged = null
-        // Restore portrait strip scroll sync (landscape overwrote it)
+        // Restore portrait strip scroll sync
         coordinator?.onLinkedScroll = { cueIndicatorStrip.scrollOffsetY = inkCanvas.scrollOffsetY }
 
-        // Remove landscape left gutter padding
         closeDualCanvasOnyx()
         columnDivider.visibility = View.GONE
         cueSplitLayout.visibility = View.GONE
-        viewToggleButton.visibility = View.VISIBLE
+        viewToggleButton.visibility = if (columnLayoutLogic.showToggleButton) View.VISIBLE else View.GONE
+        // Reset main column to fill width
+        val mainParams = mainSplitLayout.layoutParams as LinearLayout.LayoutParams
+        mainParams.width = 0
+        mainParams.weight = 1f
+        mainSplitLayout.layoutParams = mainParams
         updateViewToggleIcon()
 
         // Restore main canvas per-view Onyx SDK
@@ -1138,9 +1184,10 @@ popupView.findViewById<android.view.View>(R.id.menuTutorial).setOnClickListener 
         Log.i(TAG, "Cue column hidden (portrait)")
     }
 
-    /** Portrait: fold from notes to cues view — show cue column full-width, hide main. */
+    /** Portrait: fold from notes to cues view — show cue column full-width, hide main.
+     *  Only available on small screens in portrait (not dual-column mode). */
     private fun foldToCues() {
-        if (isLandscape || isFoldedToCues) return
+        if (columnLayoutLogic.isDualColumn || isFoldedToCues) return
         isFoldedToCues = true
 
         // Hide main column, show cue column
@@ -1187,9 +1234,10 @@ popupView.findViewById<android.view.View>(R.id.menuTutorial).setOnClickListener 
         }
     }
 
-    /** Portrait: unfold from cues back to notes view. */
+    /** Portrait: unfold from cues back to notes view.
+     *  Only available on small screens in portrait (not dual-column mode). */
     private fun unfoldToNotes() {
-        if (isLandscape || !isFoldedToCues) return
+        if (columnLayoutLogic.isDualColumn || !isFoldedToCues) return
         isFoldedToCues = false
 
         // Show main column, hide cue column
@@ -1285,20 +1333,27 @@ popupView.findViewById<android.view.View>(R.id.menuTutorial).setOnClickListener 
         Log.d(TAG, "Onyx SDK transferred to ${if (toCue) "cue" else "main"} canvas at ($hoverX, $hoverY)")
     }
 
-    /** Update the indicator strip with current cue line indices. */
-    /** Toggle between Notes and Cues view in portrait. */
+    /** Toggle button handler — behavior depends on screen size and orientation. */
     private fun toggleNotesCues() {
-        if (isLandscape) return
-        // During tutorial basics, toggle is disabled
-        if (tutorialManager.isActive && !tutorialManager.isCornellPhase()) return
-        if (isFoldedToCues) {
-            unfoldToNotes()
-            // Notify tutorial that user unfolded to notes
-            tutorialManager.onStepAction("unfolded_to_notes")
-        } else {
-            foldToCues()
-            // Notify tutorial that user folded to cues
-            tutorialManager.onStepAction("folded_to_cues")
+        when (columnLayoutLogic.toggleAction) {
+            ColumnLayoutLogic.ToggleAction.NONE -> return
+            ColumnLayoutLogic.ToggleAction.EXPAND_CUE -> {
+                // Large screen portrait: expand/contract cue column
+                columnLayoutLogic.toggleCueExpand()
+                applyColumnWidths()
+            }
+            ColumnLayoutLogic.ToggleAction.FOLD_UNFOLD -> {
+                // Small screen portrait: fold/unfold between notes and cues
+                // During tutorial basics, toggle is disabled
+                if (tutorialManager.isActive && !tutorialManager.isCornellPhase()) return
+                if (isFoldedToCues) {
+                    unfoldToNotes()
+                    tutorialManager.onStepAction("unfolded_to_notes")
+                } else {
+                    foldToCues()
+                    tutorialManager.onStepAction("folded_to_cues")
+                }
+            }
         }
     }
 
@@ -1546,8 +1601,8 @@ popupView.findViewById<android.view.View>(R.id.menuTutorial).setOnClickListener 
         savedCueStrokes = null
         savedCueDiagramAreas = null
 
-        // Restore cue indicator strip
-        if (!isLandscape) {
+        // Restore cue indicator strip (only on small screens in portrait)
+        if (!columnLayoutLogic.isDualColumn) {
             cueIndicatorStrip.visibility = View.VISIBLE
             updateCueIndicatorStrip()
         }
