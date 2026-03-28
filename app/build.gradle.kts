@@ -137,26 +137,7 @@ fun runScript(script: String, vararg args: String) {
     }
 }
 
-tasks.register("screenshot") {
-    description = "Capture screenshot from connected device to tmp/"
-    group = "device"
-    val adb = android.adbExecutable.absolutePath
-    val rootDir = project.rootDir
-    doLast {
-        val outDir = File(rootDir, "tmp")
-        outDir.mkdirs()
-        val timestamp = System.currentTimeMillis()
-        val outFile = File(outDir, "screenshot-$timestamp.png")
-        outFile.outputStream().use { out ->
-            val proc = ProcessBuilder(adb, "exec-out", "screencap", "-p")
-                .redirectErrorStream(true)
-                .start()
-            proc.inputStream.copyTo(out)
-            proc.waitFor()
-        }
-        println("Screenshot saved to: ${outFile.relativeTo(rootDir)}")
-    }
-}
+
 
 tasks.register("bugReport") {
     description = "Pull latest bug report from connected device to tmp/"

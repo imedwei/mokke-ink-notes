@@ -46,9 +46,9 @@ Repeat steps 1-4 for each piece. After all pieces are complete:
 
 ## Device Debugging
 
-Screenshots and bug reports are saved to `tmp/` (gitignored). When debugging a device issue:
+Bug reports are saved to `tmp/` (gitignored). When debugging a device issue:
 
-1. **Capture a screenshot**: `./gradlew screenshot` — saves timestamped PNG to `tmp/`
+1. **Capture a screenshot**: Use the Android MCP tool `get_screenshot` — returns the image inline, no file needed.
 2. **Generate a bug report** on the device: hamburger menu → Bug Report
 3. **Pull the bug report**: `./gradlew bugReport` — pulls the latest report to `tmp/`
 4. **Read the screenshot and bug report** to understand device state before making changes
