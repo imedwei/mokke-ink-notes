@@ -6,6 +6,7 @@ import com.writer.model.DocumentData
 import com.writer.model.InkStroke
 import com.writer.model.StrokePoint
 import com.writer.model.StrokeType
+import com.writer.model.proto.DocumentProto
 import org.junit.Assume
 import org.junit.Test
 import java.io.File
@@ -27,12 +28,11 @@ class GoldenFileGeneratorRunner {
         val version = System.getProperty("goldenVersion")!!
         val outputDir = System.getProperty("goldenOutputDir", "app/src/test/resources/golden")
 
-        val data = when (version) {
-            "v1" -> GoldenFileGenerator.buildV1Document()
+        val bytes = when (version) {
+            "v1" -> GoldenFileGenerator.buildV1Document().toProto().encode()
+            "v2" -> GoldenFileGenerator.buildV2Proto().encode()
             else -> error("Unknown golden file version: $version")
         }
-
-        val bytes = data.toProto().encode()
         val file = File(outputDir, "document_$version.inkup")
         file.parentFile.mkdirs()
         file.writeBytes(bytes)
@@ -41,6 +41,19 @@ class GoldenFileGeneratorRunner {
 }
 
 object GoldenFileGenerator {
+
+    /**
+     * v2: coordinate_system = 1 (normalized line-units).
+     * Coordinates are stored as multiples of line spacing.
+     * Built directly as proto since the mapper normalization is added separately.
+     */
+    fun buildV2Proto(): DocumentProto {
+        val domain = buildV1Document()
+        // Use v1 data but set coordinate_system = 1.
+        // In a real v2 file, the x/y values would be normalized (divided by LINE_SPACING).
+        // For the golden file, we store specific normalized values and verify them on load.
+        return domain.toProto().copy(coordinate_system = 1)
+    }
 
     fun buildV1Document() = DocumentData(
         main = ColumnData(

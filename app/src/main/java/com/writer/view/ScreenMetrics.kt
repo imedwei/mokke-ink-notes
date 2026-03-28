@@ -14,9 +14,9 @@ import kotlin.math.roundToInt
  *    Same as dp but additionally respects the user's system font-size preference
  *    via [TypedValue.applyDimension] with [TypedValue.COMPLEX_UNIT_SP].
  *
- * The compact/standard breakpoint uses [Configuration.smallestScreenWidthDp] —
- * the same mechanism Android resource qualifiers (e.g. `values-sw600dp/`) use —
- * rather than computing a physical diagonal.
+ * Screen-size classification uses [Configuration.smallestScreenWidthDp]:
+ *  - **Large screen** (sw >= 900dp): Tab X C, Note Air 5C — dual-column in both orientations
+ *  - **Small screen** (sw < 900dp): Go 7, Palma 2 Pro — fold/unfold in portrait, dual in landscape
  *
  * Call [init] once in `Application.onCreate()` before any view is inflated,
  * and re-call it in `onConfigurationChanged` if the user changes font scale
@@ -25,17 +25,22 @@ import kotlin.math.roundToInt
  */
 object ScreenMetrics {
 
-    // ── Compact-mode breakpoint ───────────────────────────────────────────────
-    // Palma 2 Pro ≈ 439 sw-dp (824 px / 1.875), Go 7 ≈ 674 sw-dp — threshold sits between them.
-    private const val COMPACT_SW_DP = 650
+    // ── Screen-size breakpoint ─────────────────────────────────────────────
+    // Tab X C ≈ 1280 sw-dp, Note Air 5C ≈ 992 sw-dp — both large.
+    // Go 7 ≈ 674 sw-dp, Palma 2 Pro ≈ 439 sw-dp — both small.
+    private const val LARGE_SCREEN_SW_DP = 900
 
-    // ── Standard dp constants (Go 7, Note 5C, Tab X C) ───────────────────────
-    private const val LINE_SPACING_DP        = 63f   // ≈ 10.0 mm
-    private const val CANVAS_FRACTION        = 0.70f // 70 % of screen height for canvas
+    // ── Large-screen dp constants (Tab X C, Note Air 5C) ───────────────────
+    private const val LINE_SPACING_LARGE_DP = 50f   // ≈  8.0 mm
+    private const val CANVAS_FRACTION_LARGE = 0.70f // 70 % of screen height for canvas
 
-    // ── Compact dp constants (Palma 2 Pro) ───────────────────────────────────
-    private const val LINE_SPACING_COMPACT_DP    = 41f   // ≈  6.5 mm
-    private const val CANVAS_FRACTION_COMPACT    = 0.82f // 82 % of screen height for canvas
+    // ── Small-screen dp constants (Go 7, Palma 2 Pro) ──────────────────────
+    private const val LINE_SPACING_SMALL_DP = 41f   // ≈  6.5 mm
+    private const val CANVAS_FRACTION_SMALL = 0.82f // 82 % of screen height for canvas
+
+    // ── Column layout constants ────────────────────────────────────────────
+    private const val MAIN_COLUMN_FRACTION  = 0.70f // 70% main, 30% cue (Cornell standard)
+    private const val COLUMN_DIVIDER_DP     = 4f    // Visual divider between columns
 
     // ── Shared dp constants ───────────────────────────────────────────────────
     private const val TOP_MARGIN_DP      = 19f   // ≈  3.0 mm
@@ -52,8 +57,8 @@ object ScreenMetrics {
 
     // ── Computed pixel values (set by init) ───────────────────────────────────
     var density:       Float   = 1f;    private set
-    /** True when the device's smallestScreenWidthDp is below [COMPACT_SW_DP]. */
-    var isCompact:     Boolean = false; private set
+    /** True when the device's smallestScreenWidthDp is at or above [LARGE_SCREEN_SW_DP]. */
+    var isLargeScreen: Boolean = false; private set
 
     // DisplayMetrics reference for proper SP conversion (null in tests)
     private var displayMetrics: android.util.DisplayMetrics? = null
@@ -70,7 +75,23 @@ object ScreenMetrics {
     var textCloseBtn:  Float =  35f; private set
     var textTutorial:  Float =  32f; private set
 
-    private var canvasFraction: Float = CANVAS_FRACTION
+    private var canvasFraction: Float = CANVAS_FRACTION_LARGE
+
+    // ── Large-screen column widths (pixels) ──────────────────────────────────
+    // On large screens, main column width is fixed at 70% of portrait width
+    // across all orientations. Cue gets the remaining space.
+    // Zero on small screens (not applicable — small screens use fold/unfold).
+
+    /** Column divider width in pixels. */
+    var columnDividerPx: Int = 0; private set
+    /** Main column width in pixels (70% of portrait width). 0 on small screens. */
+    var mainColumnWidthPx: Int = 0; private set
+    /** Cue column width in portrait mode (30% of portrait width). 0 on small screens. */
+    var portraitCueWidthPx: Int = 0; private set
+    /** Cue column width in landscape mode (all remaining space). 0 on small screens. */
+    var landscapeCueWidthPx: Int = 0; private set
+    /** Main column width when cue is expanded in portrait (portrait - landscapeCue - divider). 0 on small screens. */
+    var expandedPortraitMainWidthPx: Int = 0; private set
 
     // ── Initialisation ────────────────────────────────────────────────────────
 
@@ -122,14 +143,30 @@ object ScreenMetrics {
         heightPixels: Int
     ) {
         this.density   = density.coerceAtLeast(0.5f)
-        isCompact      = smallestWidthDp < COMPACT_SW_DP
+        isLargeScreen  = smallestWidthDp >= LARGE_SCREEN_SW_DP
 
-        val lineSpacingDp  = if (isCompact) LINE_SPACING_COMPACT_DP  else LINE_SPACING_DP
-        canvasFraction     = if (isCompact) CANVAS_FRACTION_COMPACT  else CANVAS_FRACTION
+        val lineSpacingDp  = if (isLargeScreen) LINE_SPACING_LARGE_DP else LINE_SPACING_SMALL_DP
+        canvasFraction     = if (isLargeScreen) CANVAS_FRACTION_LARGE else CANVAS_FRACTION_SMALL
 
         lineSpacing  = (lineSpacingDp         * this.density).roundToInt().toFloat()
         topMargin    = (TOP_MARGIN_DP          * this.density).roundToInt().toFloat()
         strokeWidth  =  STROKE_WIDTH_DP        * this.density
+
+        // Column widths for large-screen dual-column layout
+        columnDividerPx = (COLUMN_DIVIDER_DP * this.density).roundToInt()
+        if (isLargeScreen) {
+            val portraitWidthPx = minOf(widthPixels, heightPixels)
+            val landscapeWidthPx = maxOf(widthPixels, heightPixels)
+            mainColumnWidthPx = (portraitWidthPx * MAIN_COLUMN_FRACTION).toInt()
+            portraitCueWidthPx = portraitWidthPx - mainColumnWidthPx - columnDividerPx
+            landscapeCueWidthPx = landscapeWidthPx - mainColumnWidthPx - columnDividerPx
+            expandedPortraitMainWidthPx = portraitWidthPx - landscapeCueWidthPx - columnDividerPx
+        } else {
+            mainColumnWidthPx = 0
+            portraitCueWidthPx = 0
+            landscapeCueWidthPx = 0
+            expandedPortraitMainWidthPx = 0
+        }
     }
 
     private fun computeTextSizes() {

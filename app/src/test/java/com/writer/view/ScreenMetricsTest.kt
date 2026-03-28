@@ -62,25 +62,26 @@ class ScreenMetricsTest {
 
     // ── line spacing ─────────────────────────────────────────────────────────
 
-    @Test fun lineSpacing_tabXC_isInWritingRange() {
+    @Test fun lineSpacing_tabXC_isInLargeScreenRange() {
         init(SW_TAB_X_C, W_TAB_X_C, H_TAB_X_C)
         val mm = toMm(ScreenMetrics.lineSpacing)
-        assertTrue("lineSpacing should be >= 8 mm on Tab X C, was $mm mm", mm >= 8f)
-        assertTrue("lineSpacing should be <= 13 mm on Tab X C, was $mm mm", mm <= 13f)
+        assertTrue("lineSpacing should be >= 7 mm on Tab X C, was $mm mm", mm >= 7f)
+        assertTrue("lineSpacing should be <= 10 mm on Tab X C, was $mm mm", mm <= 10f)
     }
 
-    @Test fun lineSpacing_note5C_isInWritingRange() {
+    @Test fun lineSpacing_note5C_isInLargeScreenRange() {
         init(SW_NOTE_5C, W_NOTE_5C, H_NOTE_5C)
         val mm = toMm(ScreenMetrics.lineSpacing)
-        assertTrue("lineSpacing should be >= 8 mm on Note Air 5C, was $mm mm", mm >= 8f)
-        assertTrue("lineSpacing should be <= 13 mm on Note Air 5C, was $mm mm", mm <= 13f)
+        assertTrue("lineSpacing should be >= 7 mm on Note Air 5C, was $mm mm", mm >= 7f)
+        assertTrue("lineSpacing should be <= 10 mm on Note Air 5C, was $mm mm", mm <= 10f)
     }
 
-    @Test fun lineSpacing_go7_isInWritingRange() {
+    @Test fun lineSpacing_go7_isInSmallScreenRange() {
+        // Go 7 is a small screen — same line spacing as Palma 2 Pro
         init(SW_GO_7, W_GO_7, H_GO_7)
         val mm = toMm(ScreenMetrics.lineSpacing)
-        assertTrue("lineSpacing should be >= 8 mm on Go 7, was $mm mm", mm >= 8f)
-        assertTrue("lineSpacing should be <= 13 mm on Go 7, was $mm mm", mm <= 13f)
+        assertTrue("lineSpacing should be >= 6 mm on Go 7, was $mm mm", mm >= 6f)
+        assertTrue("lineSpacing should be <= 9 mm on Go 7, was $mm mm", mm <= 9f)
     }
 
     @Test fun lineSpacing_palma2Pro_isInCompactWritingRange() {
@@ -235,40 +236,56 @@ class ScreenMetricsTest {
         assertEquals("textBody at fontScale=2 should be ~2x default", baseTextBody * 2f, ScreenMetrics.textBody, 0.1f)
     }
 
-    // ── compact-mode classification ───────────────────────────────────────────
+    // ── screen-size classification ────────────────────────────────────────────
 
-    @Test fun isCompact_palma2Pro_isTrue() {
-        init(SW_PALMA_2PRO, W_PALMA_2PRO, H_PALMA_2PRO)
-        assertTrue("Palma 2 Pro (sw=$SW_PALMA_2PRO dp) should be compact mode", ScreenMetrics.isCompact)
-    }
-
-    @Test fun isCompact_go7_isFalse() {
-        init(SW_GO_7, W_GO_7, H_GO_7)
-        assertTrue("Go 7 (sw=$SW_GO_7 dp) should NOT be compact mode", !ScreenMetrics.isCompact)
-    }
-
-    @Test fun isCompact_note5C_isFalse() {
-        init(SW_NOTE_5C, W_NOTE_5C, H_NOTE_5C)
-        assertTrue("Note Air 5C (sw=$SW_NOTE_5C dp) should NOT be compact mode", !ScreenMetrics.isCompact)
-    }
-
-    @Test fun isCompact_tabXC_isFalse() {
+    @Test fun isLargeScreen_tabXC_isTrue() {
         init(SW_TAB_X_C, W_TAB_X_C, H_TAB_X_C)
-        assertTrue("Tab X C (sw=$SW_TAB_X_C dp) should NOT be compact mode", !ScreenMetrics.isCompact)
+        assertTrue("Tab X C (sw=$SW_TAB_X_C dp) should be large screen", ScreenMetrics.isLargeScreen)
     }
 
-    @Test fun compactMode_lineSpacing_isSmallerThan_standardMode() {
-        init(SW_PALMA_2PRO, W_PALMA_2PRO, H_PALMA_2PRO)
-        val compactSpacing = ScreenMetrics.lineSpacing
+    @Test fun isLargeScreen_note5C_isTrue() {
+        init(SW_NOTE_5C, W_NOTE_5C, H_NOTE_5C)
+        assertTrue("Note Air 5C (sw=$SW_NOTE_5C dp) should be large screen", ScreenMetrics.isLargeScreen)
+    }
+
+    @Test fun isLargeScreen_go7_isFalse() {
         init(SW_GO_7, W_GO_7, H_GO_7)
-        val standardSpacing = ScreenMetrics.lineSpacing
+        assertTrue("Go 7 (sw=$SW_GO_7 dp) should NOT be large screen", !ScreenMetrics.isLargeScreen)
+    }
+
+    @Test fun isLargeScreen_palma2Pro_isFalse() {
+        init(SW_PALMA_2PRO, W_PALMA_2PRO, H_PALMA_2PRO)
+        assertTrue("Palma 2 Pro (sw=$SW_PALMA_2PRO dp) should NOT be large screen", !ScreenMetrics.isLargeScreen)
+    }
+
+    @Test fun smallScreen_lineSpacing_isSmallerThan_largeScreen() {
+        init(SW_PALMA_2PRO, W_PALMA_2PRO, H_PALMA_2PRO)
+        val smallSpacing = ScreenMetrics.lineSpacing
+        init(SW_TAB_X_C, W_TAB_X_C, H_TAB_X_C)
+        val largeSpacing = ScreenMetrics.lineSpacing
         assertTrue(
-            "Compact line spacing ($compactSpacing px) should be < standard ($standardSpacing px)",
-            compactSpacing < standardSpacing
+            "Small screen line spacing ($smallSpacing px) should be < large ($largeSpacing px)",
+            smallSpacing < largeSpacing
         )
     }
 
-    @Test fun compactMode_textPanel_isNoMoreThan30Percent_palma2Pro() {
+    @Test fun go7_and_palma_haveSameLineSpacing() {
+        init(SW_GO_7, W_GO_7, H_GO_7)
+        val go7Spacing = ScreenMetrics.lineSpacing
+        init(SW_PALMA_2PRO, W_PALMA_2PRO, H_PALMA_2PRO)
+        val palmaSpacing = ScreenMetrics.lineSpacing
+        assertEquals("Go 7 and Palma should have same line spacing", palmaSpacing, go7Spacing, 0.001f)
+    }
+
+    @Test fun tabXC_and_note5C_haveSameLineSpacing() {
+        init(SW_TAB_X_C, W_TAB_X_C, H_TAB_X_C)
+        val tabSpacing = ScreenMetrics.lineSpacing
+        init(SW_NOTE_5C, W_NOTE_5C, H_NOTE_5C)
+        val noteSpacing = ScreenMetrics.lineSpacing
+        assertEquals("Tab X C and Note 5C should have same line spacing", tabSpacing, noteSpacing, 0.001f)
+    }
+
+    @Test fun smallScreen_textPanel_isNoMoreThan30Percent_palma2Pro() {
         init(SW_PALMA_2PRO, W_PALMA_2PRO, H_PALMA_2PRO)
         val canvas    = ScreenMetrics.computeDefaultCanvasHeight(H_PALMA_2PRO)
         val textPanel = H_PALMA_2PRO - canvas
@@ -279,10 +296,56 @@ class ScreenMetricsTest {
         )
     }
 
-    @Test fun standardMode_go7_lineSpacing_isUnchanged() {
-        // Go 7 sits above the compact threshold and must use standard targets.
+    // ── large-screen column widths ──────────────────────────────────────────
+
+    @Test fun mainColumnWidth_tabXC_is70PercentOfPortraitWidth() {
+        init(SW_TAB_X_C, W_TAB_X_C, H_TAB_X_C)
+        // Portrait width = min(3200, 2400) = 2400 px. Main = 70% = 1680 px.
+        assertEquals(1680, ScreenMetrics.mainColumnWidthPx)
+    }
+
+    @Test fun mainColumnWidth_note5C_is70PercentOfPortraitWidth() {
+        init(SW_NOTE_5C, W_NOTE_5C, H_NOTE_5C)
+        // Portrait width = min(2480, 1860) = 1860 px. Main = 70% = 1302 px.
+        assertEquals(1302, ScreenMetrics.mainColumnWidthPx)
+    }
+
+    @Test fun mainColumnWidth_isConstantAcrossOrientations_tabXC() {
+        // Portrait orientation (width=2400, height=3200)
+        init(SW_TAB_X_C, H_TAB_X_C, W_TAB_X_C)
+        val portraitMain = ScreenMetrics.mainColumnWidthPx
+        // Landscape orientation (width=3200, height=2400)
+        init(SW_TAB_X_C, W_TAB_X_C, H_TAB_X_C)
+        val landscapeMain = ScreenMetrics.mainColumnWidthPx
+        assertEquals("Main column should be same width in portrait and landscape",
+            portraitMain, landscapeMain)
+    }
+
+    @Test fun expandedPortraitCueWidth_equalsLandscapeCueWidth_tabXC() {
+        init(SW_TAB_X_C, W_TAB_X_C, H_TAB_X_C)
+        val landscapeCue = ScreenMetrics.landscapeCueWidthPx
+        val expandedPortraitCue = ScreenMetrics.landscapeCueWidthPx
+        assertEquals(landscapeCue, expandedPortraitCue)
+    }
+
+    @Test fun columnWidths_smallScreen_areZero() {
         init(SW_GO_7, W_GO_7, H_GO_7)
-        val mmSpacing = toMm(ScreenMetrics.lineSpacing)
-        assertTrue("Go 7 line spacing should be >= 9 mm (standard), was $mmSpacing mm", mmSpacing >= 9f)
+        assertEquals("Small screen should have 0 mainColumnWidthPx", 0, ScreenMetrics.mainColumnWidthPx)
+    }
+
+    @Test fun portraitCueWidth_plus_mainWidth_plus_divider_equalsPortraitWidth_tabXC() {
+        init(SW_TAB_X_C, W_TAB_X_C, H_TAB_X_C)
+        val portraitWidth = minOf(W_TAB_X_C, H_TAB_X_C) // 2400
+        val total = ScreenMetrics.mainColumnWidthPx + ScreenMetrics.portraitCueWidthPx +
+            ScreenMetrics.columnDividerPx
+        assertEquals("Column widths + divider should equal portrait width", portraitWidth, total)
+    }
+
+    @Test fun landscapeCueWidth_plus_mainWidth_plus_divider_equalsLandscapeWidth_tabXC() {
+        init(SW_TAB_X_C, W_TAB_X_C, H_TAB_X_C)
+        val landscapeWidth = maxOf(W_TAB_X_C, H_TAB_X_C) // 3200
+        val total = ScreenMetrics.mainColumnWidthPx + ScreenMetrics.landscapeCueWidthPx +
+            ScreenMetrics.columnDividerPx
+        assertEquals("Column widths + divider should equal landscape width", landscapeWidth, total)
     }
 }

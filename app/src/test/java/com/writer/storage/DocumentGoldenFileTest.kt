@@ -4,6 +4,7 @@ import com.writer.model.StrokeType
 import com.writer.model.proto.DocumentProto
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -144,6 +145,39 @@ class DocumentGoldenFileTest {
         assertEquals(1, data.cue.strokes.size)
         assertEquals("cue-proto-1", data.cue.strokes[0].strokeId)
         assertEquals("cue entry", data.cue.lineTextCache[0])
+    }
+
+    // ── Protobuf v2 (.inkup) — coordinate_system = 1 ─────────────────────
+
+    @Test
+    fun protoV2_loadsWithCoordinateSystem() {
+        val bytes = loadResource("document_v2.inkup")
+        val proto = DocumentProto.ADAPTER.decode(bytes)
+
+        // coordinate_system field is present and set to 1 (normalized line-units)
+        assertEquals(1, proto.coordinate_system!!)
+
+        // All other data matches v1 (same builder base)
+        assertNotNull(proto.main)
+        assertEquals(3, proto.main!!.strokes.size)
+        assertEquals("proto-stroke-1", proto.main!!.strokes[0].stroke_id)
+
+        assertNotNull(proto.cue)
+        assertEquals(1, proto.cue!!.strokes.size)
+        assertEquals("cue-proto-1", proto.cue!!.strokes[0].stroke_id)
+
+        assertEquals(75.5f, proto.scroll_offset_y!!, 0.1f)
+        assertEquals(7, proto.highest_line_index)
+        assertEquals(5, proto.current_line_index)
+        assertTrue(proto.user_renamed!!)
+    }
+
+    @Test
+    fun protoV1_hasNoCoordinateSystem() {
+        val bytes = loadResource("document_v1.inkup")
+        val proto = DocumentProto.ADAPTER.decode(bytes)
+        // v1 files have no coordinate_system field — Wire returns null (absent)
+        assertEquals(null, proto.coordinate_system)
     }
 
 }
