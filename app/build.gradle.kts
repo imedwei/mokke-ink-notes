@@ -140,9 +140,10 @@ fun runScript(script: String, vararg args: String) {
 tasks.register("screenshot") {
     description = "Capture screenshot from connected device to tmp/"
     group = "device"
+    val adb = android.adbExecutable.absolutePath
+    val rootDir = project.rootDir
     doLast {
-        val adb = android.adbExecutable.absolutePath
-        val outDir = File(project.rootDir, "tmp")
+        val outDir = File(rootDir, "tmp")
         outDir.mkdirs()
         val timestamp = System.currentTimeMillis()
         val outFile = File(outDir, "screenshot-$timestamp.png")
@@ -153,18 +154,19 @@ tasks.register("screenshot") {
             proc.inputStream.copyTo(out)
             proc.waitFor()
         }
-        println("Screenshot saved to: ${outFile.relativeTo(project.rootDir)}")
+        println("Screenshot saved to: ${outFile.relativeTo(rootDir)}")
     }
 }
 
 tasks.register("bugReport") {
     description = "Pull latest bug report from connected device to tmp/"
     group = "device"
+    val adb = android.adbExecutable.absolutePath
+    val rootDir = project.rootDir
     doLast {
-        val adb = android.adbExecutable.absolutePath
         val appId = "com.writer.dev"
         val deviceDir = "/storage/emulated/0/Android/data/$appId/files/Documents/bug-reports"
-        val outDir = File(project.rootDir, "tmp")
+        val outDir = File(rootDir, "tmp")
         outDir.mkdirs()
 
         // List bug reports on device and find the latest
@@ -192,16 +194,26 @@ tasks.register("bugReport") {
             proc.inputStream.copyTo(out)
             proc.waitFor()
         }
-        println("Bug report saved to: ${outFile.relativeTo(project.rootDir)}")
+        println("Bug report saved to: ${outFile.relativeTo(rootDir)}")
     }
 }
 
 tasks.register("localReview") {
     description = "Run local code review: ./gradlew localReview [-Pbase=master]"
     group = "verification"
+    val base = providers.gradleProperty("base").getOrElse("master")
+    val scriptPath = "${project.rootDir}/scripts/review-pr.sh"
+    val rootDir = project.rootDir
+    val bash = resolveFromPath("bash")
     doLast {
-        val base = project.findProperty("base") as? String ?: "master"
-        runScript("${project.rootDir}/scripts/review-pr.sh", "--local", "--no-post", "--base", base)
+        val proc = ProcessBuilder(bash, scriptPath, "--local", "--no-post", "--base", base)
+            .directory(rootDir)
+            .inheritIO()
+            .start()
+        val exitCode = proc.waitFor()
+        if (exitCode != 0) {
+            throw org.gradle.api.GradleException("Script failed with exit code $exitCode")
+        }
     }
 }
 
