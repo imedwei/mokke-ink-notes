@@ -428,6 +428,13 @@ class HandwritingCanvasView @JvmOverloads constructor(
         // If using Onyx SDK (per-canvas or shared), pen input is handled by SDK callbacks
         if (useOnyxSdk || externalOnyxActive) return true
 
+        // Fallback: stylus touched canvas without hover first (e.g., direct pen-down
+        // on the cue column). Request the Onyx SDK session transfer.
+        if (toolType == MotionEvent.TOOL_TYPE_STYLUS && event.action == MotionEvent.ACTION_DOWN) {
+            onRequestOnyxSession?.invoke(event.x, event.y)
+            return true
+        }
+
         // Stylus/mouse on canvas → writing (fallback for non-Boox devices)
         val x = event.x
         val y = event.y + scrollOffsetY
