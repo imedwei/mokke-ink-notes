@@ -971,14 +971,14 @@ popupView.findViewById<android.view.View>(R.id.menuTutorial).setOnClickListener 
 
         val nowDualColumn = columnLayoutLogic.isDualColumn
 
+        // Always close shared SDK before views resize — even when staying dual-column,
+        // the canvas surfaces change dimensions on rotation and need re-initialization.
+        if (wasDualColumn) {
+            closeDualCanvasOnyx()
+        }
+
         if (nowDualColumn) {
             cueIndicatorStrip.visibility = View.GONE
-        } else if (!wasDualColumn) {
-            // Was single column, staying single column — close shared SDK
-            closeDualCanvasOnyx()
-        } else {
-            // Was dual column, going to single — close shared SDK before views resize
-            closeDualCanvasOnyx()
         }
 
         // Reset to weight-based layout so the system recalculates for new orientation
