@@ -137,6 +137,65 @@ fun runScript(script: String, vararg args: String) {
     }
 }
 
+tasks.register("screenshot") {
+    description = "Capture screenshot from connected device to tmp/"
+    group = "device"
+    doLast {
+        val adb = android.adbExecutable.absolutePath
+        val outDir = File(project.rootDir, "tmp")
+        outDir.mkdirs()
+        val timestamp = System.currentTimeMillis()
+        val outFile = File(outDir, "screenshot-$timestamp.png")
+        outFile.outputStream().use { out ->
+            val proc = ProcessBuilder(adb, "exec-out", "screencap", "-p")
+                .redirectErrorStream(true)
+                .start()
+            proc.inputStream.copyTo(out)
+            proc.waitFor()
+        }
+        println("Screenshot saved to: ${outFile.relativeTo(project.rootDir)}")
+    }
+}
+
+tasks.register("bugReport") {
+    description = "Pull latest bug report from connected device to tmp/"
+    group = "device"
+    doLast {
+        val adb = android.adbExecutable.absolutePath
+        val appId = "com.writer.dev"
+        val deviceDir = "/storage/emulated/0/Android/data/$appId/files/Documents/bug-reports"
+        val outDir = File(project.rootDir, "tmp")
+        outDir.mkdirs()
+
+        // List bug reports on device and find the latest
+        val listProc = ProcessBuilder(adb, "shell", "ls", "-t", deviceDir)
+            .redirectErrorStream(true)
+            .start()
+        val files = listProc.inputStream.bufferedReader().readLines()
+            .filter { it.trim().endsWith(".json") }
+        listProc.waitFor()
+
+        if (files.isEmpty()) {
+            throw org.gradle.api.GradleException(
+                "No bug reports found. Generate one via the app menu (hamburger → Bug Report)."
+            )
+        }
+
+        val latest = files.first().trim()
+        val outFile = File(outDir, latest)
+
+        // Use exec-out cat to avoid git bash path mangling on Windows
+        outFile.outputStream().use { out ->
+            val proc = ProcessBuilder(adb, "exec-out", "cat", "$deviceDir/$latest")
+                .redirectErrorStream(true)
+                .start()
+            proc.inputStream.copyTo(out)
+            proc.waitFor()
+        }
+        println("Bug report saved to: ${outFile.relativeTo(project.rootDir)}")
+    }
+}
+
 tasks.register("localReview") {
     description = "Run local code review: ./gradlew localReview [-Pbase=master]"
     group = "verification"

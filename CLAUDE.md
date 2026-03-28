@@ -46,20 +46,14 @@ Repeat steps 1-4 for each piece. After all pieces are complete:
 
 ## Device Debugging
 
-Screenshots and bug reports are saved to `tmp/` (gitignored).
+Screenshots and bug reports are saved to `tmp/` (gitignored). When debugging a device issue:
 
-```bash
-# Capture screenshot from device
-adb exec-out screencap -p > tmp/screenshot.png
+1. **Capture a screenshot**: `./gradlew screenshot` — saves timestamped PNG to `tmp/`
+2. **Generate a bug report** on the device: hamburger menu → Bug Report
+3. **Pull the bug report**: `./gradlew bugReport` — pulls the latest report to `tmp/`
+4. **Read the screenshot and bug report** to understand device state before making changes
 
-# Find latest bug report path
-adb logcat -d | grep "Bug report generated" | tail -1
-
-# Pull bug report (use double quotes to prevent git bash path mangling)
-adb exec-out "cat /storage/emulated/0/Android/data/com.writer.dev/files/Documents/bug-reports/bug-report-TIMESTAMP.json" > tmp/bug-report.json
-```
-
-The app generates bug reports via the menu (hamburger → Bug Report). Reports contain device info, recent stroke history, processing events, and document state.
+Bug reports contain device info, recent stroke history, processing events, and document state.
 
 ## PR Workflow
 
