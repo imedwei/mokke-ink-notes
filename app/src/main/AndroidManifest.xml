@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <permission
+        android:name="${applicationId}.permission.DEBUG"
+        android:protectionLevel="signature" />
+
     <queries>
         <package android:name="com.onyx.android.ksync" />
     </queries>
@@ -43,6 +47,12 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
         </provider>
+
+        <provider
+            android:name=".ui.writing.DebugBugReportProvider"
+            android:authorities="${applicationId}.debug"
+            android:exported="true"
+            android:permission="${applicationId}.permission.DEBUG" />
     </application>
 
 </manifest>
