@@ -117,6 +117,35 @@ tasks.register("captureFixture") {
 }
 
 
+/** Resolve an executable from PATH (needed on Windows where ProcessBuilder doesn't search PATH). */
+fun resolveFromPath(name: String): String {
+    val extensions = if (System.getProperty("os.name").lowercase().contains("win")) listOf(".exe", ".cmd", ".bat", "") else listOf("")
+    return System.getenv("PATH").split(File.pathSeparator)
+        .flatMap { dir -> extensions.map { ext -> File(dir, "$name$ext") } }
+        .firstOrNull { it.exists() }
+        ?.absolutePath ?: name
+}
+
+fun runScript(script: String, vararg args: String) {
+    val proc = ProcessBuilder(resolveFromPath("bash"), script, *args)
+        .directory(project.rootDir)
+        .inheritIO()
+        .start()
+    val exitCode = proc.waitFor()
+    if (exitCode != 0) {
+        throw org.gradle.api.GradleException("Script failed with exit code $exitCode")
+    }
+}
+
+tasks.register("localReview") {
+    description = "Run local code review: ./gradlew localReview [-Pbase=master]"
+    group = "verification"
+    doLast {
+        val base = project.findProperty("base") as? String ?: "master"
+        runScript("${project.rootDir}/scripts/review-pr.sh", "--local", "--no-post", "--base", base)
+    }
+}
+
 configurations.all {
     // Onyx SDK pulls in old pre-AndroidX support libraries that clash with AndroidX
     exclude(group = "com.android.support", module = "support-compat")
