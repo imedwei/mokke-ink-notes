@@ -1,0 +1,58 @@
+{
+    "scrollOffsetY": 99.0,
+    "highestLineIndex": 10,
+    "currentLineIndex": 8,
+    "userRenamed": true,
+    "main": {
+        "lineTextCache": {"0": "main text", "2": "more text"},
+        "everHiddenLines": [0, 1],
+        "strokes": [
+            {
+                "strokeId": "stroke-a",
+                "strokeWidth": 3.0,
+                "strokeType": "FREEHAND",
+                "points": [
+                    {"x": 5.0, "y": 10.0, "pressure": 0.6, "timestamp": 100},
+                    {"x": 15.0, "y": 25.0, "pressure": 0.7, "timestamp": 200}
+                ]
+            },
+            {
+                "strokeId": "stroke-b",
+                "strokeWidth": 4.0,
+                "strokeType": "RECTANGLE",
+                "isGeometric": true,
+                "points": [
+                    {"x": 50.0, "y": 50.0, "pressure": 1.0, "timestamp": 300},
+                    {"x": 150.0, "y": 150.0, "pressure": 1.0, "timestamp": 400}
+                ]
+            },
+            {
+                "strokeId": "stroke-c",
+                "strokeWidth": 2.0,
+                "strokeType": "ARROW_HEAD",
+                "isGeometric": true,
+                "points": [
+                    {"x": 0.0, "y": 0.0, "pressure": 1.0, "timestamp": 500},
+                    {"x": 100.0, "y": 0.0, "pressure": 1.0, "timestamp": 600}
+                ]
+            }
+        ],
+        "diagramAreas": [
+            {"id": "diag-1", "startLineIndex": 4, "heightInLines": 6}
+        ]
+    },
+    "cue": {
+        "lineTextCache": {"0": "cue note"},
+        "everHiddenLines": [],
+        "strokes": [
+            {
+                "strokeId": "cue-stroke-1",
+                "strokeWidth": 3.0,
+                "points": [
+                    {"x": 1.0, "y": 2.0, "pressure": 0.5, "timestamp": 700}
+                ]
+            }
+        ],
+        "diagramAreas": []
+    }
+}
