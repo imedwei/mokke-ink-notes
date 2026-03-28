@@ -12,37 +12,46 @@ import com.writer.model.proto.DocumentProto
 import com.writer.model.proto.InkStrokeProto
 import com.writer.model.proto.StrokePointProto
 import com.writer.model.proto.StrokeTypeProto
+import com.writer.view.ScreenMetrics
+
+// Coordinate system constants matching document.proto
+private const val COORD_SYSTEM_LEGACY = 0
+private const val COORD_SYSTEM_NORMALIZED = 1
 
 // ── Domain → Proto ───────────────────────────────────────────────────────
 
-fun DocumentData.toProto(): DocumentProto = DocumentProto(
-    main = main.toProto(),
-    cue = if (cue.strokes.isNotEmpty() || cue.lineTextCache.isNotEmpty() ||
-        cue.diagramAreas.isNotEmpty()) cue.toProto() else null,
-    scroll_offset_y = scrollOffsetY,
-    highest_line_index = highestLineIndex,
-    current_line_index = currentLineIndex,
-    user_renamed = userRenamed
-)
+fun DocumentData.toProto(): DocumentProto {
+    val ls = ScreenMetrics.lineSpacing
+    return DocumentProto(
+        main = main.toProto(ls),
+        cue = if (cue.strokes.isNotEmpty() || cue.lineTextCache.isNotEmpty() ||
+            cue.diagramAreas.isNotEmpty()) cue.toProto(ls) else null,
+        scroll_offset_y = scrollOffsetY / ls,
+        highest_line_index = highestLineIndex,
+        current_line_index = currentLineIndex,
+        user_renamed = userRenamed,
+        coordinate_system = COORD_SYSTEM_NORMALIZED
+    )
+}
 
-fun ColumnData.toProto(): ColumnDataProto = ColumnDataProto(
-    strokes = strokes.map { it.toProto() },
+private fun ColumnData.toProto(lineSpacing: Float): ColumnDataProto = ColumnDataProto(
+    strokes = strokes.map { it.toProto(lineSpacing) },
     line_text_cache = lineTextCache,
     ever_hidden_lines = everHiddenLines.toList(),
     diagram_areas = diagramAreas.map { it.toProto() }
 )
 
-fun InkStroke.toProto(): InkStrokeProto = InkStrokeProto(
+private fun InkStroke.toProto(lineSpacing: Float): InkStrokeProto = InkStrokeProto(
     stroke_id = strokeId,
-    stroke_width = strokeWidth,
-    points = points.map { it.toProto() },
+    stroke_width = strokeWidth,  // Pen property — NOT normalized
+    points = points.map { it.toProto(lineSpacing) },
     stroke_type = strokeType.toProto(),
     is_geometric = isGeometric
 )
 
-fun StrokePoint.toProto(): StrokePointProto = StrokePointProto(
-    x = x,
-    y = y,
+private fun StrokePoint.toProto(lineSpacing: Float): StrokePointProto = StrokePointProto(
+    x = x / lineSpacing,
+    y = (y - ScreenMetrics.topMargin) / lineSpacing,
     pressure = pressure,
     timestamp = timestamp
 )
@@ -76,36 +85,56 @@ fun StrokeType.toProto(): StrokeTypeProto = when (this) {
 
 // ── Proto → Domain ───────────────────────────────────────────────────────
 
-fun DocumentProto.toDomain(): DocumentData = DocumentData(
-    main = main?.toDomain() ?: ColumnData(),
-    cue = cue?.toDomain() ?: ColumnData(),
-    scrollOffsetY = scroll_offset_y ?: 0f,
-    highestLineIndex = highest_line_index ?: 0,
-    currentLineIndex = current_line_index ?: 0,
-    userRenamed = user_renamed ?: false
-)
+fun DocumentProto.toDomain(): DocumentData {
+    val isNormalized = (coordinate_system ?: COORD_SYSTEM_LEGACY) == COORD_SYSTEM_NORMALIZED
+    val ls = ScreenMetrics.lineSpacing
+    val tm = ScreenMetrics.topMargin
+    return DocumentData(
+        main = main?.toDomain(isNormalized, ls, tm) ?: ColumnData(),
+        cue = cue?.toDomain(isNormalized, ls, tm) ?: ColumnData(),
+        scrollOffsetY = if (isNormalized) (scroll_offset_y ?: 0f) * ls else (scroll_offset_y ?: 0f),
+        highestLineIndex = highest_line_index ?: 0,
+        currentLineIndex = current_line_index ?: 0,
+        userRenamed = user_renamed ?: false
+    )
+}
 
-fun ColumnDataProto.toDomain(): ColumnData = ColumnData(
-    strokes = strokes.map { it.toDomain() },
+private fun ColumnDataProto.toDomain(
+    isNormalized: Boolean, lineSpacing: Float, topMargin: Float
+): ColumnData = ColumnData(
+    strokes = strokes.map { it.toDomain(isNormalized, lineSpacing, topMargin) },
     lineTextCache = line_text_cache,
     everHiddenLines = ever_hidden_lines.toSet(),
     diagramAreas = diagram_areas.map { it.toDomain() }
 )
 
-fun InkStrokeProto.toDomain(): InkStroke = InkStroke(
+private fun InkStrokeProto.toDomain(
+    isNormalized: Boolean, lineSpacing: Float, topMargin: Float
+): InkStroke = InkStroke(
     strokeId = stroke_id ?: "",
-    points = points.map { it.toDomain() },
-    strokeWidth = stroke_width ?: 3f,
+    points = points.map { it.toDomain(isNormalized, lineSpacing, topMargin) },
+    strokeWidth = stroke_width ?: 3f,  // Pen property — NOT denormalized
     isGeometric = is_geometric ?: false,
     strokeType = stroke_type?.toDomain() ?: StrokeType.FREEHAND
 )
 
-fun StrokePointProto.toDomain(): StrokePoint = StrokePoint(
-    x = x ?: 0f,
-    y = y ?: 0f,
-    pressure = pressure ?: 1f,
-    timestamp = timestamp ?: 0L
-)
+private fun StrokePointProto.toDomain(
+    isNormalized: Boolean, lineSpacing: Float, topMargin: Float
+): StrokePoint = if (isNormalized) {
+    StrokePoint(
+        x = (x ?: 0f) * lineSpacing,
+        y = topMargin + (y ?: 0f) * lineSpacing,
+        pressure = pressure ?: 1f,
+        timestamp = timestamp ?: 0L
+    )
+} else {
+    StrokePoint(
+        x = x ?: 0f,
+        y = y ?: 0f,
+        pressure = pressure ?: 1f,
+        timestamp = timestamp ?: 0L
+    )
+}
 
 fun DiagramAreaProto.toDomain(): DiagramArea = DiagramArea(
     id = id ?: "",

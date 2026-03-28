@@ -2,10 +2,12 @@ package com.writer.storage
 
 import com.writer.model.StrokeType
 import com.writer.model.proto.DocumentProto
+import com.writer.view.ScreenMetrics
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 
 /**
@@ -17,6 +19,12 @@ import org.junit.Test
  * - These tests are the permanent backward-compatibility contract.
  */
 class DocumentGoldenFileTest {
+
+    @Before
+    fun setUp() {
+        // Init ScreenMetrics for v2 golden file tests (same device used during generation)
+        ScreenMetrics.init(1.875f, smallestWidthDp = 674, widthPixels = 1264, heightPixels = 1680)
+    }
 
     private fun loadResource(name: String): ByteArray =
         javaClass.classLoader!!.getResourceAsStream("golden/$name")!!.readBytes()
@@ -157,7 +165,7 @@ class DocumentGoldenFileTest {
         // coordinate_system field is present and set to 1 (normalized line-units)
         assertEquals(1, proto.coordinate_system!!)
 
-        // All other data matches v1 (same builder base)
+        // Structure matches v1 (same builder base)
         assertNotNull(proto.main)
         assertEquals(3, proto.main!!.strokes.size)
         assertEquals("proto-stroke-1", proto.main!!.strokes[0].stroke_id)
@@ -166,10 +174,30 @@ class DocumentGoldenFileTest {
         assertEquals(1, proto.cue!!.strokes.size)
         assertEquals("cue-proto-1", proto.cue!!.strokes[0].stroke_id)
 
-        assertEquals(75.5f, proto.scroll_offset_y!!, 0.1f)
         assertEquals(7, proto.highest_line_index)
         assertEquals(5, proto.current_line_index)
         assertTrue(proto.user_renamed!!)
+    }
+
+    @Test
+    fun protoV2_toDomain_denormalizesCoordinates() {
+        val bytes = loadResource("document_v2.inkup")
+        val proto = DocumentProto.ADAPTER.decode(bytes)
+        val data = proto.toDomain()
+
+        // The v2 golden file was generated from v1 data (absolute coords 10f, 20f)
+        // normalized then denormalized with the same Go 7 line spacing (77px).
+        // Values should match the original v1 data within float precision.
+        assertEquals(10f, data.main.strokes[0].points[0].x, 0.5f)
+        assertEquals(20f, data.main.strokes[0].points[0].y, 0.5f)
+        assertEquals(75.5f, data.scrollOffsetY, 0.5f)
+
+        // Stroke IDs, types, and non-coordinate fields are unchanged
+        assertEquals("proto-stroke-1", data.main.strokes[0].strokeId)
+        assertEquals(StrokeType.FREEHAND, data.main.strokes[0].strokeType)
+        assertEquals(7, data.highestLineIndex)
+        assertEquals(5, data.currentLineIndex)
+        assertTrue(data.userRenamed)
     }
 
     @Test
