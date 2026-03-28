@@ -99,10 +99,10 @@ object DocumentStorage {
         // Try protobuf (.inkup) first, then fall back to legacy JSON
         try {
             val inkup = inkupFile(context, name)
-            // AtomicFile auto-recovers from interrupted writes (handles .new backup)
-            val atomicFile = AtomicFile(inkup)
-            if (inkup.exists()) {
-                val bytes = atomicFile.readFully()
+            val inkupBackup = File(inkup.parent, "${inkup.name}.new")
+            // AtomicFile auto-recovers from interrupted writes (.new backup)
+            if (inkup.exists() || inkupBackup.exists()) {
+                val bytes = AtomicFile(inkup).readFully()
                 val data = DocumentProto.ADAPTER.decode(bytes).toDomain()
                 Log.i(TAG, "Loaded ${data.main.strokes.size} strokes from $name.inkup")
                 return data
@@ -338,9 +338,13 @@ object DocumentStorage {
         return deletedAny
     }
 
-    /** Check if a document exists in any format (.inkup or .json). */
-    private fun docExists(context: Context, name: String): Boolean =
-        inkupFile(context, name).exists() || docFile(context, name).exists()
+    /** Check if a document exists in any format (.inkup, .inkup.new backup, or .json). */
+    private fun docExists(context: Context, name: String): Boolean {
+        val inkup = inkupFile(context, name)
+        return inkup.exists() ||
+            File(inkup.parent, "${inkup.name}.new").exists() ||
+            docFile(context, name).exists()
+    }
 
     fun generateName(context: Context): String {
         val dateStr = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
@@ -436,6 +440,55 @@ object DocumentStorage {
         } catch (e: Exception) {
             Log.e(TAG, "Failed to export $name to sync folder", e)
         }
+    }
+
+    // --- Sync folder import ---
+
+    /**
+     * Restore documents from the sync folder. Reads .writer (JSON) and .inkup (protobuf)
+     * files and saves them as local documents, skipping any that already exist.
+     * Returns the number of documents restored.
+     */
+    fun restoreFromSyncFolder(context: Context, syncFolderUri: Uri): Int {
+        val folder = DocumentFile.fromTreeUri(context, syncFolderUri) ?: return 0
+        var count = 0
+        for (file in folder.listFiles()) {
+            val fileName = file.name ?: continue
+            val name: String
+            val data: DocumentData?
+            when {
+                fileName.endsWith(".writer") -> {
+                    name = fileName.removeSuffix(".writer")
+                    data = try {
+                        val json = context.contentResolver.openInputStream(file.uri)
+                            ?.bufferedReader()?.readText() ?: continue
+                        deserializeFromJson(json)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Failed to read .writer file: $fileName", e)
+                        continue
+                    }
+                }
+                fileName.endsWith(".$INKUP_EXT") -> {
+                    name = fileName.removeSuffix(".$INKUP_EXT")
+                    data = try {
+                        val bytes = context.contentResolver.openInputStream(file.uri)
+                            ?.readBytes() ?: continue
+                        DocumentProto.ADAPTER.decode(bytes).toDomain()
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Failed to read .inkup file: $fileName", e)
+                        continue
+                    }
+                }
+                else -> continue
+            }
+            if (data == null) continue
+            // Skip if document already exists locally
+            if (docExists(context, name)) continue
+            save(context, name, data)
+            count++
+            Log.i(TAG, "Restored document: $name")
+        }
+        return count
     }
 
     // --- Serialization ---

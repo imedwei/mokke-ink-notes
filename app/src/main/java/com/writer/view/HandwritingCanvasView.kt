@@ -1387,6 +1387,10 @@ class HandwritingCanvasView @JvmOverloads constructor(
     fun loadStrokes(strokes: List<InkStroke>) {
         completedStrokes.clear()
         completedStrokes.addAll(strokes)
+        currentStrokePoints.clear()
+        currentPath.reset()
+        textOverscroll = 0f
+        handler?.removeCallbacks(idleRunnable)
         drawToSurface()
     }
 
