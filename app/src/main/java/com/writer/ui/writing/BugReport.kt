@@ -36,7 +36,7 @@ object BugReport {
                 put("density", ScreenMetrics.density.toDouble())
                 put("lineSpacing", ScreenMetrics.lineSpacing.toDouble())
                 put("topMargin", ScreenMetrics.topMargin.toDouble())
-                put("isCompact", ScreenMetrics.isCompact)
+                put("isLargeScreen", ScreenMetrics.isLargeScreen)
             })
 
             // Recent raw strokes from ring buffer

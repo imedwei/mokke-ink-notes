@@ -33,21 +33,34 @@ class ScratchOutDescenderTest {
             ?: throw IllegalStateException("Fixture not found")
         val json = JSONObject(stream.reader().readText())
 
-        lineSpacing = json.getJSONObject("device").getDouble("lineSpacing").toFloat()
+        val fixtureLineSpacing = json.getJSONObject("device").getDouble("lineSpacing").toFloat()
+        val fixtureTopMargin = json.getJSONObject("device").getDouble("topMargin").toFloat()
         val density = json.getJSONObject("device").getDouble("density").toFloat()
-        ScreenMetrics.init(density, smallestWidthDp = 674, widthPixels = 1264, heightPixels = 1680)
+        // Init to match the fixture device (Palma 2 Pro: 824×1648, sw=439)
+        ScreenMetrics.init(density, smallestWidthDp = 439, widthPixels = 824, heightPixels = 1648)
+        lineSpacing = ScreenMetrics.lineSpacing
         segmenter = LineSegmenter()
 
-        // Load raw strokes
+        // Scale fixture coordinates from fixture line spacing to current line spacing.
+        // This is the same normalize/denormalize as the proto coordinate system:
+        //   normalized = (absolute - topMargin) / fixtureLineSpacing
+        //   absolute   = topMargin + normalized * currentLineSpacing
+        // X scales by the same ratio to preserve aspect ratio.
+        val scale = ScreenMetrics.lineSpacing / fixtureLineSpacing
+        val topMargin = ScreenMetrics.topMargin
+
+        // Load raw strokes, scaling coordinates to current line spacing
         val strokesArr = json.getJSONArray("recentStrokes")
         rawStrokes = (0 until strokesArr.length()).map { i ->
             val strokeObj = strokesArr.getJSONObject(i)
             val pointsArr = strokeObj.getJSONArray("points")
             (0 until pointsArr.length()).map { j ->
                 val pt = pointsArr.getJSONObject(j)
+                val rawX = pt.getDouble("x").toFloat()
+                val rawY = pt.getDouble("y").toFloat()
                 StrokePoint(
-                    pt.getDouble("x").toFloat(),
-                    pt.getDouble("y").toFloat(),
+                    rawX * scale,
+                    topMargin + (rawY - fixtureTopMargin) * scale,
                     pt.getDouble("pressure").toFloat(),
                     pt.getLong("timestamp")
                 )
@@ -205,21 +218,32 @@ class ScratchOutDescenderTest {
     }
 
     @Test
-    fun `descenders from line 4 overlap with line 6 Y range`() {
-        val line4Strokes = rawStrokes.filter { points ->
-            points.size >= 2 && segmenter.getStrokeLineIndex(InkStroke(points = points)) == 4
-        }
-        val line6Strokes = rawStrokes.filter { points ->
-            points.size >= 2 && segmenter.getStrokeLineIndex(InkStroke(points = points)) == 6
-        }
-        if (line4Strokes.isEmpty() || line6Strokes.isEmpty()) return
+    fun `descenders from one line overlap with a later line Y range`() {
+        // Group strokes by line index
+        val strokesByLine = rawStrokes
+            .filter { it.size >= 2 }
+            .groupBy { segmenter.getStrokeLineIndex(InkStroke(points = it)) }
 
-        val line4MaxY = line4Strokes.maxOf { points -> points.maxOf { it.y } }
-        val line6MinY = line6Strokes.minOf { points -> points.minOf { it.y } }
+        // Find any pair of lines (i, j) where i < j and line i's max Y > line j's min Y
+        var foundOverlap = false
+        val sortedLines = strokesByLine.keys.sorted()
+        for (i in sortedLines.indices) {
+            val lineI = sortedLines[i]
+            val lineIMaxY = strokesByLine[lineI]!!.maxOf { points -> points.maxOf { it.y } }
+            for (j in (i + 1) until sortedLines.size) {
+                val lineJ = sortedLines[j]
+                val lineJMinY = strokesByLine[lineJ]!!.minOf { points -> points.minOf { it.y } }
+                if (lineIMaxY > lineJMinY) {
+                    foundOverlap = true
+                    break
+                }
+            }
+            if (foundOverlap) break
+        }
 
         assertTrue(
-            "Line 4 descenders ($line4MaxY) should overlap line 6 region ($line6MinY)",
-            line4MaxY > line6MinY
+            "Fixture should contain descender overlap between lines (the condition that triggers false scratch-outs)",
+            foundOverlap
         )
     }
 }

@@ -136,20 +136,20 @@ class DeviceSpecsTest {
         )
     }
 
-    // ── Compact-mode classification ───────────────────────────────────────────
+    // ── Screen-size classification ──────────────────────────────────────────
 
-    @Test fun compactThreshold_classifiesDevicesCorrectly() {
-        val threshold = 650
+    @Test fun largeScreenThreshold_classifiesDevicesCorrectly() {
+        val threshold = 900
         mapOf(
-            TAB_X_C     to false,
-            NOTE_AIR_5C to false,
+            TAB_X_C     to true,
+            NOTE_AIR_5C to true,
             GO_7        to false,
-            PALMA_2_PRO to true,
-        ).forEach { (device, expectedCompact) ->
-            val isCompact = device.smallestWidthDp < threshold
+            PALMA_2_PRO to false,
+        ).forEach { (device, expectedLarge) ->
+            val isLargeScreen = device.smallestWidthDp >= threshold
             assertEquals(
-                "${device.name} (sw=${device.smallestWidthDp} dp): isCompact should be $expectedCompact",
-                expectedCompact, isCompact
+                "${device.name} (sw=${device.smallestWidthDp} dp): isLargeScreen should be $expectedLarge",
+                expectedLarge, isLargeScreen
             )
         }
     }

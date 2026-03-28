@@ -60,4 +60,7 @@ message DocumentProto {
     optional int32 highest_line_index = 4 [default = 0];
     optional int32 current_line_index = 5 [default = 0];
     optional bool user_renamed = 6 [default = false];
+    // 0 = legacy absolute pixels (no conversion on load)
+    // 1 = normalized line-units (convert on load using device LINE_SPACING)
+    optional int32 coordinate_system = 7 [default = 0];
 }
