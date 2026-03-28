@@ -10,6 +10,8 @@ import com.writer.model.DocumentData
 import com.writer.model.InkStroke
 import com.writer.model.StrokePoint
 import com.writer.model.StrokeType
+import androidx.core.util.AtomicFile
+import com.writer.model.proto.DocumentProto
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -30,6 +32,7 @@ object DocumentStorage {
     private const val DOCS_DIR = "documents"
     private const val LEGACY_FILE = "document.json"
     private const val SEARCH_INDEX_FILE = "search-index.json"
+    private const val INKUP_EXT = "inkup"
 
     private fun docsDir(context: Context): File {
         val dir = File(context.filesDir, DOCS_DIR)
@@ -39,6 +42,10 @@ object DocumentStorage {
 
     private fun docFile(context: Context, name: String): File {
         return File(docsDir(context), "$name.json")
+    }
+
+    private fun inkupFile(context: Context, name: String): File {
+        return File(docsDir(context), "$name.$INKUP_EXT")
     }
 
     // --- Migration ---
@@ -59,26 +66,56 @@ object DocumentStorage {
 
     // --- Multi-document CRUD ---
 
-    fun save(context: Context, name: String, data: DocumentData) {
+    fun save(context: Context, name: String, data: DocumentData): Boolean {
         try {
-            val json = serializeToJson(data)
-            val file = docFile(context, name)
-            file.writeText(json.toString())
-            Log.i(TAG, "Saved ${data.main.strokes.size} strokes to $name")
+            val file = inkupFile(context, name)
+            val atomicFile = AtomicFile(file)
+
+            // Encode to protobuf binary
+            val bytes = data.toProto().encode()
+
+            // AtomicFile handles tmp-write + rename atomically,
+            // and keeps a .bak for recovery on failure.
+            val stream = atomicFile.startWrite()
+            try {
+                stream.write(bytes)
+                atomicFile.finishWrite(stream)
+            } catch (e: Exception) {
+                atomicFile.failWrite(stream)
+                throw e
+            }
+
+            Log.i(TAG, "Saved ${data.main.strokes.size} strokes to $name.inkup")
             // Update search index with per-line recognized text
             updateSearchIndex(context, name, buildLineIndex(data))
+            return true
         } catch (e: Exception) {
             Log.e(TAG, "Failed to save document $name", e)
+            return false
         }
     }
 
     fun load(context: Context, name: String): DocumentData? {
+        // Try protobuf (.inkup) first, then fall back to legacy JSON
         try {
-            val file = docFile(context, name)
-            if (!file.exists()) return null
-            val data = deserializeFromJson(file.readText())
-            Log.i(TAG, "Loaded ${data.main.strokes.size} strokes from $name")
-            return data
+            val inkup = inkupFile(context, name)
+            // AtomicFile auto-recovers from interrupted writes (handles .new backup)
+            val atomicFile = AtomicFile(inkup)
+            if (inkup.exists()) {
+                val bytes = atomicFile.readFully()
+                val data = DocumentProto.ADAPTER.decode(bytes).toDomain()
+                Log.i(TAG, "Loaded ${data.main.strokes.size} strokes from $name.inkup")
+                return data
+            }
+
+            val json = docFile(context, name)
+            if (json.exists()) {
+                val data = deserializeFromJson(json.readText())
+                Log.i(TAG, "Loaded ${data.main.strokes.size} strokes from $name.json (legacy)")
+                return data
+            }
+
+            return null
         } catch (e: Exception) {
             Log.e(TAG, "Failed to load document $name", e)
             return null
@@ -87,11 +124,21 @@ object DocumentStorage {
 
     fun listDocuments(context: Context): List<DocumentInfo> {
         val dir = docsDir(context)
-        return dir.listFiles()
-            ?.filter { it.extension == "json" && it.name != SEARCH_INDEX_FILE }
-            ?.map { file -> DocumentInfo(file.nameWithoutExtension, file.lastModified()) }
-            ?.sortedByDescending { it.lastModified }
-            ?: emptyList()
+        val files = dir.listFiles() ?: return emptyList()
+        // Collect .inkup and .json files, dedup by name (prefer .inkup for lastModified)
+        val byName = mutableMapOf<String, Long>()
+        for (file in files) {
+            if (file.extension == INKUP_EXT ||
+                (file.extension == "json" && file.name != SEARCH_INDEX_FILE)) {
+                val name = file.nameWithoutExtension
+                val existing = byName[name]
+                if (existing == null || file.lastModified() > existing) {
+                    byName[name] = file.lastModified()
+                }
+            }
+        }
+        return byName.map { (name, lastModified) -> DocumentInfo(name, lastModified) }
+            .sortedByDescending { it.lastModified }
     }
 
     // --- Search index ---
@@ -194,7 +241,10 @@ object DocumentStorage {
         try {
             val json = org.json.JSONObject(indexFile.readText())
             val docFiles = docsDir(context).listFiles()
-                ?.filter { it.extension == "json" && it.name != SEARCH_INDEX_FILE }
+                ?.filter {
+                    it.extension == INKUP_EXT ||
+                    (it.extension == "json" && it.name != SEARCH_INDEX_FILE)
+                }
                 ?: emptyList()
             val needsRebuild = docFiles.any { !json.has(it.nameWithoutExtension) }
                 || docFiles.any { json.opt(it.nameWithoutExtension) is String } // old flat format
@@ -209,7 +259,16 @@ object DocumentStorage {
         try {
             val dir = docsDir(context)
             val json = org.json.JSONObject()
-            dir.listFiles()?.filter { it.extension == "json" && it.name != SEARCH_INDEX_FILE }?.forEach { file ->
+            val seen = mutableSetOf<String>()
+            // Index .inkup files first (preferred format)
+            dir.listFiles()?.filter { it.extension == INKUP_EXT }?.forEach { file ->
+                val name = file.nameWithoutExtension
+                seen.add(name)
+                val linesJson = extractLineIndexFromInkupFile(file)
+                json.put(name, linesJson)
+            }
+            // Then legacy .json files (only if not already indexed via .inkup)
+            dir.listFiles()?.filter { it.extension == "json" && it.name != SEARCH_INDEX_FILE && it.nameWithoutExtension !in seen }?.forEach { file ->
                 val linesJson = extractLineIndexFromFile(file)
                 json.put(file.nameWithoutExtension, linesJson)
             }
@@ -218,6 +277,25 @@ object DocumentStorage {
         } catch (e: Exception) {
             Log.w(TAG, "Failed to rebuild search index", e)
         }
+    }
+
+    /** Extract per-line recognized text from a protobuf .inkup file. */
+    private fun extractLineIndexFromInkupFile(file: java.io.File): org.json.JSONObject {
+        val linesJson = org.json.JSONObject()
+        try {
+            val doc = DocumentProto.ADAPTER.decode(file.readBytes())
+            if (doc.main != null) {
+                for ((key, value) in doc.main.line_text_cache) {
+                    if (value.isNotEmpty()) linesJson.put("$key", value.lowercase())
+                }
+            }
+            if (doc.cue != null) {
+                for ((key, value) in doc.cue.line_text_cache) {
+                    if (value.isNotEmpty()) linesJson.put("c$key", value.lowercase())
+                }
+            }
+        } catch (_: Exception) {}
+        return linesJson
     }
 
     /** Extract per-line recognized text from a document JSON file. */
@@ -250,18 +328,27 @@ object DocumentStorage {
     }
 
     fun delete(context: Context, name: String): Boolean {
-        val deleted = docFile(context, name).delete()
-        if (deleted) removeFromSearchIndex(context, name)
-        return deleted
+        val inkup = inkupFile(context, name)
+        val json = docFile(context, name)
+        // AtomicFile.delete() removes the base file and its .new backup
+        AtomicFile(inkup).delete()
+        val deletedJson = json.delete()
+        val deletedAny = !inkup.exists() || deletedJson
+        if (deletedAny) removeFromSearchIndex(context, name)
+        return deletedAny
     }
+
+    /** Check if a document exists in any format (.inkup or .json). */
+    private fun docExists(context: Context, name: String): Boolean =
+        inkupFile(context, name).exists() || docFile(context, name).exists()
 
     fun generateName(context: Context): String {
         val dateStr = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
         val base = "Document $dateStr"
-        if (!docFile(context, base).exists()) return base
+        if (!docExists(context, base)) return base
 
         var i = 2
-        while (docFile(context, "$base ($i)").exists()) i++
+        while (docExists(context, "$base ($i)")) i++
         return "$base ($i)"
     }
 
@@ -279,24 +366,35 @@ object DocumentStorage {
     fun generateNameFromHeading(context: Context, heading: String): String? {
         val base = headingToFileName(heading)
         if (base.isEmpty()) return null
-        if (!docFile(context, base).exists()) return base
+        if (!docExists(context, base)) return base
 
         val dateStr = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
         val dated = "$base $dateStr"
-        if (!docFile(context, dated).exists()) return dated
+        if (!docExists(context, dated)) return dated
 
         var i = 2
-        while (docFile(context, "$dated ($i)").exists()) i++
+        while (docExists(context, "$dated ($i)")) i++
         return "$dated ($i)"
     }
 
     /** Rename a document file on disk. Returns true on success. */
     fun rename(context: Context, oldName: String, newName: String): Boolean {
-        val oldFile = docFile(context, oldName)
-        val newFile = docFile(context, newName)
-        if (!oldFile.exists() || newFile.exists()) return false
-        val renamed = oldFile.renameTo(newFile)
-        if (renamed) renameInSearchIndex(context, oldName, newName)
+        // Rename .inkup file if it exists, else .json
+        val oldInkup = inkupFile(context, oldName)
+        val oldJson = docFile(context, oldName)
+        val source = when {
+            oldInkup.exists() -> oldInkup
+            oldJson.exists() -> oldJson
+            else -> return false
+        }
+        val target = File(source.parent, "${newName}.${source.extension}")
+        if (target.exists()) return false
+        val renamed = source.renameTo(target)
+        if (renamed) {
+            // Clean up AtomicFile's .new backup for the old name
+            File(source.parent, "${source.name}.new").delete()
+            renameInSearchIndex(context, oldName, newName)
+        }
         return renamed
     }
 
@@ -312,14 +410,14 @@ object DocumentStorage {
         try {
             val folder = DocumentFile.fromTreeUri(context, syncFolderUri) ?: return
 
-            // Write .writer file (proprietary JSON)
-            val writerFileName = "$name.writer"
-            val existingWriter = folder.findFile(writerFileName)
-            val writerFile = existingWriter
-                ?: folder.createFile("application/octet-stream", writerFileName)
-            if (writerFile != null) {
-                context.contentResolver.openOutputStream(writerFile.uri, "wt")?.use { out ->
-                    out.write(serializeToJson(data).toString().toByteArray())
+            // Write .inkup file (protobuf binary)
+            val inkupFileName = "$name.$INKUP_EXT"
+            val existingInkup = folder.findFile(inkupFileName)
+            val inkupSyncFile = existingInkup
+                ?: folder.createFile("application/octet-stream", inkupFileName)
+            if (inkupSyncFile != null) {
+                context.contentResolver.openOutputStream(inkupSyncFile.uri, "wt")?.use { out ->
+                    out.write(data.toProto().encode())
                 }
             }
 

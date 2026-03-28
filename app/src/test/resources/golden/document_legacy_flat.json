@@ -1,0 +1,27 @@
+{
+    "scrollOffsetY": 42.5,
+    "highestLineIndex": 3,
+    "currentLineIndex": 2,
+    "lineTextCache": {"0": "hello", "1": "world"},
+    "everHiddenLines": [0],
+    "strokes": [
+        {
+            "strokeId": "stroke-1",
+            "strokeWidth": 3.0,
+            "points": [
+                {"x": 10.0, "y": 20.0, "pressure": 0.5, "timestamp": 1000},
+                {"x": 30.0, "y": 40.0, "pressure": 0.8, "timestamp": 2000}
+            ]
+        },
+        {
+            "strokeId": "stroke-2",
+            "strokeWidth": 5.0,
+            "points": [
+                {"x": 100.0, "y": 200.0, "pressure": 1.0, "timestamp": 3000}
+            ]
+        }
+    ],
+    "diagramAreas": [
+        {"id": "area-1", "startLineIndex": 5, "heightInLines": 3}
+    ]
+}

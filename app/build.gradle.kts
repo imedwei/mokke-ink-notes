@@ -2,6 +2,13 @@ plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("com.google.devtools.ksp")
+    id("com.squareup.wire")
+}
+
+wire {
+    kotlin {
+        android = true
+    }
 }
 
 android {
@@ -52,6 +59,13 @@ android {
                 it.jvmArgs(
                     "--add-opens", "java.base/jdk.internal.access=ALL-UNNAMED",
                 )
+                // Pass golden file generation properties to test JVM
+                val goldenVersion = project.findProperty("goldenVersion") as? String
+                val goldenOutputDir = project.file("src/test/resources/golden").absolutePath
+                if (goldenVersion != null) {
+                    it.systemProperty("goldenVersion", goldenVersion)
+                    it.systemProperty("goldenOutputDir", goldenOutputDir)
+                }
             }
         }
     }
@@ -102,6 +116,7 @@ tasks.register("captureFixture") {
     }
 }
 
+
 configurations.all {
     // Onyx SDK pulls in old pre-AndroidX support libraries that clash with AndroidX
     exclude(group = "com.android.support", module = "support-compat")
@@ -110,6 +125,9 @@ configurations.all {
 }
 
 dependencies {
+    // Wire (protobuf serialization)
+    implementation("com.squareup.wire:wire-runtime:5.1.0")
+
     // Onyx Pen SDK (Boox stylus input)
     implementation("com.onyx.android.sdk:onyxsdk-pen:1.5.2")
     implementation("com.onyx.android.sdk:onyxsdk-device:1.3.3")

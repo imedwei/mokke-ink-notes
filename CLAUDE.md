@@ -76,3 +76,15 @@ Before creating a PR, run the self-review cycle locally:
    - `gh pr ready` (if created as draft)
 
 The `--local` flag works without a remote or PR. The `--no-post` / `--post` flags make scripts non-interactive for agent use.
+
+## Document Format Safety (Proto Schema)
+
+The document format is defined in `app/src/main/proto/com/writer/model/proto/document.proto` and serialized with [Wire](https://github.com/square/wire). Documents are stored as binary protobuf `.inkup` files. Legacy `.json` files are still loadable via fallback.
+
+Follow these rules when changing the document schema:
+
+1. **Never reuse a field number.** Reserve removed field numbers with `reserved`.
+2. **All fields must be `optional` with defaults** (never use `required`). This ensures any field can be safely removed in the future.
+3. **Add a golden file** for each schema version: add a builder in `GoldenFileGenerator.kt`, then run `./gradlew testDebugUnitTest --tests "com.writer.storage.GoldenFileGeneratorRunner" -PgoldenVersion=vN`.
+4. **Never modify or delete existing golden files.** They are the permanent backward-compatibility contract.
+5. **Run `./gradlew testDebugUnitTest`** — golden file tests must pass for all historical versions.

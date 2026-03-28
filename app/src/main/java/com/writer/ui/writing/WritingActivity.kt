@@ -1423,7 +1423,10 @@ class WritingActivity : AppCompatActivity() {
             diagramAreas = documentModel.cue.diagramAreas.toList()
         )
         val state = mainState.copy(cue = cueColumnData)
-        DocumentStorage.save(this, currentDocumentName, state)
+        val saved = DocumentStorage.save(this, currentDocumentName, state)
+        if (!saved) {
+            android.widget.Toast.makeText(this, "Failed to save document", android.widget.Toast.LENGTH_LONG).show()
+        }
 
         // Export to sync folder if configured
         val syncUri = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
