@@ -7,6 +7,7 @@ import com.writer.model.InkStroke
 import com.writer.model.StrokePoint
 import com.writer.model.StrokeType
 import com.writer.model.proto.DocumentProto
+import com.writer.view.ScreenMetrics
 import org.junit.Assume
 import org.junit.Test
 import java.io.File
@@ -48,11 +49,12 @@ object GoldenFileGenerator {
      * Built directly as proto since the mapper normalization is added separately.
      */
     fun buildV2Proto(): DocumentProto {
+        // Init ScreenMetrics so toProto() can normalize coordinates.
+        // Use Go 7 as reference device (small screen, 41dp = 77px line spacing).
+        ScreenMetrics.init(1.875f, smallestWidthDp = 674, widthPixels = 1264, heightPixels = 1680)
         val domain = buildV1Document()
-        // Use v1 data but set coordinate_system = 1.
-        // In a real v2 file, the x/y values would be normalized (divided by LINE_SPACING).
-        // For the golden file, we store specific normalized values and verify them on load.
-        return domain.toProto().copy(coordinate_system = 1)
+        // toProto() normalizes coordinates and sets coordinate_system = 1
+        return domain.toProto()
     }
 
     fun buildV1Document() = DocumentData(
