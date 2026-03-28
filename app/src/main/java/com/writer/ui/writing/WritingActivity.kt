@@ -36,7 +36,10 @@ import com.writer.view.HandwritingCanvasView
 import com.writer.view.RecognizedTextView
 import com.writer.view.TouchFilter
 import com.writer.view.ScreenMetrics
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class WritingActivity : AppCompatActivity() {
 
@@ -138,6 +141,16 @@ class WritingActivity : AppCompatActivity() {
                 .putString(PREF_SYNC_FOLDER, uri.toString())
                 .apply()
             Toast.makeText(this, "Sync folder set", Toast.LENGTH_SHORT).show()
+            // Restore documents from the newly configured sync folder
+            lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                val count = DocumentStorage.restoreFromSyncFolder(this@WritingActivity, uri)
+                DocumentStorage.ensureSearchIndex(this@WritingActivity)
+                if (count > 0) {
+                    runOnUiThread {
+                        Toast.makeText(this@WritingActivity, "Restored $count documents", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
         }
         inkCanvas.resumeRawDrawing()
     }
@@ -274,9 +287,28 @@ class WritingActivity : AppCompatActivity() {
         pendingRestore = DocumentStorage.load(this, currentDocumentName)
         restoreDocumentVisuals()
 
-        // Ensure search index exists (rebuild in background if missing)
-        lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-            DocumentStorage.ensureSearchIndex(this@WritingActivity)
+        // Restore any new documents from sync folder, then rebuild search index
+        val syncUri = prefs.getString(PREF_SYNC_FOLDER, null)
+        if (syncUri != null) {
+            lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                DocumentStorage.restoreFromSyncFolder(
+                    this@WritingActivity, android.net.Uri.parse(syncUri)
+                )
+                DocumentStorage.ensureSearchIndex(this@WritingActivity)
+            }
+        } else if (savedInstanceState == null) {
+            // First launch with no sync folder — prompt user to pick one
+            lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                DocumentStorage.ensureSearchIndex(this@WritingActivity)
+            }
+            inkCanvas.post {
+                inkCanvas.pauseRawDrawing()
+                pickSyncFolder.launch(null)
+            }
+        } else {
+            lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                DocumentStorage.ensureSearchIndex(this@WritingActivity)
+            }
         }
 
         // Update undo/redo buttons when pen lifts and track active canvas
@@ -542,10 +574,12 @@ class WritingActivity : AppCompatActivity() {
 
     // --- Document operations ---
 
+    private var documentLoadJob: Job? = null
+
     private fun switchToDocument(name: String, scrollToLine: Int? = null) {
         saveDocument()
 
-        // Clear current state
+        // Clear immediately so the old document disappears
         coordinator?.stop()
         coordinator?.reset()
         cueCoordinator?.stop()
@@ -559,45 +593,45 @@ class WritingActivity : AppCompatActivity() {
         recognizedTextView.setParagraphs(emptyList())
         cueRecognizedTextView.setParagraphs(emptyList())
 
-        // Load new document
         currentDocumentName = name
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
             .putString(PREF_CURRENT_DOC, name).apply()
 
-        val data = DocumentStorage.load(this, name)
-        if (data != null) {
-            documentModel.main.activeStrokes.addAll(data.main.strokes)
-            documentModel.main.diagramAreas.addAll(data.main.diagramAreas)
-            inkCanvas.loadStrokes(data.main.strokes)
-            inkCanvas.diagramAreas = data.main.diagramAreas
-            inkCanvas.scrollOffsetY = data.scrollOffsetY
-            inkCanvas.drawToSurface()
-
-            // Restore cue data
-            documentModel.cue.activeStrokes.addAll(data.cue.strokes)
-            documentModel.cue.diagramAreas.addAll(data.cue.diagramAreas)
-
-            coordinator?.start()
-            coordinator?.restoreState(data)
-
-            // If in landscape, restore cue column views too
-            if (isLandscape) {
-                cueInkCanvas.loadStrokes(data.cue.strokes)
-                cueInkCanvas.diagramAreas = data.cue.diagramAreas
-                cueInkCanvas.scrollOffsetY = data.scrollOffsetY
-                cueInkCanvas.drawToSurface()
-                cueCoordinator?.start()
-                cueCoordinator?.restoreColumnState(data.cue)
+        // Cancel any in-flight load, then load on IO thread
+        documentLoadJob?.cancel()
+        documentLoadJob = lifecycleScope.launch {
+            val data = withContext(Dispatchers.IO) {
+                DocumentStorage.load(this@WritingActivity, name)
             }
-        } else {
-            inkCanvas.drawToSurface()
-            coordinator?.start()
-        }
-        updateCueIndicatorStrip()
+            // Back on main thread
+            if (data != null) {
+                documentModel.main.activeStrokes.addAll(data.main.strokes)
+                documentModel.main.diagramAreas.addAll(data.main.diagramAreas)
+                inkCanvas.diagramAreas = data.main.diagramAreas
+                inkCanvas.scrollOffsetY = data.scrollOffsetY
+                inkCanvas.loadStrokes(data.main.strokes)
 
-        // Scroll to the specified line (from search match selection)
-        if (scrollToLine != null) {
-            inkCanvas.post { coordinator?.scrollToLine(scrollToLine) }
+                documentModel.cue.activeStrokes.addAll(data.cue.strokes)
+                documentModel.cue.diagramAreas.addAll(data.cue.diagramAreas)
+
+                coordinator?.start()
+                coordinator?.restoreState(data)
+
+                if (isLandscape) {
+                    cueInkCanvas.diagramAreas = data.cue.diagramAreas
+                    cueInkCanvas.scrollOffsetY = data.scrollOffsetY
+                    cueInkCanvas.loadStrokes(data.cue.strokes)
+                    cueCoordinator?.start()
+                    cueCoordinator?.restoreColumnState(data.cue)
+                }
+            } else {
+                coordinator?.start()
+            }
+            updateCueIndicatorStrip()
+
+            if (scrollToLine != null) {
+                inkCanvas.post { coordinator?.scrollToLine(scrollToLine) }
+            }
         }
     }
 
@@ -873,7 +907,7 @@ class WritingActivity : AppCompatActivity() {
             popup.dismiss()
             pickSyncFolder.launch(null)
         }
-        popupView.findViewById<android.view.View>(R.id.menuTutorial).setOnClickListener {
+popupView.findViewById<android.view.View>(R.id.menuTutorial).setOnClickListener {
             openingTutorial = true
             popup.dismiss()
             showTutorial()
@@ -889,9 +923,17 @@ class WritingActivity : AppCompatActivity() {
         }
         popupView.findViewById<android.view.View>(R.id.menuDebugReset).setOnClickListener {
             popup.dismiss()
+            // Full pristine reset: clear all prefs, delete all local docs, restart
+            getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().clear().apply()
             tutorialManager.resetSeen()
-            generateShowcaseDocument()
-            Toast.makeText(this, "Tutorial reset + demo doc loaded", Toast.LENGTH_SHORT).show()
+            val docsDir = java.io.File(filesDir, "documents")
+            docsDir.listFiles()?.forEach { it.delete() }
+            Toast.makeText(this, "Reset to pristine state — restarting", Toast.LENGTH_SHORT).show()
+            // Restart the app from the launcher activity
+            val intent = packageManager.getLaunchIntentForPackage(packageName)
+            intent?.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK or Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(intent)
+            finish()
         }
 
         // Position to the left of the floating icon, at the top of the text view

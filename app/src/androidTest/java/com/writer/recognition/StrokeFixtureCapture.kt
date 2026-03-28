@@ -62,14 +62,14 @@ class StrokeFixtureCapture {
         val data = requireNotNull(DocumentStorage.load(context, docName)) {
             "Failed to load document: $docName"
         }
-        require(data.strokes.isNotEmpty()) { "Document has no strokes" }
+        require(data.main.strokes.isNotEmpty()) { "Document has no strokes" }
 
         // Segment strokes by line
         val segmenter = LineSegmenter()
-        val lineStrokes = segmenter.getStrokesForLine(data.strokes, lineIndex)
+        val lineStrokes = segmenter.getStrokesForLine(data.main.strokes, lineIndex)
         require(lineStrokes.isNotEmpty()) {
             "No strokes found on line $lineIndex. " +
-                    "Available lines: ${segmenter.groupByLine(data.strokes).keys.sorted()}"
+                    "Available lines: ${segmenter.groupByLine(data.main.strokes).keys.sorted()}"
         }
 
         // Build fixture JSON with downsampled strokes
@@ -130,11 +130,11 @@ class StrokeFixtureCapture {
         val data = requireNotNull(DocumentStorage.load(context, docName)) {
             "Failed to load document: $docName"
         }
-        require(data.strokes.isNotEmpty()) { "Document has no strokes" }
+        require(data.main.strokes.isNotEmpty()) { "Document has no strokes" }
 
         val segmenter = LineSegmenter()
 
-        val lineGroups = segmenter.groupByLine(data.strokes)
+        val lineGroups = segmenter.groupByLine(data.main.strokes)
 
         val json = JSONObject().apply {
             put("documentName", docName)
@@ -144,7 +144,7 @@ class StrokeFixtureCapture {
 
             // All strokes with full metadata
             put("strokes", JSONArray().apply {
-                for (stroke in data.strokes) {
+                for (stroke in data.main.strokes) {
                     val downsampled = StrokeDownsampler.downsample(stroke)
                     put(JSONObject().apply {
                         put("strokeId", stroke.strokeId)
@@ -167,7 +167,7 @@ class StrokeFixtureCapture {
 
             // Diagram areas
             put("diagramAreas", JSONArray().apply {
-                for (area in data.diagramAreas) {
+                for (area in data.main.diagramAreas) {
                     put(JSONObject().apply {
                         put("startLineIndex", area.startLineIndex)
                         put("heightInLines", area.heightInLines)
@@ -177,7 +177,7 @@ class StrokeFixtureCapture {
 
             // Recognized text cache
             put("lineTextCache", JSONObject().apply {
-                for ((lineIdx, text) in data.lineTextCache) {
+                for ((lineIdx, text) in data.main.lineTextCache) {
                     put(lineIdx.toString(), text)
                 }
             })
@@ -198,8 +198,8 @@ class StrokeFixtureCapture {
         }
         val outFile = File(outDir, "$fixtureName.json")
         outFile.writeText(json.toString(2))
-        Log.i("StrokeFixtureCapture", "Captured ${data.strokes.size} strokes, " +
-            "${data.diagramAreas.size} diagram areas, " +
+        Log.i("StrokeFixtureCapture", "Captured ${data.main.strokes.size} strokes, " +
+            "${data.main.diagramAreas.size} diagram areas, " +
             "${lineGroups.size} lines → $outFile")
     }
 }
