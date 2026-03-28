@@ -400,8 +400,9 @@ class HandwritingCanvasView @JvmOverloads constructor(
                     touchFilter?.penHovering = false
             }
 
-            // SDK session transfer — request if this canvas doesn't have the SDK
-            if (!useOnyxSdk) {
+            // SDK session transfer — request on hover enter only (not every move)
+            // to minimize EPD artifacts from repeated transfers near the divider.
+            if (!useOnyxSdk && event.action == MotionEvent.ACTION_HOVER_ENTER) {
                 onRequestOnyxSession?.invoke(event.x, event.y)
             }
         }
@@ -425,15 +426,17 @@ class HandwritingCanvasView @JvmOverloads constructor(
         // In tutorial mode, block all writing input
         if (tutorialMode) return false
 
+        // Fallback: stylus touched canvas without SDK (e.g., direct pen-down on the
+        // cue column without hovering first). Request session transfer before the
+        // SDK check below — after transfer, useOnyxSdk becomes true and the SDK
+        // handles subsequent events via its callback.
+        if (toolType == MotionEvent.TOOL_TYPE_STYLUS && !useOnyxSdk && !externalOnyxActive
+            && event.action == MotionEvent.ACTION_DOWN) {
+            onRequestOnyxSession?.invoke(event.x, event.y)
+        }
+
         // If using Onyx SDK (per-canvas or shared), pen input is handled by SDK callbacks
         if (useOnyxSdk || externalOnyxActive) return true
-
-        // Fallback: stylus touched canvas without hover first (e.g., direct pen-down
-        // on the cue column). Request the Onyx SDK session transfer.
-        if (toolType == MotionEvent.TOOL_TYPE_STYLUS && event.action == MotionEvent.ACTION_DOWN) {
-            onRequestOnyxSession?.invoke(event.x, event.y)
-            return true
-        }
 
         // Stylus/mouse on canvas → writing (fallback for non-Boox devices)
         val x = event.x

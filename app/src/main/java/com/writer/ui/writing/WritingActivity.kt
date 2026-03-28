@@ -1322,15 +1322,7 @@ popupView.findViewById<android.view.View>(R.id.menuTutorial).setOnClickListener 
         donor.drawToSurface()
         recipient.reopenRawDrawing()
 
-        // Reset EPD controller position to the hover point so the first stroke
-        // doesn't draw a line from the stale position.
-        try {
-            com.onyx.android.sdk.api.device.epd.EpdController.moveTo(
-                recipient, hoverX, hoverY, com.writer.view.CanvasTheme.DEFAULT_STROKE_WIDTH
-            )
-        } catch (_: Exception) {}
-
-        Log.d(TAG, "Onyx SDK transferred to ${if (toCue) "cue" else "main"} canvas at ($hoverX, $hoverY)")
+        Log.d(TAG, "Onyx SDK transferred to ${if (toCue) "cue" else "main"} canvas")
     }
 
     /** Toggle button handler — behavior depends on screen size and orientation. */
