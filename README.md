@@ -6,7 +6,14 @@ Every note-taking app forces a choice: capture naturally with a stylus, or captu
 
 Mokke bridges the gap. Write and draw freely on an e-ink tablet. Mokke recognizes your handwriting, classifies your diagrams, and produces clean, structured text — without modes, without menus, without interrupting your thinking.
 
-![Mokke showing handwriting, diagram recognition, and Cornell Notes](docs/screenshot.png)
+<div align="center">
+  <table>
+    <tr>
+      <td><img src="docs/screenshot.png" alt="Notes view" width="280" /><br /><em>Notes view</em></td>
+      <td><img src="docs/screenshot-cues.png" alt="Cue view" width="280" /><br /><em>Cue view</em></td>
+    </tr>
+  </table>
+</div>
 
 ## Features
 
