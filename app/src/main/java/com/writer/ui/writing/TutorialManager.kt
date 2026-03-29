@@ -316,6 +316,7 @@ class TutorialManager(
         inkCanvas.loadStrokes(showcase.strokes)
         inkCanvas.diagramAreas = colModel.diagramAreas.toList()
         inkCanvas.drawToSurface()
+        getCoordinator()?.recognizeAllLines()
     }
 
     /** Load ghost animations for the current step (overlay on the persistent showcase doc). */
