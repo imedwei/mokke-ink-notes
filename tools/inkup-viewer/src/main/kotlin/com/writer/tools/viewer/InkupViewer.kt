@@ -19,7 +19,9 @@ fun main(args: Array<String>) {
     val outputFile = if (args.size > 1) {
         File(args[1])
     } else {
-        File(inputFile.absolutePath.replace(".inkup", "") + ".html")
+        val tmpDir = File(System.getProperty("java.io.tmpdir"), "inkup-viewer")
+        tmpDir.mkdirs()
+        File(tmpDir, inputFile.nameWithoutExtension + ".html")
     }
 
     val bytes = inputFile.readBytes()
