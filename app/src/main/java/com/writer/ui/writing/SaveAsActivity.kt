@@ -12,6 +12,8 @@ import com.writer.model.InkLine
 import com.writer.model.InkStroke
 import com.writer.model.minX
 import com.writer.model.maxX
+import com.writer.view.ScratchOutDetection
+import com.writer.view.HandwritingCanvasView
 import com.writer.recognition.TextRecognizerFactory
 import com.writer.view.HandwritingNameInput
 import kotlinx.coroutines.Dispatchers
@@ -37,6 +39,15 @@ class SaveAsActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_save_as)
 
+        // Tap outside the dialog to cancel
+        val overlay = findViewById<android.widget.FrameLayout>(R.id.dialogOverlay)
+        overlay.setOnClickListener {
+            setResult(RESULT_CANCELED)
+            finish()
+        }
+        // Prevent taps on the dialog content from dismissing
+        overlay.getChildAt(0).setOnClickListener { }
+
         lifecycleScope.launch {
             val rec = TextRecognizerFactory.create(this@SaveAsActivity)
             try {
@@ -55,7 +66,12 @@ class SaveAsActivity : AppCompatActivity() {
         // Pre-populate with current document name
         currentName = intent.getStringExtra(EXTRA_CURRENT_NAME) ?: ""
         nameDisplay.text = currentName
-        handwritingInput.placeholderText = currentName
+        // Don't show placeholder — the current name is already in nameDisplay above
+
+        // Cancel pending EPD refresh when pen goes down again
+        handwritingInput.onStrokeStarted = {
+            handwritingInput.cancelPendingRefresh()
+        }
 
         // Handle stroke completion
         handwritingInput.onStrokeCompleted = { stroke ->
@@ -83,48 +99,52 @@ class SaveAsActivity : AppCompatActivity() {
     }
 
     private fun onStrokeCompleted(stroke: InkStroke) {
-        if (isStrikethroughGesture(stroke)) {
-            handleStrikethrough(stroke)
+        val erased = when {
+            ScratchOutDetection.isScratchOut(stroke.points, allStrokes, HandwritingCanvasView.LINE_SPACING) ->
+                findScratchOutTargets(stroke)
+            GestureHandler.isStrikethroughShape(stroke) ->
+                findStrikethroughTargets(stroke)
+            else -> null
+        }
+
+        if (erased != null) {
+            eraseStrokes(erased, gestureStrokeId = stroke.strokeId)
         } else {
             allStrokes.add(stroke)
             recognizeAll()
         }
     }
 
-    private fun isStrikethroughGesture(stroke: InkStroke): Boolean {
-        return GestureHandler.isStrikethroughShape(stroke)
+    private fun findScratchOutTargets(gesture: InkStroke): List<InkStroke> {
+        val overlapping = allStrokes.filter { ScratchOutDetection.strokesIntersect(gesture.points, it.points) }
+        return overlapping
     }
 
-    private fun handleStrikethrough(gestureStroke: InkStroke) {
-        val gestureMinX = gestureStroke.minX
-        val gestureMaxX = gestureStroke.maxX
-
-        val overlapping = allStrokes.filter { stroke ->
-            stroke.maxX >= gestureMinX && stroke.minX <= gestureMaxX
-        }
-
+    private fun findStrikethroughTargets(gesture: InkStroke): List<InkStroke>? {
+        val overlapping = allStrokes.filter { it.maxX >= gesture.minX && it.minX <= gesture.maxX }
         if (overlapping.isEmpty()) {
-            // Remove just the gesture stroke from the view
-            handwritingInput.removeStrokes(setOf(gestureStroke.strokeId))
-            return
+            handwritingInput.removeStrokes(setOf(gesture.strokeId))
+            return null // no targets, just remove the gesture line
         }
+        return overlapping
+    }
 
-        val idsToRemove = overlapping.map { it.strokeId }.toMutableSet()
-        idsToRemove.add(gestureStroke.strokeId)
-
+    private fun eraseStrokes(targets: List<InkStroke>, gestureStrokeId: String) {
+        if (targets.isEmpty()) return
+        val idsToRemove = targets.map { it.strokeId }.toMutableSet()
+        idsToRemove.add(gestureStrokeId)
         allStrokes.removeAll { it.strokeId in idsToRemove }
-
         handwritingInput.removeStrokes(idsToRemove)
-
+        handwritingInput.scheduleRefresh(lifecycleScope, extraViews = listOf(nameDisplay))
         recognizeAll()
-        Log.i(TAG, "Strikethrough: removed ${overlapping.size} strokes")
+        Log.i(TAG, "Erased ${targets.size} strokes")
     }
 
     private fun recognizeAll() {
         val rec = recognizer ?: return
         if (allStrokes.isEmpty()) {
             currentName = intent.getStringExtra(EXTRA_CURRENT_NAME) ?: ""
-            nameDisplay.text = currentName
+            updateNameDisplay(currentName)
             return
         }
 
@@ -138,14 +158,20 @@ class SaveAsActivity : AppCompatActivity() {
                     rec.recognizeLine(line)
                 }
                 currentName = text.trim()
-                nameDisplay.text = currentName
+                updateNameDisplay(currentName)
             } catch (e: Exception) {
                 Log.e(TAG, "Recognition failed", e)
             }
         }
     }
 
+    private fun updateNameDisplay(text: String) {
+        nameDisplay.text = text
+        handwritingInput.scheduleRefresh(lifecycleScope, extraViews = listOf(nameDisplay))
+    }
+
     override fun onDestroy() {
+        handwritingInput.closeRawDrawing()
         super.onDestroy()
         recognizer?.close()
     }

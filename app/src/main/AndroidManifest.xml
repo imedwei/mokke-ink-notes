@@ -34,7 +34,7 @@
 
         <activity
             android:name=".ui.writing.SaveAsActivity"
-            android:theme="@style/Theme.Writer.Dialog"
+            android:theme="@style/Theme.Writer.FullscreenDialog"
             android:configChanges="orientation|screenSize|screenLayout"
             android:windowSoftInputMode="stateHidden" />
 

@@ -977,28 +977,11 @@ class HandwritingCanvasView @JvmOverloads constructor(
 
     /** Check if the completed stroke is a scratch-out erase gesture. */
     private fun checkPostStrokeScratchOut(): Boolean {
-        val first = currentStrokePoints.first()
-        val last  = currentStrokePoints.last()
-        val closeDist = hypot(last.x - first.x, last.y - first.y)
-        val diagonal = hypot(strokeMaxX - strokeMinX, strokeMaxY - strokeMinY)
-        // Compute path length for closed-loop disambiguation: zigzag scratch-outs
-        // have high path/diagonal ratio even when start ≈ end.
-        var pathLength = 0f
-        for (i in 1 until currentStrokePoints.size) {
-            val p = currentStrokePoints[i - 1]; val c = currentStrokePoints[i]
-            pathLength += hypot(c.x - p.x, c.y - p.y)
-        }
-        val isClosedLoop = ScratchOutDetection.isClosedLoop(closeDist, diagonal, pathLength)
-
-        val xs = FloatArray(currentStrokePoints.size) { currentStrokePoints[it].x }
-        val yRange = strokeMaxY - strokeMinY
-        if (!ScratchOutDetection.detect(xs, yRange, LINE_SPACING, isClosedLoop)) return false
-
-        val left = strokeMinX; val top = strokeMinY
-        val right = strokeMaxX; val bottom = strokeMaxY
+        if (!ScratchOutDetection.isScratchOut(currentStrokePoints, completedStrokes, LINE_SPACING)) return false
 
         val scratchPoints = currentStrokePoints.toList()
-        if (!ScratchOutDetection.isFocusedScratchOut(scratchPoints, completedStrokes)) return false
+        val left = strokeMinX; val top = strokeMinY
+        val right = strokeMaxX; val bottom = strokeMaxY
 
         currentStrokePoints.clear()
         currentPath.reset()
@@ -1294,6 +1277,8 @@ class HandwritingCanvasView @JvmOverloads constructor(
     fun closeRawDrawing() {
         if (useOnyxSdk) {
             try {
+                touchHelper?.setRawDrawingEnabled(false)
+                touchHelper?.setRawInputReaderEnable(false)
                 touchHelper?.closeRawDrawing()
                 useOnyxSdk = false
                 Log.i(TAG, "Onyx SDK raw drawing closed")
