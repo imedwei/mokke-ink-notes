@@ -958,12 +958,12 @@ popupView.findViewById<android.view.View>(R.id.menuTutorial).setOnClickListener 
             finish()
         }
 
-        // Position to the left of the floating icon, at the top of the text view
+        // Position to the left of the menu button so it stays visible
         val loc = IntArray(2)
-        recognizedTextView.getLocationOnScreen(loc)
-        val x = loc[0] + recognizedTextView.width - popupWidth
+        menuButton.getLocationOnScreen(loc)
+        val x = loc[0] - popupWidth
         val y = loc[1]
-        popup.showAtLocation(recognizedTextView, Gravity.NO_GRAVITY, x, y)
+        popup.showAtLocation(menuButton, Gravity.NO_GRAVITY, x, y)
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
