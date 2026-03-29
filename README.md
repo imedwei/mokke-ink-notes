@@ -1,45 +1,63 @@
-# InkUp
+# Mokke
 
 > A note-taking system that respects the physicality of handwriting while unlocking the composability of digital.
 
 Every note-taking app forces a choice: capture naturally with a stylus, or capture in a format that's useful later. Handwriting apps produce dead-end image files. Structured apps demand you type and organize in real time, breaking the flow of thought.
 
-InkUp bridges the gap. Write and draw freely on an e-ink tablet. InkUp recognizes your handwriting, classifies your diagrams, and produces clean, structured text — without modes, without menus, without interrupting your thinking.
+Mokke bridges the gap. Write and draw freely on an e-ink tablet. Mokke recognizes your handwriting, classifies your diagrams, and produces clean, structured text — without modes, without menus, without interrupting your thinking.
 
-![InkUp showing handwriting recognition and diagram areas](docs/screenshot.png)
+![Mokke showing handwriting recognition and diagram areas](docs/screenshot.png)
 
 ## Features
 
-### Capture
+### Two instruments, zero modes
 
-- **Live handwriting recognition** — write naturally and see formatted text appear as you scroll
-- **Two instruments** — stylus always writes, finger always navigates. No mode switching.
-- **E-ink optimized** — designed for Boox devices with low-latency Onyx Pen SDK integration
+Stylus always writes. Finger always navigates. No mode switching, no gesture conflicts. The interaction model follows a simple invariant: the pen creates, the hand moves.
+
+### Live handwriting recognition
+
+Write naturally and see formatted text appear as you scroll. Mokke uses Boox MyScript handwriting recognition with ML Kit fallback, re-recognizing text as context grows. Headings, bulleted lists, and paragraphs are detected automatically.
+
+### Cornell Notes
+
+Landscape mode provides a two-column layout: main notes on the left, cues and annotations on the right. Both columns scroll in lockstep so cues always align to their referenced content.
+
+In portrait mode, fold between Notes and Cues views with a tap. A cue indicator strip shows where annotations exist; a context rail minimap provides orientation in Cues view.
 
 ### Diagrams
 
-- **Auto-detect diagrams** — draw a shape and InkUp automatically creates a diagram area around it. No gesture or mode switch required.
-- **Shape snap** — hold at the end of a stroke to snap to rectangles, ellipses, triangles, diamonds, arrows, elbows, and arcs
-- **Magnetic connectors** — arrow endpoints snap to nearby shapes for clean flowcharts
-- **Diagram text recognition** — freehand labels inside diagram areas are recognized and displayed
+- **Auto-detect** — draw a shape and Mokke creates a diagram area around it. No gesture or mode switch required.
+- **Shape snap** — hold at the end of a stroke to snap to rectangles, ellipses, triangles, diamonds, arrows, elbows, arcs, and self-loops
+- **Magnetic connectors** — arrow endpoints snap to nearby shapes. Elbow and arc connectors support arrowheads at either or both ends.
+- **Diagram text** — freehand labels inside diagram areas are recognized and displayed
+- **Mermaid export** — diagrams export as Mermaid syntax in markdown
 
 ### Editing
 
-- **Scratch-out to erase** — scribble over any content to remove it
+- **Scratch-out to erase** — scribble over content to remove it. Works across both columns and inside diagram areas.
 - **Strikethrough to delete** — draw a horizontal line through text to delete the line
-- **Insert/remove space** — tap the gutter button, then drag to push content apart or close gaps
+- **Insert/remove space** — tap the gutter button, then drag to push content apart or close gaps. Affects both columns while preserving cue anchoring.
 - **Undo/redo** — gutter buttons with smart coalescing (rapid strokes group into one undo step)
 
-### Organization
+### Document management
 
 - **Multi-document** — create, open, and rename documents from the menu
-- **Heading detection** — underline a line to mark it as a heading
-- **Markdown export** — share notes as markdown with diagrams embedded as SVG
+- **Handwritten rename** — write a new name with the stylus in the rename dialog, with live recognition and scratch-out support
+- **Auto-naming** — documents are automatically named from the first heading
+- **Markdown export** — share notes as markdown with diagrams as Mermaid blocks and cues as blockquotes
 - **Sync folder** — export to a folder via Android Storage Access Framework
+
+### E-ink optimized
+
+Designed for Onyx Boox devices with low-latency Pen SDK integration. Supports dual-canvas hover-based input routing in landscape. Tested on Tab X C, Note Air 5C, Go 7, and Palma 2 Pro with responsive layout scaling across screen sizes.
 
 ### Onboarding
 
-- **Interactive tutorial** — 4-step guided tour: write, draw, erase, scroll. Uses Hershey single-stroke fonts for realistic demo content with progressive reveal animations.
+Interactive 4-step tutorial — write, draw, erase, scroll — with Hershey single-stroke fonts for realistic demo content and progressive reveal animations.
+
+## File format
+
+Documents are stored as `.inkup` binary protobuf files with compact column-oriented stroke encoding. The format supports backward-compatible schema evolution with golden file tests for every version. A standalone `inkup-viewer` tool can open `.inkup` files on macOS.
 
 ## Building
 
