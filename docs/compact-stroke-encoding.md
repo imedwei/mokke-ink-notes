@@ -87,7 +87,7 @@ message InkStrokeProto {
 | x | 0.01 | first_x (normalized) | 0.01 line-unit precision |
 | y | 0.01 | first_y (normalized) | 0.01 line-unit precision |
 | pressure | 0.01 | 0 | 100 levels in [0, 1]; omit run entirely if all 1.0 |
-| time | 1.0 | first_timestamp_ms | Millisecond deltas; omit if no timestamps |
+| time | 1.0 | 0 | Pure ms deltas; base stored in `stroke_timestamp` (int64) |
 
 ### Random access
 

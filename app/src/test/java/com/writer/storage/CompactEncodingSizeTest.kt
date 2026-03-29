@@ -127,6 +127,8 @@ class CompactEncodingSizeTest {
             val pressures = FloatArray(stroke.points.size) { stroke.points[it].pressure }
             val timestamps = LongArray(stroke.points.size) { stroke.points[it].timestamp }
 
+            val hasTimestamps = !NumericRunEncoder.allZeroTimestamps(timestamps)
+            val baseTs = if (hasTimestamps) timestamps[0] else 0L
             InkStrokeProto(
                 stroke_id = stroke.strokeId,
                 stroke_width = stroke.strokeWidth,
@@ -136,8 +138,8 @@ class CompactEncodingSizeTest {
                 y_run = NumericRunEncoder.encodeCoordinates(ys),
                 pressure_run = if (NumericRunEncoder.allDefaultPressure(pressures)) null
                     else NumericRunEncoder.encodePressure(pressures),
-                time_run = if (NumericRunEncoder.allZeroTimestamps(timestamps)) null
-                    else NumericRunEncoder.encodeTimestamps(timestamps)
+                time_run = if (hasTimestamps) NumericRunEncoder.encodeTimestamps(timestamps, baseTs) else null,
+                stroke_timestamp = if (hasTimestamps) baseTs else null
             )
         }
         val v3Doc = DocumentProto(

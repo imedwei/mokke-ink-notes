@@ -257,6 +257,38 @@ class DocumentGoldenFileTest {
         assertTrue("points should be empty in v3", stroke.points.isEmpty())
     }
 
+    // ── Protobuf v4 (.inkup) — stroke_timestamp for lossless time precision ─
+
+    @Test
+    fun protoV4_loadsAllData() {
+        val bytes = loadResource("document_v4.inkup")
+        val proto = DocumentProto.ADAPTER.decode(bytes)
+        val data = proto.toDomain()
+
+        // Same structure as v3
+        assertEquals(75.5f, data.scrollOffsetY, 0.5f)
+        assertEquals(3, data.main.strokes.size)
+        assertEquals("proto-stroke-1", data.main.strokes[0].strokeId)
+        assertEquals(2, data.main.strokes[0].points.size)
+        assertEquals(10f, data.main.strokes[0].points[0].x, 1f)
+        assertEquals(20f, data.main.strokes[0].points[0].y, 1f)
+
+        // Timestamps preserved losslessly
+        assertEquals(1000L, data.main.strokes[0].points[0].timestamp)
+        assertEquals(2000L, data.main.strokes[0].points[1].timestamp)
+    }
+
+    @Test
+    fun protoV4_hasStrokeTimestamp() {
+        val bytes = loadResource("document_v4.inkup")
+        val proto = DocumentProto.ADAPTER.decode(bytes)
+        val stroke = proto.main!!.strokes[0]
+
+        assertNotNull(stroke.x_run)
+        assertNotNull(stroke.time_run)
+        assertEquals(1000L, stroke.stroke_timestamp)
+    }
+
     @Test
     fun protoV1_hasNoCoordinateSystem() {
         val bytes = loadResource("document_v1.inkup")

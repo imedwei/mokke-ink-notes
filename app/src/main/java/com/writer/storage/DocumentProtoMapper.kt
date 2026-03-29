@@ -56,6 +56,9 @@ private fun InkStroke.toProto(lineSpacing: Float): InkStrokeProto {
     val pressures = FloatArray(points.size) { points[it].pressure }
     val timestamps = LongArray(points.size) { points[it].timestamp }
 
+    val hasTimestamps = !NumericRunEncoder.allZeroTimestamps(timestamps)
+    val baseTimestamp = if (hasTimestamps) timestamps[0] else 0L
+
     return InkStrokeProto(
         stroke_id = strokeId,
         stroke_width = strokeWidth,  // Pen property — NOT normalized
@@ -65,8 +68,8 @@ private fun InkStroke.toProto(lineSpacing: Float): InkStrokeProto {
         y_run = NumericRunEncoder.encodeCoordinates(ys),
         pressure_run = if (NumericRunEncoder.allDefaultPressure(pressures)) null
             else NumericRunEncoder.encodePressure(pressures),
-        time_run = if (NumericRunEncoder.allZeroTimestamps(timestamps)) null
-            else NumericRunEncoder.encodeTimestamps(timestamps)
+        time_run = if (hasTimestamps) NumericRunEncoder.encodeTimestamps(timestamps, baseTimestamp) else null,
+        stroke_timestamp = if (hasTimestamps) baseTimestamp else null
     )
 }
 
@@ -146,8 +149,19 @@ private fun InkStrokeProto.decodeFromRuns(
     val xs = NumericRunEncoder.decode(x_run!!)
     val ys = y_run?.let { NumericRunEncoder.decode(it) } ?: FloatArray(xs.size)
     val pressures = pressure_run?.let { NumericRunEncoder.decode(it) }
-    val timestamps = time_run?.let { NumericRunEncoder.decodeTimestamps(it) }
+    val timestamps = time_run?.let { run ->
+        val baseMs = if ((stroke_timestamp ?: 0L) != 0L) {
+            stroke_timestamp!!  // v4: proper int64 base
+        } else {
+            NumericRunEncoder.legacyTimestampBaseMs(run)  // v3: float offset fallback
+        }
+        NumericRunEncoder.decodeTimestamps(run, baseMs)
+    }
     val count = xs.size
+
+    require(ys.size == count) { "y_run length ${ys.size} != x_run length $count" }
+    if (pressures != null) require(pressures.size == count) { "pressure_run length ${pressures.size} != x_run length $count" }
+    if (timestamps != null) require(timestamps.size == count) { "time_run length ${timestamps.size} != x_run length $count" }
 
     return List(count) { i ->
         StrokePoint(

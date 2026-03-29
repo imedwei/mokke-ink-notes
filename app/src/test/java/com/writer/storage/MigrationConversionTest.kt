@@ -2,6 +2,7 @@ package com.writer.storage
 
 import com.writer.model.proto.DocumentProto
 import com.writer.view.ScreenMetrics
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import java.io.File
@@ -140,12 +141,14 @@ class MigrationConversionTest {
                 if (maxDriftY > globalMaxDriftY) globalMaxDriftY = maxDriftY
 
                 // Assert no drift exceeds 0.01 line-units (the quantization step)
-                assert(maxDriftX <= 0.011) {
-                    "${file.name}: X drift ${maxDriftX} exceeds 0.01 line-units"
-                }
-                assert(maxDriftY <= 0.011) {
-                    "${file.name}: Y drift ${maxDriftY} exceeds 0.01 line-units"
-                }
+                assertTrue(
+                    "${file.name}: X drift $maxDriftX exceeds 0.01 line-units",
+                    maxDriftX <= 0.011
+                )
+                assertTrue(
+                    "${file.name}: Y drift $maxDriftY exceeds 0.01 line-units",
+                    maxDriftY <= 0.011
+                )
 
             } catch (e: Exception) {
                 println(String.format("%-50s  *** ERROR: %s", file.nameWithoutExtension.take(48), e.message))
