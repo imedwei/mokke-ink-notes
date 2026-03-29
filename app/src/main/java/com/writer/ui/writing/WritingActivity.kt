@@ -85,6 +85,7 @@ class WritingActivity : AppCompatActivity() {
     private lateinit var menuButton: TextView
     private lateinit var undoButton: ImageView
     private lateinit var redoButton: ImageView
+    private lateinit var spaceInsertButton: ImageView
     private lateinit var orientationManager: OrientationManager
     private lateinit var documentModel: DocumentModel
     private lateinit var recognizer: TextRecognizer
@@ -236,7 +237,7 @@ class WritingActivity : AppCompatActivity() {
         undoButton = findViewById(R.id.undoButton)
         redoButton = findViewById(R.id.redoButton)
 
-        val spaceInsertButton = findViewById<ImageView>(R.id.spaceInsertButton)
+        spaceInsertButton = findViewById(R.id.spaceInsertButton)
 
         undoButton.imageAlpha = 77
         redoButton.imageAlpha = 77
@@ -1245,6 +1246,8 @@ popupView.findViewById<android.view.View>(R.id.menuTutorial).setOnClickListener 
             cueInkCanvas.deferOnyxInit = false
             cueInkCanvas.reinitializeRawDrawing()
 
+            spaceInsertButton.visibility = View.GONE
+
             Log.i(TAG, "Folded to cues (portrait)")
         }
     }
@@ -1275,6 +1278,8 @@ popupView.findViewById<android.view.View>(R.id.menuTutorial).setOnClickListener 
         inkCanvas.drawToSurface()
 
         updateCueIndicatorStrip()
+
+        spaceInsertButton.visibility = View.VISIBLE
 
         Log.i(TAG, "Unfolded to notes (portrait)")
     }
