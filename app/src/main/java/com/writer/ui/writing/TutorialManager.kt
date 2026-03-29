@@ -267,9 +267,10 @@ class TutorialManager(
         revealHandler.removeCallbacks(revealRunnable)
 
         val step = steps[currentStepIndex]
-        // For scroll step, reveal the full screen (canvas + preview) so user sees text appear
-        val cutout = if (step.id == "scroll" || step.id == "switch_to_cues" || step.id == "peek_note") {
-            // Full screen so user can access scroll, gutter toggle, or cue strip
+        // From the scroll step onward, reveal the full screen so the preview area
+        // stays visible and the user can access scroll, gutter toggle, or cue strip.
+        val scrollStepIndex = steps.indexOfFirst { it.id == "scroll" }
+        val cutout = if (currentStepIndex >= scrollStepIndex) {
             Rect(0, 0, inkCanvas.rootView.width, inkCanvas.rootView.height)
         } else {
             getCanvasScreenRect()
