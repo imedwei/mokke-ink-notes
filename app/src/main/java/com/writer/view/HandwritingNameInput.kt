@@ -5,19 +5,30 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.Rect
 import android.graphics.Typeface
 import android.util.AttributeSet
+import android.util.Log
 import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
+import com.onyx.android.sdk.pen.RawInputCallback
+import com.onyx.android.sdk.pen.TouchHelper
+import com.onyx.android.sdk.data.note.TouchPoint
+import com.onyx.android.sdk.pen.data.TouchPointList
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import com.writer.model.InkStroke
 import com.writer.model.StrokePoint
 
 /**
  * Simplified ink input surface for writing a document name.
  * Single ruled line, no scrolling, no gutter.
- * Uses standard touch only (no Onyx SDK — avoids conflict with the
- * main canvas's TouchHelper which can only have one active instance).
+ * Uses Onyx SDK TouchHelper for low-latency pen input on Boox devices,
+ * falls back to standard MotionEvent on non-Boox devices.
+ * WritingActivity closes its TouchHelper before launching SaveAsActivity,
+ * so there is no singleton conflict.
  */
 class HandwritingNameInput @JvmOverloads constructor(
     context: Context,
@@ -47,6 +58,38 @@ class HandwritingNameInput @JvmOverloads constructor(
         textAlign = Paint.Align.CENTER
     }
 
+    private var useOnyxSdk = false
+    private var touchHelper: TouchHelper? = null
+
+    private var penDown = false
+
+    private val onyxCallback = object : RawInputCallback() {
+        override fun onBeginRawDrawing(b: Boolean, tp: TouchPoint) {
+            penDown = true
+            onStrokeStarted?.invoke()
+            currentStrokePoints.clear()
+            currentPath.reset()
+            currentPath.moveTo(tp.x, tp.y)
+            currentStrokePoints.add(StrokePoint(tp.x, tp.y, tp.pressure, tp.timestamp))
+        }
+        override fun onRawDrawingTouchPointMoveReceived(tp: TouchPoint) {
+            currentPath.lineTo(tp.x, tp.y)
+            currentStrokePoints.add(StrokePoint(tp.x, tp.y, tp.pressure, tp.timestamp))
+        }
+        override fun onEndRawDrawing(b: Boolean, tp: TouchPoint) {
+            penDown = false
+            currentPath.lineTo(tp.x, tp.y)
+            currentStrokePoints.add(StrokePoint(tp.x, tp.y, tp.pressure, tp.timestamp))
+            finishStroke()
+        }
+        override fun onRawDrawingTouchPointListReceived(tpl: TouchPointList) {}
+        override fun onBeginRawErasing(b: Boolean, tp: TouchPoint) {}
+        override fun onEndRawErasing(b: Boolean, tp: TouchPoint) {}
+        override fun onRawErasingTouchPointMoveReceived(tp: TouchPoint) {}
+        override fun onRawErasingTouchPointListReceived(tpl: TouchPointList) {}
+    }
+
+    var onStrokeStarted: (() -> Unit)? = null
     var onStrokeCompleted: ((InkStroke) -> Unit)? = null
 
     /** Light grey placeholder text shown until the user starts writing. */
@@ -67,6 +110,8 @@ class HandwritingNameInput @JvmOverloads constructor(
     override fun surfaceCreated(holder: SurfaceHolder) {
         surfaceReady = true
         drawToSurface()
+        // Defer Onyx init until after the floating dialog is positioned
+        post { tryInitOnyx() }
     }
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
@@ -75,11 +120,13 @@ class HandwritingNameInput @JvmOverloads constructor(
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
         surfaceReady = false
+        closeRawDrawing()
     }
 
-    // --- Touch handling (standard MotionEvent only) ---
+    // --- Touch handling (MotionEvent fallback for non-Boox devices) ---
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (useOnyxSdk) return true
         val x = event.x
         val y = event.y
         val pressure = event.pressure
@@ -130,6 +177,90 @@ class HandwritingNameInput @JvmOverloads constructor(
         onStrokeCompleted?.invoke(stroke)
         currentStrokePoints.clear()
         currentPath.reset()
+    }
+
+    // --- Onyx SDK ---
+
+    private fun tryInitOnyx() {
+        if (useOnyxSdk) return
+        try {
+            val limit = Rect()
+            getLocalVisibleRect(limit)
+            touchHelper = TouchHelper.create(this, onyxCallback)
+            touchHelper?.setStrokeWidth(CanvasTheme.DEFAULT_STROKE_WIDTH)
+            touchHelper?.setStrokeStyle(TouchHelper.STROKE_STYLE_PENCIL)
+            touchHelper?.setStrokeColor(Color.BLACK)
+            touchHelper?.setLimitRect(limit, emptyList())
+            touchHelper?.openRawDrawing()
+            touchHelper?.setRawDrawingEnabled(true)
+            try {
+                com.onyx.android.sdk.api.device.epd.EpdController.setScreenHandWritingRegionLimit(this)
+            } catch (e: Exception) {
+                Log.w(TAG, "EpdController region limit failed: ${e.message}")
+            }
+            useOnyxSdk = true
+            Log.i(TAG, "Onyx SDK initialized for name input: limitRect=$limit")
+        } catch (e: Exception) {
+            Log.w(TAG, "Onyx SDK init failed, using standard touch: ${e.message}")
+            useOnyxSdk = false
+            touchHelper = null
+        }
+    }
+
+    fun pauseRawDrawing() {
+        if (!useOnyxSdk) return
+        touchHelper?.setRawDrawingEnabled(false)
+    }
+
+    fun resumeRawDrawing() {
+        if (!useOnyxSdk) return
+        touchHelper?.setRawDrawingEnabled(true)
+    }
+
+    /**
+     * Schedule a full EPD refresh after [delayMs]. Pauses SDK, invalidates
+     * [extraViews] (e.g. a text display outside the handwriting region),
+     * redraws the surface, then resumes. Cancels any previously scheduled refresh.
+     */
+    fun scheduleRefresh(
+        scope: kotlinx.coroutines.CoroutineScope,
+        delayMs: Long = 300,
+        extraViews: List<android.view.View> = emptyList()
+    ) {
+        if (penDown) return
+        refreshJob?.cancel()
+        refreshJob = scope.launch {
+            delay(delayMs)
+            pauseRawDrawing()
+            drawToSurface()
+            for (view in extraViews) {
+                try {
+                    com.onyx.android.sdk.api.device.epd.EpdController.invalidate(
+                        view,
+                        com.onyx.android.sdk.api.device.epd.UpdateMode.DU
+                    )
+                } catch (_: Exception) {}
+            }
+            resumeRawDrawing()
+        }
+    }
+
+    /** Cancel any pending refresh (e.g. when pen goes down again). */
+    fun cancelPendingRefresh() {
+        refreshJob?.cancel()
+    }
+
+    private var refreshJob: Job? = null
+
+    fun closeRawDrawing() {
+        if (useOnyxSdk) {
+            try {
+                touchHelper?.closeRawDrawing()
+            } catch (e: Exception) {
+                Log.w(TAG, "Error closing raw drawing: ${e.message}")
+            }
+            useOnyxSdk = false
+        }
     }
 
     // --- Drawing ---

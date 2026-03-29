@@ -192,6 +192,36 @@ object ScratchOutDetection {
     }
 
     /**
+     * Full scratch-out check: geometry + focused on existing strokes.
+     * Shared entry point used by both HandwritingCanvasView and SaveAsActivity.
+     */
+    fun isScratchOut(
+        points: List<StrokePoint>,
+        existingStrokes: List<InkStroke>,
+        lineSpacing: Float
+    ): Boolean {
+        if (points.size < 4) return false
+        val first = points.first()
+        val last = points.last()
+        val minX = points.minOf { it.x }
+        val maxX = points.maxOf { it.x }
+        val minY = points.minOf { it.y }
+        val maxY = points.maxOf { it.y }
+        val closeDist = kotlin.math.sqrt((last.x - first.x) * (last.x - first.x) + (last.y - first.y) * (last.y - first.y))
+        val diagonal = kotlin.math.sqrt((maxX - minX) * (maxX - minX) + (maxY - minY) * (maxY - minY))
+        var pathLength = 0f
+        for (i in 1 until points.size) {
+            val p = points[i - 1]; val c = points[i]
+            pathLength += kotlin.math.sqrt((c.x - p.x) * (c.x - p.x) + (c.y - p.y) * (c.y - p.y))
+        }
+        val isClosedLoop = isClosedLoop(closeDist, diagonal, pathLength)
+        val xs = FloatArray(points.size) { points[it].x }
+        val yRange = maxY - minY
+        if (!detect(xs, yRange, lineSpacing, isClosedLoop)) return false
+        return isFocusedScratchOut(points, existingStrokes)
+    }
+
+    /**
      * Check whether any existing stroke overlaps the scratch-out bounding box.
      * A scratch-out should only erase when there is pre-existing content underneath;
      * otherwise new cursive words with many reversals (e.g. "difficulty") are
