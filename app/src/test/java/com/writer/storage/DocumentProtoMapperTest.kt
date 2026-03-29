@@ -252,9 +252,12 @@ class DocumentProtoMapperTest {
         val points = listOf(StrokePoint(ls * 2f, tm + ls * 3f, 0.5f, 1000L))
         val data = DocumentData(main = ColumnData(strokes = listOf(InkStroke(points = points))))
         val proto = data.toProto()
-        val pt = proto.main!!.strokes[0].points[0]
-        assertEquals("x should be normalized to 2.0 line-units", 2.0f, pt.x!!, 0.01f)
-        assertEquals("y should be normalized to 3.0 line-units", 3.0f, pt.y!!, 0.01f)
+        val stroke = proto.main!!.strokes[0]
+        // v3: coordinates stored in runs, not per-point sub-messages
+        val xDecoded = NumericRunEncoder.decode(stroke.x_run!!)
+        val yDecoded = NumericRunEncoder.decode(stroke.y_run!!)
+        assertEquals("x should be normalized to 2.0 line-units", 2.0f, xDecoded[0], 0.01f)
+        assertEquals("y should be normalized to 3.0 line-units", 3.0f, yDecoded[0], 0.01f)
     }
 
     @Test

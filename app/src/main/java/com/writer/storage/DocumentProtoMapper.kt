@@ -41,20 +41,34 @@ private fun ColumnData.toProto(lineSpacing: Float): ColumnDataProto = ColumnData
     diagram_areas = diagramAreas.map { it.toProto() }
 )
 
-private fun InkStroke.toProto(lineSpacing: Float): InkStrokeProto = InkStrokeProto(
-    stroke_id = strokeId,
-    stroke_width = strokeWidth,  // Pen property — NOT normalized
-    points = points.map { it.toProto(lineSpacing) },
-    stroke_type = strokeType.toProto(),
-    is_geometric = isGeometric
-)
+private fun InkStroke.toProto(lineSpacing: Float): InkStrokeProto {
+    if (points.isEmpty()) {
+        return InkStrokeProto(
+            stroke_id = strokeId,
+            stroke_width = strokeWidth,
+            stroke_type = strokeType.toProto(),
+            is_geometric = isGeometric
+        )
+    }
+    val tm = ScreenMetrics.topMargin
+    val xs = FloatArray(points.size) { points[it].x / lineSpacing }
+    val ys = FloatArray(points.size) { (points[it].y - tm) / lineSpacing }
+    val pressures = FloatArray(points.size) { points[it].pressure }
+    val timestamps = LongArray(points.size) { points[it].timestamp }
 
-private fun StrokePoint.toProto(lineSpacing: Float): StrokePointProto = StrokePointProto(
-    x = x / lineSpacing,
-    y = (y - ScreenMetrics.topMargin) / lineSpacing,
-    pressure = pressure,
-    timestamp = timestamp
-)
+    return InkStrokeProto(
+        stroke_id = strokeId,
+        stroke_width = strokeWidth,  // Pen property — NOT normalized
+        stroke_type = strokeType.toProto(),
+        is_geometric = isGeometric,
+        x_run = NumericRunEncoder.encodeCoordinates(xs),
+        y_run = NumericRunEncoder.encodeCoordinates(ys),
+        pressure_run = if (NumericRunEncoder.allDefaultPressure(pressures)) null
+            else NumericRunEncoder.encodePressure(pressures),
+        time_run = if (NumericRunEncoder.allZeroTimestamps(timestamps)) null
+            else NumericRunEncoder.encodeTimestamps(timestamps)
+    )
+}
 
 fun DiagramArea.toProto(): DiagramAreaProto = DiagramAreaProto(
     id = id,
@@ -110,13 +124,40 @@ private fun ColumnDataProto.toDomain(
 
 private fun InkStrokeProto.toDomain(
     isNormalized: Boolean, lineSpacing: Float, topMargin: Float
-): InkStroke = InkStroke(
-    strokeId = stroke_id ?: "",
-    points = points.map { it.toDomain(isNormalized, lineSpacing, topMargin) },
-    strokeWidth = stroke_width ?: 3f,  // Pen property — NOT denormalized
-    isGeometric = is_geometric ?: false,
-    strokeType = stroke_type?.toDomain() ?: StrokeType.FREEHAND
-)
+): InkStroke {
+    // v3 compact encoding: decode from runs when x_run is present
+    val decodedPoints = if (x_run != null) {
+        decodeFromRuns(lineSpacing, topMargin)
+    } else {
+        points.map { it.toDomain(isNormalized, lineSpacing, topMargin) }
+    }
+    return InkStroke(
+        strokeId = stroke_id ?: "",
+        points = decodedPoints,
+        strokeWidth = stroke_width ?: 3f,  // Pen property — NOT denormalized
+        isGeometric = is_geometric ?: false,
+        strokeType = stroke_type?.toDomain() ?: StrokeType.FREEHAND
+    )
+}
+
+private fun InkStrokeProto.decodeFromRuns(
+    lineSpacing: Float, topMargin: Float
+): List<StrokePoint> {
+    val xs = NumericRunEncoder.decode(x_run!!)
+    val ys = y_run?.let { NumericRunEncoder.decode(it) } ?: FloatArray(xs.size)
+    val pressures = pressure_run?.let { NumericRunEncoder.decode(it) }
+    val timestamps = time_run?.let { NumericRunEncoder.decodeTimestamps(it) }
+    val count = xs.size
+
+    return List(count) { i ->
+        StrokePoint(
+            x = xs[i] * lineSpacing,
+            y = topMargin + ys[i] * lineSpacing,
+            pressure = pressures?.get(i) ?: 1f,
+            timestamp = timestamps?.get(i) ?: 0L
+        )
+    }
+}
 
 private fun StrokePointProto.toDomain(
     isNormalized: Boolean, lineSpacing: Float, topMargin: Float

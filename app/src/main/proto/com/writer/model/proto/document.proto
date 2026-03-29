@@ -32,12 +32,29 @@ enum StrokeTypeProto {
     DIAMOND = 17;
 }
 
+// Compact per-channel delta-encoded numeric sequence.
+// Decode: val[0] = offset + scale * deltas[0]
+//         val[i] = val[i-1] + scale * deltas[i]
+message NumericRunProto {
+    repeated sint32 deltas = 1 [packed = true];
+    optional float scale = 2 [default = 1];
+    optional float offset = 3 [default = 0];
+}
+
 message InkStrokeProto {
     optional string stroke_id = 1 [default = ""];
     optional float stroke_width = 2 [default = 3];
     repeated StrokePointProto points = 3;
     optional StrokeTypeProto stroke_type = 4 [default = FREEHAND];
     optional bool is_geometric = 5 [default = false];
+
+    // Compact column-oriented encoding (v3).
+    // When x_run is present, decode from runs; 'points' field is empty.
+    // All runs must have the same logical length (number of points).
+    optional NumericRunProto x_run = 6;
+    optional NumericRunProto y_run = 7;
+    optional NumericRunProto pressure_run = 8;   // omitted if all pressures are 1.0
+    optional NumericRunProto time_run = 9;       // omitted if timestamps not needed
 }
 
 message DiagramAreaProto {
