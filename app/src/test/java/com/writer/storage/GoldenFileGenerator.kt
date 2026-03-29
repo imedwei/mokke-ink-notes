@@ -32,6 +32,7 @@ class GoldenFileGeneratorRunner {
         val bytes = when (version) {
             "v1" -> GoldenFileGenerator.buildV1Document().toProto().encode()
             "v2" -> GoldenFileGenerator.buildV2Proto().encode()
+            "v3" -> GoldenFileGenerator.buildV3Proto().encode()
             else -> error("Unknown golden file version: $version")
         }
         val file = File(outputDir, "document_$version.inkup")
@@ -55,6 +56,15 @@ object GoldenFileGenerator {
         val domain = buildV1Document()
         // toProto() normalizes coordinates and sets coordinate_system = 1
         return domain.toProto()
+    }
+
+    /**
+     * v3: compact column-oriented encoding (NumericRunProto).
+     * Same base data as v2, but toProto() now writes runs instead of per-point sub-messages.
+     */
+    fun buildV3Proto(): DocumentProto {
+        ScreenMetrics.init(1.875f, smallestWidthDp = 674, widthPixels = 1264, heightPixels = 1680)
+        return buildV1Document().toProto()
     }
 
     fun buildV1Document() = DocumentData(

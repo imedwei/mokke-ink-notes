@@ -200,6 +200,63 @@ class DocumentGoldenFileTest {
         assertTrue(data.userRenamed)
     }
 
+    // ── Protobuf v3 (.inkup) — compact column-oriented encoding ──────────
+
+    @Test
+    fun protoV3_loadsAllData() {
+        val bytes = loadResource("document_v3.inkup")
+        val proto = DocumentProto.ADAPTER.decode(bytes)
+        val data = proto.toDomain()
+
+        // Top-level fields
+        assertEquals(75.5f, data.scrollOffsetY, 0.5f)
+        assertEquals(7, data.highestLineIndex)
+        assertEquals(5, data.currentLineIndex)
+        assertTrue(data.userRenamed)
+
+        // Main strokes
+        assertEquals(3, data.main.strokes.size)
+        assertEquals("proto-stroke-1", data.main.strokes[0].strokeId)
+        assertEquals(StrokeType.FREEHAND, data.main.strokes[0].strokeType)
+        assertFalse(data.main.strokes[0].isGeometric)
+
+        assertEquals("proto-stroke-2", data.main.strokes[1].strokeId)
+        assertEquals(StrokeType.ELLIPSE, data.main.strokes[1].strokeType)
+        assertTrue(data.main.strokes[1].isGeometric)
+
+        assertEquals("proto-stroke-3", data.main.strokes[2].strokeId)
+        assertEquals(StrokeType.ELBOW_ARROW_HEAD, data.main.strokes[2].strokeType)
+
+        // Points preserved (within quantization tolerance)
+        assertEquals(2, data.main.strokes[0].points.size)
+        assertEquals(10f, data.main.strokes[0].points[0].x, 1f)
+        assertEquals(20f, data.main.strokes[0].points[0].y, 1f)
+
+        // Text cache, hidden lines, diagram areas
+        assertEquals("proto hello", data.main.lineTextCache[0])
+        assertEquals("proto world", data.main.lineTextCache[1])
+        assertEquals(setOf(0, 2), data.main.everHiddenLines)
+        assertEquals(1, data.main.diagramAreas.size)
+        assertEquals("proto-area", data.main.diagramAreas[0].id)
+
+        // Cue column
+        assertEquals(1, data.cue.strokes.size)
+        assertEquals("cue-proto-1", data.cue.strokes[0].strokeId)
+        assertEquals("cue entry", data.cue.lineTextCache[0])
+    }
+
+    @Test
+    fun protoV3_usesCompactRuns() {
+        val bytes = loadResource("document_v3.inkup")
+        val proto = DocumentProto.ADAPTER.decode(bytes)
+        val stroke = proto.main!!.strokes[0]
+
+        // v3 strokes use runs, not per-point sub-messages
+        assertNotNull(stroke.x_run)
+        assertNotNull(stroke.y_run)
+        assertTrue("points should be empty in v3", stroke.points.isEmpty())
+    }
+
     @Test
     fun protoV1_hasNoCoordinateSystem() {
         val bytes = loadResource("document_v1.inkup")
