@@ -39,14 +39,8 @@ class SaveAsActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_save_as)
 
-        // Tap outside the dialog to cancel
-        val overlay = findViewById<android.widget.FrameLayout>(R.id.dialogOverlay)
-        overlay.setOnClickListener {
-            setResult(RESULT_CANCELED)
-            finish()
-        }
-        // Prevent taps on the dialog content from dismissing
-        overlay.getChildAt(0).setOnClickListener { }
+        // Consume taps on the overlay to prevent accidental palm dismissal
+        findViewById<android.widget.FrameLayout>(R.id.dialogOverlay).setOnClickListener { }
 
         lifecycleScope.launch {
             val rec = TextRecognizerFactory.create(this@SaveAsActivity)
