@@ -147,7 +147,8 @@ private fun InkStrokeProto.decodeFromRuns(
     lineSpacing: Float, topMargin: Float
 ): List<StrokePoint> {
     val xs = NumericRunEncoder.decode(x_run!!)
-    val ys = y_run?.let { NumericRunEncoder.decode(it) } ?: FloatArray(xs.size)
+    require(y_run != null) { "y_run must be present when x_run is present" }
+    val ys = NumericRunEncoder.decode(y_run!!)
     val pressures = pressure_run?.let { NumericRunEncoder.decode(it) }
     val timestamps = time_run?.let { run ->
         val baseMs = if ((stroke_timestamp ?: 0L) != 0L) {
