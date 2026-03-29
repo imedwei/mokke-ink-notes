@@ -58,40 +58,48 @@ object NumericRunEncoder {
     fun encodePressure(values: FloatArray): NumericRunProto =
         encode(values, DEFAULT_PRESSURE_SCALE)
 
-    fun encodeTimestamps(timestamps: LongArray): NumericRunProto {
+    /**
+     * Encode timestamps as ms deltas from a base. The base (epoch ms of the
+     * first point) is stored separately in InkStrokeProto.stroke_timestamp.
+     * Returns just the delta run (offset=0, scale=1).
+     */
+    fun encodeTimestamps(timestamps: LongArray, baseMs: Long): NumericRunProto {
         require(timestamps.isNotEmpty()) { "Cannot encode empty array" }
-        // Store base as seconds (fits losslessly in Float up to ~2^24 seconds ≈ year 2531).
-        // Absorb the ms residual into deltas[0] so absolute precision is preserved.
-        val baseMs = timestamps[0]
-        val baseSec = baseMs / 1000L
-        val residualMs = (baseMs - baseSec * 1000L).toInt()
-
         val deltas = IntArray(timestamps.size)
-        deltas[0] = residualMs
-        var prev = residualMs
-        for (i in 1 until timestamps.size) {
-            val msFromBase = (timestamps[i] - baseSec * 1000L).toInt()
+        var prev = 0
+        for (i in timestamps.indices) {
+            val msFromBase = (timestamps[i] - baseMs).toInt()
             deltas[i] = msFromBase - prev
             prev = msFromBase
         }
-        return NumericRunProto(
-            deltas = deltas.toList(),
-            scale = DEFAULT_TIME_SCALE,
-            offset = baseSec.toFloat()
-        )
+        return NumericRunProto(deltas = deltas.toList())
     }
 
-    fun decodeTimestamps(run: NumericRunProto): LongArray {
-        val baseSec = (run.offset ?: 0f).toLong()
+    /**
+     * Decode timestamps from a delta run and an absolute base.
+     * For v4 files, baseMs comes from InkStrokeProto.stroke_timestamp.
+     * For v3 files (legacy), baseMs is reconstructed from the run's float offset.
+     */
+    fun decodeTimestamps(run: NumericRunProto, baseMs: Long): LongArray {
         val s = (run.scale ?: 1f)
-        val deltas = run.deltas
-        val values = LongArray(deltas.size)
+        val values = LongArray(run.deltas.size)
         var acc = 0
-        for (i in deltas.indices) {
-            acc += deltas[i]
-            values[i] = baseSec * 1000L + (s * acc).toLong()
+        for (i in run.deltas.indices) {
+            acc += run.deltas[i]
+            values[i] = baseMs + (s * acc).toLong()
         }
         return values
+    }
+
+    /**
+     * Reconstruct base ms from a v3 legacy time_run that used float offset
+     * in hours-since-epoch (or seconds for very old v3 files).
+     */
+    fun legacyTimestampBaseMs(run: NumericRunProto): Long {
+        val offset = run.offset ?: 0f
+        // v3 files used offset in seconds (scale=1, offset=baseSec)
+        // before the hour fix. Detect by checking magnitude.
+        return (offset.toLong()) * 1000L
     }
 
     /** Returns true if all pressures are 1.0 (default), meaning pressure_run can be omitted. */

@@ -2,9 +2,9 @@ package com.writer.tools.viewer
 
 import com.writer.model.proto.ColumnDataProto
 import com.writer.model.proto.InkStrokeProto
-import com.writer.model.proto.NumericRunProto
 import com.writer.model.proto.StrokePointProto
 import com.writer.model.proto.StrokeTypeProto
+import com.writer.storage.NumericRunEncoder
 import kotlin.math.hypot
 
 private const val LINE_SPACING = 50f
@@ -170,26 +170,13 @@ object ProtoToSvg {
     private fun resolvePoints(stroke: InkStrokeProto, isNormalized: Boolean): List<Pair<Float, Float>> {
         val xRun = stroke.x_run
         if (xRun != null) {
-            // v3 compact encoding — decode runs and denormalize
-            val xs = decodeRun(xRun)
-            val ys = stroke.y_run?.let { decodeRun(it) } ?: FloatArray(xs.size)
+            val xs = NumericRunEncoder.decode(xRun)
+            val ys = stroke.y_run?.let { NumericRunEncoder.decode(it) } ?: FloatArray(xs.size)
             return List(xs.size) { i ->
                 Pair(xs[i] * LINE_SPACING, TOP_MARGIN + ys[i] * LINE_SPACING)
             }
         }
         return stroke.points.map { denormalize(it, isNormalized) }
-    }
-
-    private fun decodeRun(run: NumericRunProto): FloatArray {
-        val scale = run.scale ?: 1f
-        val offset = run.offset ?: 0f
-        val values = FloatArray(run.deltas.size)
-        var acc = 0
-        for (i in run.deltas.indices) {
-            acc += run.deltas[i]
-            values[i] = offset + scale * acc
-        }
-        return values
     }
 
     private fun denormalize(pt: StrokePointProto, isNormalized: Boolean): Pair<Float, Float> {

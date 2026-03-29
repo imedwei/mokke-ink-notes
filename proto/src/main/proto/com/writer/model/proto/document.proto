@@ -55,6 +55,10 @@ message InkStrokeProto {
     optional NumericRunProto y_run = 7;
     optional NumericRunProto pressure_run = 8;   // omitted if all pressures are 1.0
     optional NumericRunProto time_run = 9;       // omitted if timestamps not needed
+
+    // Epoch ms of first point (v4). time_run holds ms deltas from this base.
+    // Avoids float precision loss in NumericRunProto.offset for large timestamps.
+    optional int64 stroke_timestamp = 10 [default = 0];
 }
 
 message DiagramAreaProto {

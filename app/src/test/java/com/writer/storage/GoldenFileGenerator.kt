@@ -33,6 +33,7 @@ class GoldenFileGeneratorRunner {
             "v1" -> GoldenFileGenerator.buildV1Document().toProto().encode()
             "v2" -> GoldenFileGenerator.buildV2Proto().encode()
             "v3" -> GoldenFileGenerator.buildV3Proto().encode()
+            "v4" -> GoldenFileGenerator.buildV4Proto().encode()
             else -> error("Unknown golden file version: $version")
         }
         val file = File(outputDir, "document_$version.inkup")
@@ -61,8 +62,18 @@ object GoldenFileGenerator {
     /**
      * v3: compact column-oriented encoding (NumericRunProto).
      * Same base data as v2, but toProto() now writes runs instead of per-point sub-messages.
+     * NOTE: Do not regenerate — this golden file predates stroke_timestamp (field 10).
      */
     fun buildV3Proto(): DocumentProto {
+        ScreenMetrics.init(1.875f, smallestWidthDp = 674, widthPixels = 1264, heightPixels = 1680)
+        return buildV1Document().toProto()
+    }
+
+    /**
+     * v4: same as v3 but with stroke_timestamp (int64 field 10) for lossless
+     * timestamp precision. toProto() now writes this field automatically.
+     */
+    fun buildV4Proto(): DocumentProto {
         ScreenMetrics.init(1.875f, smallestWidthDp = 674, widthPixels = 1264, heightPixels = 1680)
         return buildV1Document().toProto()
     }

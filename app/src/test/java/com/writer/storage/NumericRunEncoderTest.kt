@@ -93,16 +93,18 @@ class NumericRunEncoderTest {
     @Test
     fun encodeTimestamps_roundTrip() {
         val timestamps = longArrayOf(1000L, 1005L, 1010L, 1015L, 1020L)
-        val run = NumericRunEncoder.encodeTimestamps(timestamps)
-        val decoded = NumericRunEncoder.decodeTimestamps(run)
+        val base = timestamps[0]
+        val run = NumericRunEncoder.encodeTimestamps(timestamps, base)
+        val decoded = NumericRunEncoder.decodeTimestamps(run, base)
         assertArrayEquals(timestamps, decoded)
     }
 
     @Test
     fun encodeTimestamps_irregularIntervals() {
         val timestamps = longArrayOf(1000L, 1003L, 1008L, 1020L, 1021L)
-        val run = NumericRunEncoder.encodeTimestamps(timestamps)
-        val decoded = NumericRunEncoder.decodeTimestamps(run)
+        val base = timestamps[0]
+        val run = NumericRunEncoder.encodeTimestamps(timestamps, base)
+        val decoded = NumericRunEncoder.decodeTimestamps(run, base)
         assertArrayEquals(timestamps, decoded)
     }
 
@@ -114,19 +116,30 @@ class NumericRunEncoderTest {
 
     @Test
     fun encodeTimestamps_singleValue() {
-        val run = NumericRunEncoder.encodeTimestamps(longArrayOf(5000L))
-        val decoded = NumericRunEncoder.decodeTimestamps(run)
+        val base = 5000L
+        val run = NumericRunEncoder.encodeTimestamps(longArrayOf(5000L), base)
+        val decoded = NumericRunEncoder.decodeTimestamps(run, base)
         assertEquals(1, decoded.size)
         assertEquals(5000L, decoded[0])
     }
 
     @Test
     fun encodeTimestamps_epochMillis_preservesPrecision() {
-        // 2026-era epoch ms — must survive Float offset without precision loss
+        // 2026-era epoch ms — int64 base avoids any Float precision issues
         val base = 1774000000000L // ~March 2026
         val timestamps = longArrayOf(base, base + 5, base + 10, base + 18, base + 23)
-        val run = NumericRunEncoder.encodeTimestamps(timestamps)
-        val decoded = NumericRunEncoder.decodeTimestamps(run)
+        val run = NumericRunEncoder.encodeTimestamps(timestamps, base)
+        val decoded = NumericRunEncoder.decodeTimestamps(run, base)
+        assertArrayEquals(timestamps, decoded)
+    }
+
+    @Test
+    fun encodeTimestamps_farFuture_preservesPrecision() {
+        // 2050-era epoch ms — would fail with Float offset, works with int64 base
+        val base = 2524608000000L // ~year 2050
+        val timestamps = longArrayOf(base, base + 5, base + 10)
+        val run = NumericRunEncoder.encodeTimestamps(timestamps, base)
+        val decoded = NumericRunEncoder.decodeTimestamps(run, base)
         assertArrayEquals(timestamps, decoded)
     }
 
@@ -161,7 +174,7 @@ class NumericRunEncoderTest {
 
     @Test(expected = IllegalArgumentException::class)
     fun encodeTimestamps_emptyArray_throws() {
-        NumericRunEncoder.encodeTimestamps(longArrayOf())
+        NumericRunEncoder.encodeTimestamps(longArrayOf(), 0L)
     }
 
     @Test
