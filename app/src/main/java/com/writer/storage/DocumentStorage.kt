@@ -284,13 +284,13 @@ object DocumentStorage {
         val linesJson = org.json.JSONObject()
         try {
             val doc = DocumentProto.ADAPTER.decode(file.readBytes())
-            if (doc.main != null) {
-                for ((key, value) in doc.main.line_text_cache) {
+            doc.main?.let { main ->
+                for ((key, value) in main.line_text_cache) {
                     if (value.isNotEmpty()) linesJson.put("$key", value.lowercase())
                 }
             }
-            if (doc.cue != null) {
-                for ((key, value) in doc.cue.line_text_cache) {
+            doc.cue?.let { cue ->
+                for ((key, value) in cue.line_text_cache) {
                     if (value.isNotEmpty()) linesJson.put("c$key", value.lowercase())
                 }
             }
