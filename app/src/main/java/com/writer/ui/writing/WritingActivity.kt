@@ -82,7 +82,7 @@ class WritingActivity : AppCompatActivity() {
 
     // Floating gutter overlay
     private lateinit var gutterOverlay: View
-    private lateinit var menuButton: TextView
+    private lateinit var menuButton: ImageView
     private lateinit var undoButton: ImageView
     private lateinit var redoButton: ImageView
     private lateinit var spaceInsertButton: ImageView
@@ -1669,7 +1669,7 @@ popupView.findViewById<android.view.View>(R.id.menuTutorial).setOnClickListener 
             val intent = Intent(Intent.ACTION_SEND).apply {
                 type = "application/json"
                 putExtra(Intent.EXTRA_STREAM, uri)
-                putExtra(Intent.EXTRA_SUBJECT, "InkUp Bug Report")
+                putExtra(Intent.EXTRA_SUBJECT, "Mokke Bug Report")
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
             startActivity(Intent.createChooser(intent, "Share Bug Report"))

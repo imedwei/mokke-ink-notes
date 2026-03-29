@@ -112,16 +112,13 @@
         android:paddingEnd="8dp"
         android:elevation="1dp">
 
-        <TextView
+        <ImageView
             android:id="@+id/menuButton"
             android:layout_width="48dp"
             android:layout_height="48dp"
-            android:gravity="center"
-            android:text="I"
-            android:textSize="28sp"
-            android:textStyle="bold"
-            android:fontFamily="cursive"
-            android:textColor="@android:color/black"
+            android:src="@drawable/ic_mokke"
+            android:scaleType="fitCenter"
+            android:padding="4dp"
             android:background="?android:attr/selectableItemBackgroundBorderless"
             android:contentDescription="Menu" />
 
