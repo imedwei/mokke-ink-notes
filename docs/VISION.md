@@ -1,4 +1,4 @@
-# InkUp — Product Vision
+# Mokke — Product Vision
 
 > A note-taking system that respects the physicality of handwriting while unlocking the composability of digital.
 
@@ -10,13 +10,13 @@
 
 Every note-taking app forces a choice: capture naturally with a stylus, or capture in a format that's useful later. Handwriting apps produce dead-end image files. Structured apps demand you type and organize in real time, breaking the flow of thought. The gap between *capturing an idea* and *composing with it later* is where most note-taking tools fail.
 
-InkUp bridges this gap. It treats handwritten strokes, diagrams, and embedded media as first-class objects—not raster images—that preserve spatial layout, support semantic classification, and reflow intelligently across surfaces. The result is a note that lives beyond the moment of capture: it can be prettified, projected, annotated, archived, cross-referenced, and exported into downstream tools like NotebookLM.
+Mokke bridges this gap. It treats handwritten strokes, diagrams, and embedded media as first-class objects—not raster images—that preserve spatial layout, support semantic classification, and reflow intelligently across surfaces. The result is a note that lives beyond the moment of capture: it can be prettified, projected, annotated, archived, cross-referenced, and exported into downstream tools like NotebookLM.
 
 > **Core bet:** The gap between "fast enough to capture a thought" and "structured enough to use later" is a real, unsolved problem. E-ink is the right surface for bridging it—it removes the screen's distraction tax while enabling digital persistence.
 
 ### Conceptual architecture
 
-![InkUp conceptual architecture](./architecture.svg)
+![Mokke conceptual architecture](./architecture.svg)
 
 ---
 
@@ -48,7 +48,7 @@ The entire note—strokes, prettified text, diagrams, annotations—is exported 
 
 #### Capture
 
-An idea strikes. The user opens InkUp and begins sketching a user journey: a cartoon-style storyboard of UI screens connected by text descriptions. The tool doesn't force a choice between "drawing mode" and "text mode." Strokes are strokes. The system classifies them semantically after the fact.
+An idea strikes. The user opens Mokke and begins sketching a user journey: a cartoon-style storyboard of UI screens connected by text descriptions. The tool doesn't force a choice between "drawing mode" and "text mode." Strokes are strokes. The system classifies them semantically after the fact.
 
 #### Composition
 
@@ -76,7 +76,7 @@ Every interaction on the device maps to exactly one of two physical instruments.
 
 These principles are ordered by priority. When two principles conflict, the higher-numbered one yields.
 
-1. **No accidental data loss.** No gesture, touch, or stylus action should be capable of silently destroying user work. If a destructive action occurs (collapse, delete, clear), it must be immediately visible and trivially reversible. The vertical-line-collapse pattern in the current InkUp is a cautionary example: it removes content from view and an inattentive user may not notice the loss.
+1. **No accidental data loss.** No gesture, touch, or stylus action should be capable of silently destroying user work. If a destructive action occurs (collapse, delete, clear), it must be immediately visible and trivially reversible. The vertical-line-collapse pattern in the current Mokke is a cautionary example: it removes content from view and an inattentive user may not notice the loss.
 
 2. **Discoverable essentials, learnable shortcuts.** Every essential function must be discoverable without a tutorial. This means visible affordances (icons, buttons, labeled controls) for actions the user needs to find within their first session. Advanced gestures may exist as *accelerators* for already-discovered functions—never as the *only* path to a needed action. The test: if a new user can't find the feature in 30 seconds, it needs a visible affordance.
 
@@ -100,7 +100,7 @@ Every new interaction proposal should be checked against this catalog before imp
 
 ## The note object model
 
-The central technical and conceptual insight of InkUp is that a note is not an image, not a document, and not a canvas—it is a **structured spatial object** with four properties that existing tools only partially provide.
+The central technical and conceptual insight of Mokke is that a note is not an image, not a document, and not a canvas—it is a **structured spatial object** with four properties that existing tools only partially provide.
 
 ### Spatial fidelity
 
@@ -122,15 +122,15 @@ Every state of the note is preserved. The original capture, the prettified versi
 
 ## Product layers
 
-From a product architecture perspective, InkUp has four distinct layers, each of which represents a separable engineering investment and a distinct source of user value.
+From a product architecture perspective, Mokke has four distinct layers, each of which represents a separable engineering investment and a distinct source of user value.
 
 ### Layer 1: Capture
 
-The e-ink canvas with stylus and finger input. This must be *zero-friction*: the user should feel no difference between reaching for a pen and paper vs. reaching for InkUp. Latency, palm rejection, and stroke rendering quality are table stakes. The differentiator is the interaction model—two instruments (hand and stylus) with clear, non-overlapping roles and no mode switching.
+The e-ink canvas with stylus and finger input. This must be *zero-friction*: the user should feel no difference between reaching for a pen and paper vs. reaching for Mokke. Latency, palm rejection, and stroke rendering quality are table stakes. The differentiator is the interaction model—two instruments (hand and stylus) with clear, non-overlapping roles and no mode switching.
 
 ### Layer 2: The note object
 
-The structured spatial data model described above. This is where the core IP lives. Competing products stop at "strokes on a canvas"—InkUp promotes strokes to classified, spatially-aware, versionable objects. This layer enables everything above it.
+The structured spatial data model described above. This is the core differentiator. Most note-taking tools stop at "strokes on a canvas"—Mokke promotes strokes to classified, spatially-aware, versionable objects. This layer enables everything above it.
 
 ### Layer 3: Composition
 
@@ -138,18 +138,18 @@ The post-capture enrichment tools: prettify (OCR + layout-preserving typesetting
 
 ### Layer 4: Output and archive
 
-The note's lifecycle beyond InkUp. This includes: indexing and full-text search across the note archive, cross-referencing between notes, and export to downstream tools (NotebookLM, slide generators, document editors). The archive turns InkUp from a capture tool into a personal knowledge system. The export pipeline turns it into a node in the user's broader workflow.
+The note's lifecycle beyond Mokke. This includes: indexing and full-text search across the note archive, cross-referencing between notes, and export to downstream tools (NotebookLM, slide generators, document editors). The archive turns Mokke from a capture tool into a personal knowledge system. The export pipeline turns it into a node in the user's broader workflow.
 
 ---
 
 ## What this is not
 
-Clarity about what InkUp is *not* is as important as what it is. Scope discipline is what separates a product with a clear identity from a feature soup.
+Clarity about what Mokke is *not* is as important as what it is. Scope discipline is what separates a product with a clear identity from a feature soup.
 
-- **Not a drawing app.** InkUp is not competing with Procreate or Concepts. It does not need layers, blend modes, pressure curves, or color wheels. It needs strokes that capture thinking accurately.
-- **Not a document editor.** InkUp is not competing with Notion or Google Docs. It does not need rich text formatting, database views, or collaborative editing. It needs notes that become useful after capture.
-- **Not a whiteboarding tool.** InkUp is not competing with Miro or FigJam. It is not optimized for real-time multi-user collaboration on an infinite canvas. It is optimized for one person capturing and refining their thinking.
-- **Not a general-purpose e-ink OS.** InkUp does one thing—note-taking—and does it in a way that no general-purpose e-ink tablet does today. Breadth is the enemy of the interaction model.
+- **Not a drawing app.** Mokke is not competing with Procreate or Concepts. It does not need layers, blend modes, pressure curves, or color wheels. It needs strokes that capture thinking accurately.
+- **Not a document editor.** Mokke is not competing with Notion or Google Docs. It does not need rich text formatting, database views, or collaborative editing. It needs notes that become useful after capture.
+- **Not a whiteboarding tool.** Mokke is not competing with Miro or FigJam. It is not optimized for real-time multi-user collaboration on an infinite canvas. It is optimized for one person capturing and refining their thinking.
+- **Not a general-purpose e-ink OS.** Mokke does one thing—note-taking—and does it in a way that no general-purpose e-ink tablet does today. Breadth is the enemy of the interaction model.
 
 ---
 
@@ -163,8 +163,8 @@ These are the decisions that will shape the product's trajectory and should be r
 
 3. **How does the archive scale?** Hundreds of notes with handwritten content require either very good OCR-based indexing, embedding-based semantic search, or both. The indexing strategy determines the archive's usefulness at scale.
 
-4. **What is the export contract?** NotebookLM is a specific integration. The broader question is: what format does InkUp export? A proprietary format with rich metadata? Markdown with embedded images? PDF? The answer determines how freely notes travel through the user's broader workflow.
+4. **What is the export contract?** NotebookLM is a specific integration. The broader question is: what format does Mokke export? A proprietary format with rich metadata? Markdown with embedded images? PDF? The answer determines how freely notes travel through the user's broader workflow.
 
-5. **Hardware-coupled or hardware-agnostic?** Is InkUp a software product that runs on existing e-ink tablets (Boox, reMarkable), or is it tightly coupled to specific hardware for optimal interaction? The answer has massive implications for who can use it, how fast the team can iterate, and how deep the experience can go.
+5. **Hardware-coupled or hardware-agnostic?** Is Mokke a software product that runs on existing e-ink tablets (Boox, reMarkable), or is it tightly coupled to specific hardware for optimal interaction? The answer has massive implications for who can use it, how fast the team can iterate, and how deep the experience can go.
 
 6. **What is the frame model for storyboards?** The "spontaneous idea" journey implies discrete, reorderable frames. How are frame boundaries detected—explicit user action, spatial heuristics, or AI classification? Each has different failure modes.
