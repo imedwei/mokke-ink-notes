@@ -7,7 +7,6 @@ object NumericRunEncoder {
 
     private const val DEFAULT_COORDINATE_SCALE = 0.01f
     private const val DEFAULT_PRESSURE_SCALE = 0.01f
-    private const val DEFAULT_TIME_SCALE = 1f
 
     /**
      * Encode a float array as a delta-encoded NumericRunProto.
@@ -68,9 +67,14 @@ object NumericRunEncoder {
         val deltas = IntArray(timestamps.size)
         var prev = 0
         for (i in timestamps.indices) {
-            val msFromBase = (timestamps[i] - baseMs).toInt()
-            deltas[i] = msFromBase - prev
-            prev = msFromBase
+            val msFromBase = timestamps[i] - baseMs
+            // Guard: sint32 limits a single stroke's duration to ~24.8 days,
+            // which is well beyond any realistic pen-down duration.
+            require(msFromBase in Int.MIN_VALUE.toLong()..Int.MAX_VALUE.toLong()) {
+                "Timestamp delta $msFromBase ms exceeds sint32 range at index $i"
+            }
+            deltas[i] = msFromBase.toInt() - prev
+            prev = msFromBase.toInt()
         }
         return NumericRunProto(deltas = deltas.toList())
     }
@@ -92,13 +96,13 @@ object NumericRunEncoder {
     }
 
     /**
-     * Reconstruct base ms from a v3 legacy time_run that used float offset
-     * in hours-since-epoch (or seconds for very old v3 files).
+     * Reconstruct base ms from a v3 legacy time_run that stored the base
+     * as a float offset in seconds. Float32 only has ~7 significant digits,
+     * so for 2026-era epoch seconds (~1.77e9) this loses up to ~128s of
+     * precision. v4's int64 stroke_timestamp eliminates this issue.
      */
     fun legacyTimestampBaseMs(run: NumericRunProto): Long {
         val offset = run.offset ?: 0f
-        // v3 files used offset in seconds (scale=1, offset=baseSec)
-        // before the hour fix. Detect by checking magnitude.
         return (offset.toLong()) * 1000L
     }
 

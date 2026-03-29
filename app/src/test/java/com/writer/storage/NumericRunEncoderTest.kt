@@ -143,6 +143,31 @@ class NumericRunEncoderTest {
         assertArrayEquals(timestamps, decoded)
     }
 
+    // ── Legacy v3 timestamp decode ──────────────────────────────────────────
+
+    @Test
+    fun legacyTimestampBaseMs_reconstructsFromFloatOffset() {
+        // v3 stored base time as float seconds in the run's offset field
+        val baseSec = 1774000000f // ~March 2026
+        val run = NumericRunProto(deltas = listOf(0, 5, 10), offset = baseSec)
+        val baseMs = NumericRunEncoder.legacyTimestampBaseMs(run)
+        // Float loses precision — expect up to ~128s drift for 2026-era values
+        val expectedMs = baseSec.toLong() * 1000L
+        assertEquals(expectedMs, baseMs)
+        // Verify the decoded timestamps — deltas are accumulated (0, 0+5, 0+5+10)
+        val decoded = NumericRunEncoder.decodeTimestamps(run, baseMs)
+        assertEquals(3, decoded.size)
+        assertEquals(baseMs, decoded[0])
+        assertEquals(baseMs + 5, decoded[1])
+        assertEquals(baseMs + 15, decoded[2])
+    }
+
+    @Test
+    fun legacyTimestampBaseMs_nullOffset_returnsZero() {
+        val run = NumericRunProto(deltas = listOf(0, 5))
+        assertEquals(0L, NumericRunEncoder.legacyTimestampBaseMs(run))
+    }
+
     // ── Decode from raw proto ──────────────────────────────────────────────
 
     @Test
