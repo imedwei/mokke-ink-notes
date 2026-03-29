@@ -28,12 +28,11 @@ class MigrationConversionTest {
         ScreenMetrics.init(DENSITY, smallestWidthDp = SW_PALMA, widthPixels = W_PALMA, heightPixels = H_PALMA)
     }
 
-    private fun originalsDir(): File {
+    private fun migrationDir(): File {
         // Gradle test working dir is the module dir (app/), so go up one level
-        val dir = File("../.migration/originals")
+        val dir = File("../.migration")
         if (!dir.exists()) {
-            // Also try from project root (IDE runners)
-            val alt = File(".migration/originals")
+            val alt = File(".migration")
             if (alt.exists()) return alt
         }
         return dir
@@ -41,11 +40,15 @@ class MigrationConversionTest {
 
     @Test
     fun reportMigrationDeltas() {
-        val dir = originalsDir()
+        val migration = migrationDir()
+        val dir = File(migration, "originals")
         if (!dir.exists()) {
             println("⚠ No originals directory found at ${dir.absolutePath} — skipping migration test")
             return
         }
+
+        val v3Dir = File(migration, "v3")
+        v3Dir.mkdirs()
 
         val files = dir.listFiles()?.filter { it.extension == "inkup" }?.sortedBy { it.name }
             ?: emptyList()
@@ -85,6 +88,9 @@ class MigrationConversionTest {
                 val domain = origProto.toDomain()
                 val v3Proto = domain.toProto()
                 val v3Bytes = v3Proto.encode()
+
+                // Persist v3 file
+                File(v3Dir, file.name).writeBytes(v3Bytes)
 
                 // Decode v3 back to domain for comparison
                 val v3Domain = v3Proto.toDomain()

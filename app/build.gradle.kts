@@ -2,13 +2,6 @@ plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("com.google.devtools.ksp")
-    id("com.squareup.wire")
-}
-
-wire {
-    kotlin {
-        android = true
-    }
 }
 
 android {
@@ -164,8 +157,8 @@ configurations.all {
 }
 
 dependencies {
-    // Wire (protobuf serialization)
-    implementation("com.squareup.wire:wire-runtime:5.1.0")
+    // Proto schema (shared module — single source of truth)
+    implementation(project(":proto"))
 
     // Onyx Pen SDK (Boox stylus input)
     implementation("com.onyx.android.sdk:onyxsdk-pen:1.5.2")

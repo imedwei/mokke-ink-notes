@@ -1,11 +1,6 @@
 plugins {
     kotlin("jvm")
-    id("com.squareup.wire")
     application
-}
-
-wire {
-    kotlin {}
 }
 
 application {
@@ -17,7 +12,7 @@ tasks.named<JavaExec>("run") {
 }
 
 dependencies {
-    implementation("com.squareup.wire:wire-runtime:5.1.0")
+    implementation(project(":proto"))
 }
 
 // --- macOS .app bundle (uses osacompile to create a real Apple Event handler) ---

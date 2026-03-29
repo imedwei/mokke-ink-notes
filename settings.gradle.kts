@@ -17,5 +17,6 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "Writer"
+include(":proto")
 include(":app")
 include(":tools:inkup-viewer")

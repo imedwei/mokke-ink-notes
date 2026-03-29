@@ -2,6 +2,7 @@ package com.writer.tools.viewer
 
 import com.writer.model.proto.ColumnDataProto
 import com.writer.model.proto.InkStrokeProto
+import com.writer.model.proto.NumericRunProto
 import com.writer.model.proto.StrokePointProto
 import com.writer.model.proto.StrokeTypeProto
 import kotlin.math.hypot
@@ -19,8 +20,7 @@ object ProtoToSvg {
         var maxX = 0f
         var maxY = 0f
         for (stroke in column?.strokes.orEmpty()) {
-            for (pt in stroke.points) {
-                val (x, y) = denormalize(pt, isNormalized)
+            for ((x, y) in resolvePoints(stroke, isNormalized)) {
                 if (x > maxX) maxX = x
                 if (y > maxY) maxY = y
             }
@@ -48,7 +48,7 @@ object ProtoToSvg {
 
         // Strokes
         for (stroke in column?.strokes.orEmpty()) {
-            val pts = stroke.points.map { denormalize(it, isNormalized) }
+            val pts = resolvePoints(stroke, isNormalized)
             if (pts.size < 2) continue
 
             val strokeWidth = stroke.stroke_width ?: DEFAULT_STROKE_WIDTH
@@ -164,6 +164,32 @@ object ProtoToSvg {
         val height = size * 1.5f
         val bx = tipX - height * fx; val by = tipY - height * fy
         return """<polygon points="${fmt(tipX)},${fmt(tipY)} ${fmt(bx + size * px)},${fmt(by + size * py)} ${fmt(bx - size * px)},${fmt(by - size * py)}" fill="black"/>"""
+    }
+
+    /** Decode points from v3 runs or fall back to v1/v2 per-point fields. */
+    private fun resolvePoints(stroke: InkStrokeProto, isNormalized: Boolean): List<Pair<Float, Float>> {
+        val xRun = stroke.x_run
+        if (xRun != null) {
+            // v3 compact encoding — decode runs and denormalize
+            val xs = decodeRun(xRun)
+            val ys = stroke.y_run?.let { decodeRun(it) } ?: FloatArray(xs.size)
+            return List(xs.size) { i ->
+                Pair(xs[i] * LINE_SPACING, TOP_MARGIN + ys[i] * LINE_SPACING)
+            }
+        }
+        return stroke.points.map { denormalize(it, isNormalized) }
+    }
+
+    private fun decodeRun(run: NumericRunProto): FloatArray {
+        val scale = run.scale ?: 1f
+        val offset = run.offset ?: 0f
+        val values = FloatArray(run.deltas.size)
+        var acc = 0
+        for (i in run.deltas.indices) {
+            acc += run.deltas[i]
+            values[i] = offset + scale * acc
+        }
+        return values
     }
 
     private fun denormalize(pt: StrokePointProto, isNormalized: Boolean): Pair<Float, Float> {
