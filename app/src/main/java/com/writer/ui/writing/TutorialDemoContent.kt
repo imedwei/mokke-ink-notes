@@ -13,7 +13,7 @@ import com.writer.view.HandwritingCanvasView
 object TutorialDemoContent {
 
     /**
-     * Generate "Welcome to InkUp" using the Hershey cursive font.
+     * Generate "Welcome to Mokke" using the Hershey cursive font.
      * Scales to fill approximately one line height.
      *
      * @param font pre-loaded HersheyFont instance
@@ -28,7 +28,7 @@ object TutorialDemoContent {
         // Scale so the text height fills ~80% of one line spacing.
         val scale = lineSpacing * 0.8f / 24f
         return font.textToStrokes(
-            text = "Welcome to InkUp",
+            text = "Welcome to Mokke",
             startX = startX,
             startY = startY + lineSpacing * 0.4f,  // center vertically in line
             scale = scale,

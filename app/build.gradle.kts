@@ -21,7 +21,7 @@ android {
     buildTypes {
         debug {
             applicationIdSuffix = ".dev"
-            resValue("string", "app_name", "InkUp Dev")
+            resValue("string", "app_name", "Mokke Dev")
             ndk {
                 abiFilters += "arm64-v8a"
             }
