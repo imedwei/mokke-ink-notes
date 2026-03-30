@@ -133,6 +133,73 @@ class ScratchOutPerfTest {
         )
     }
 
+    // --- Full isScratchOut pipeline benchmarks ---
+    // These test the complete detection path (detect + isFocusedScratchOut)
+    // matching real device conditions that caused ANRs on ARM e-ink.
+
+    @Test
+    fun `isScratchOut 700 pts dense overlap 30 strokes under 10ms`() {
+        // Real-world scenario: scratch-out over a dense paragraph where many
+        // strokes (letters of multiple words) overlap the scratch region.
+        // 30 strokes packed into a ~300px wide, ~40px tall region.
+        val strokes = (0 until 30).map { i ->
+            makeTextStroke(x = 30f + i * 10f, y = 100f, height = 40f, pointCount = 80)
+        }
+        val scratch = makeScratchPoints(startX = 20f, centerY = 120f, width = 320f, pointCount = 700)
+
+        val t0 = System.nanoTime()
+        ScratchOutDetection.isFocusedScratchOut(scratch, strokes)
+        val elapsedMs = (System.nanoTime() - t0) / 1_000_000.0
+
+        assertTrue(
+            "Dense overlap took ${elapsedMs}ms, budget is 10ms (700 pts, 30 overlapping strokes)",
+            elapsedMs < 10.0
+        )
+    }
+
+    @Test
+    fun `isScratchOut full pipeline 700 pts 200 strokes under 10ms`() {
+        // End-to-end: isScratchOut with a real-sized document. Tests the full
+        // pipeline from reversal detection through focused coverage check.
+        // Strokes on 20 lines, 10 per line. Scratch targets line 5.
+        val strokes = (0 until 200).map { i ->
+            val line = i / 10
+            val col = i % 10
+            makeTextStroke(x = 30f + col * 30f, y = 50f * line + 100f, height = 40f, pointCount = 60)
+        }
+        val scratch = makeScratchPoints(startX = 20f, centerY = 370f, width = 300f, pointCount = 700)
+
+        val t0 = System.nanoTime()
+        ScratchOutDetection.isScratchOut(scratch, strokes, 50f)
+        val elapsedMs = (System.nanoTime() - t0) / 1_000_000.0
+
+        assertTrue(
+            "Full pipeline took ${elapsedMs}ms, budget is 10ms (700 pts, 200 strokes, 10 overlapping)",
+            elapsedMs < 10.0
+        )
+    }
+
+    @Test
+    fun `isScratchOut full pipeline 500 pts 500 strokes dense under 15ms`() {
+        // Stress test: large document with many strokes overlapping the scratch region.
+        // 500 strokes on 20 lines (25 per line), scratch covers one dense line.
+        val strokes = (0 until 500).map { i ->
+            val line = i / 25
+            val col = i % 25
+            makeTextStroke(x = 10f + col * 14f, y = 50f * line + 100f, height = 40f, pointCount = 50)
+        }
+        val scratch = makeScratchPoints(startX = 10f, centerY = 370f, width = 350f, pointCount = 500)
+
+        val t0 = System.nanoTime()
+        ScratchOutDetection.isScratchOut(scratch, strokes, 50f)
+        val elapsedMs = (System.nanoTime() - t0) / 1_000_000.0
+
+        assertTrue(
+            "Dense 500-stroke pipeline took ${elapsedMs}ms, budget is 15ms (500 pts, 25 overlapping strokes)",
+            elapsedMs < 15.0
+        )
+    }
+
     // --- strokesIntersect erase-path benchmarks ---
     // These cover the WritingCoordinator.onScratchOut path where strokesIntersect
     // is called per-stroke to identify which strokes to erase.

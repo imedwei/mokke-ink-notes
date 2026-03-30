@@ -292,32 +292,40 @@ object ScratchOutDetection {
 
         val radiusSq = radius * radius
 
-        // For small targets (< 5 total points across all candidates),
-        // use simple proximity — grid overhead isn't worthwhile.
-        val targetPoints = candidates.flatMap { it.points }
-        if (targetPoints.size < 5) {
-            return targetPoints.any { tp ->
-                scratchPoints.any { sp ->
-                    val dx = sp.x - tp.x; val dy = sp.y - tp.y
-                    dx * dx + dy * dy <= radiusSq
+        // Build grid directly from candidate strokes (avoid flatMap allocation).
+        val cellSize = radius
+        val grid = HashMap<Long, MutableList<StrokePoint>>()
+        fun cellKey(x: Int, y: Int) = x.toLong() shl 32 or (y.toLong() and 0xFFFFFFFFL)
+        var totalTargetPoints = 0
+        for (stroke in candidates) {
+            for (tp in stroke.points) {
+                val cx = (tp.x / cellSize).toInt()
+                val cy = (tp.y / cellSize).toInt()
+                grid.getOrPut(cellKey(cx, cy)) { mutableListOf() }.add(tp)
+                totalTargetPoints++
+            }
+        }
+
+        // For small targets, use simple proximity — grid overhead isn't worthwhile.
+        if (totalTargetPoints < 5) {
+            return candidates.any { stroke ->
+                stroke.points.any { tp ->
+                    scratchPoints.any { sp ->
+                        val dx = sp.x - tp.x; val dy = sp.y - tp.y
+                        dx * dx + dy * dy <= radiusSq
+                    }
                 }
             }
         }
 
-        // Grid-based spatial index: O(n + m) instead of O(n*m).
-        // Cell size = radius. For each scratch point, check its cell + 8 neighbors
-        // and do exact distance checks on the (few) target points in those cells.
-        val cellSize = radius
-        val grid = HashMap<Long, MutableList<StrokePoint>>()
-        fun cellKey(x: Int, y: Int) = x.toLong() shl 32 or (y.toLong() and 0xFFFFFFFFL)
-        for (tp in targetPoints) {
-            val cx = (tp.x / cellSize).toInt()
-            val cy = (tp.y / cellSize).toInt()
-            grid.getOrPut(cellKey(cx, cy)) { mutableListOf() }.add(tp)
-        }
-
+        // Sample scratch points: check every Nth point instead of all.
+        // Coverage estimate is still statistically valid with ~50 samples.
+        val step = maxOf(1, scratchPoints.size / 50)
+        val threshold = (MIN_COVERAGE_FRACTION * ((scratchPoints.size + step - 1) / step)).toInt()
         var nearCount = 0
-        for (sp in scratchPoints) {
+        var i = 0
+        while (i < scratchPoints.size) {
+            val sp = scratchPoints[i]
             val cx = (sp.x / cellSize).toInt()
             val cy = (sp.y / cellSize).toInt()
             var found = false
@@ -334,10 +342,11 @@ object ScratchOutDetection {
                 }
             }
             if (found) nearCount++
+            if (nearCount >= threshold) return true
+            i += step
         }
 
-        val coverage = nearCount.toFloat() / scratchPoints.size
-        return coverage >= MIN_COVERAGE_FRACTION
+        return false
     }
 
     fun hasTargetStrokes(
