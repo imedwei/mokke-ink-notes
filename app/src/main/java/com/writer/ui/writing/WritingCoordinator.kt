@@ -312,6 +312,14 @@ class WritingCoordinator(
         val radius = ScreenMetrics.dp(ScratchOutDetection.COVERAGE_RADIUS_DP)
         val radiusSq = radius * radius
         val overlapping = columnModel.activeStrokes.filter { stroke ->
+            // Bounding-box pre-filter: skip strokes that don't overlap the
+            // scratch-out region (expanded by radius). Without this, every
+            // stroke is checked with O(n*m) segment intersection tests.
+            val sMinX = stroke.minX; val sMaxX = stroke.maxX
+            val sMinY = stroke.minY; val sMaxY = stroke.maxY
+            if (sMaxX < left - radius || sMinX > right + radius ||
+                sMaxY < top - radius || sMinY > bottom + radius) return@filter false
+
             if (stroke.points.size < 5) {
                 // Small strokes (dots, taps): segment intersection is unreliable,
                 // use proximity check instead — any scratch point within radius counts.

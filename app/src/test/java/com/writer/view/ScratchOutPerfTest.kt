@@ -2,6 +2,10 @@ package com.writer.view
 
 import com.writer.model.InkStroke
 import com.writer.model.StrokePoint
+import com.writer.model.minX
+import com.writer.model.maxX
+import com.writer.model.minY
+import com.writer.model.maxY
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -125,6 +129,75 @@ class ScratchOutPerfTest {
 
         assertTrue(
             "Large doc scratch-out took ${elapsedMs}ms, budget is 20ms (500 strokes, bbox pre-filter)",
+            elapsedMs < 20.0
+        )
+    }
+
+    // --- strokesIntersect erase-path benchmarks ---
+    // These cover the WritingCoordinator.onScratchOut path where strokesIntersect
+    // is called per-stroke to identify which strokes to erase.
+
+    @Test
+    fun `strokesIntersect 700 pts vs non-overlapping stroke under 1ms`() {
+        // Scratch at y=100, stroke at y=500 — bbox early-exit should make this instant
+        val scratch = makeScratchPoints(startX = 50f, centerY = 100f, width = 300f, pointCount = 700)
+        val distant = makeTextStroke(x = 100f, y = 500f, height = 50f, pointCount = 80)
+
+        val t0 = System.nanoTime()
+        val result = ScratchOutDetection.strokesIntersect(scratch, distant.points)
+        val elapsedMs = (System.nanoTime() - t0) / 1_000_000.0
+
+        assertTrue("Should not intersect", !result)
+        assertTrue(
+            "Non-overlapping strokesIntersect took ${elapsedMs}ms, budget is 1ms (bbox exit)",
+            elapsedMs < 1.0
+        )
+    }
+
+    @Test
+    fun `strokesIntersect 700 pts vs overlapping stroke under 5ms`() {
+        // Scratch and stroke overlap — must do full segment intersection
+        val scratch = makeScratchPoints(startX = 50f, centerY = 125f, width = 200f, pointCount = 700)
+        val overlapping = makeTextStroke(x = 100f, y = 100f, height = 50f, pointCount = 80)
+
+        val t0 = System.nanoTime()
+        ScratchOutDetection.strokesIntersect(scratch, overlapping.points)
+        val elapsedMs = (System.nanoTime() - t0) / 1_000_000.0
+
+        assertTrue(
+            "Overlapping strokesIntersect took ${elapsedMs}ms, budget is 5ms (700x80 segments)",
+            elapsedMs < 5.0
+        )
+    }
+
+    @Test
+    fun `erase identification 700 pts over 200 strokes under 20ms`() {
+        // Simulates the WritingCoordinator.onScratchOut loop: check strokesIntersect
+        // for every active stroke. Most strokes are far away (bbox skip), a few overlap.
+        val strokes = (0 until 200).map { i ->
+            val line = i / 10
+            val col = i % 10
+            makeTextStroke(x = 30f + col * 30f, y = 80f * line + 100f, height = 40f, pointCount = 50)
+        }
+        val scratch = makeScratchPoints(startX = 20f, centerY = 500f, width = 300f, pointCount = 700)
+        val scratchMinX = scratch.minOf { it.x }
+        val scratchMaxX = scratch.maxOf { it.x }
+        val scratchMinY = scratch.minOf { it.y }
+        val scratchMaxY = scratch.maxOf { it.y }
+        val radius = ScreenMetrics.dp(ScratchOutDetection.COVERAGE_RADIUS_DP)
+
+        val t0 = System.nanoTime()
+        val erased = strokes.filter { stroke ->
+            val sMinX = stroke.minX; val sMaxX = stroke.maxX
+            val sMinY = stroke.minY; val sMaxY = stroke.maxY
+            if (sMaxX < scratchMinX - radius || sMinX > scratchMaxX + radius ||
+                sMaxY < scratchMinY - radius || sMinY > scratchMaxY + radius) return@filter false
+            ScratchOutDetection.strokesIntersect(scratch, stroke.points)
+        }
+        val elapsedMs = (System.nanoTime() - t0) / 1_000_000.0
+
+        assertTrue(
+            "Erase identification took ${elapsedMs}ms, budget is 20ms (200 strokes, bbox pre-filter + intersection)",
             elapsedMs < 20.0
         )
     }
