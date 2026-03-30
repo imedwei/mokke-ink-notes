@@ -278,6 +278,8 @@ class WritingActivity : AppCompatActivity() {
                 // Restore cue data that was cleared for tutorial
                 restoreCueDataAfterTutorial()
                 updateUndoRedoButtons()
+                // Prompt to set up sync folder if not configured yet
+                promptSyncFolderIfNeeded()
             }
         )
         tutorialManager.setOverlay(tutorialOverlay)
@@ -318,15 +320,6 @@ class WritingActivity : AppCompatActivity() {
                     this@WritingActivity, android.net.Uri.parse(syncUri)
                 )
                 DocumentStorage.ensureSearchIndex(this@WritingActivity)
-            }
-        } else if (savedInstanceState == null) {
-            // First launch with no sync folder — prompt user to pick one
-            lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                DocumentStorage.ensureSearchIndex(this@WritingActivity)
-            }
-            inkCanvas.post {
-                inkCanvas.pauseRawDrawing()
-                pickSyncFolder.launch(null)
             }
         } else {
             lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
@@ -1651,6 +1644,21 @@ popupView.findViewById<android.view.View>(R.id.menuTutorial).setOnClickListener 
         // Trigger recognition
         coordinator?.recognizeAllLines()
         inkCanvas.reinitializeRawDrawing()
+    }
+
+    private fun promptSyncFolderIfNeeded() {
+        val hasSyncFolder = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            .getString(PREF_SYNC_FOLDER, null) != null
+        if (hasSyncFolder) return
+
+        AlertDialog.Builder(this)
+            .setTitle("Sync your notes?")
+            .setMessage("Choose a folder to back up your notes. You can also pick a cloud folder (Google Drive, OneDrive) for automatic sync.")
+            .setPositiveButton("Choose folder") { _, _ ->
+                pickSyncFolder.launch(null)
+            }
+            .setNegativeButton("Maybe later", null)
+            .show()
     }
 
     private fun generateAndShareBugReport() {
