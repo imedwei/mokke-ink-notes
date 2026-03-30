@@ -31,6 +31,7 @@ import com.writer.recognition.TextRecognizer
 import com.writer.recognition.TextRecognizerFactory
 import com.writer.model.DocumentData
 import com.writer.storage.DocumentStorage
+import com.writer.storage.DocumentStorageSink
 import com.writer.storage.SearchIndexManager
 import com.writer.view.CanvasTheme
 import com.writer.view.HandwritingCanvasView
@@ -105,10 +106,8 @@ class WritingActivity : AppCompatActivity() {
     // Current document name
     private var currentDocumentName: String = ""
 
-    // Auto-save: debounced 5s after last pen lift
-    private val autoSaveHandler = android.os.Handler(android.os.Looper.getMainLooper())
-    private val autoSaveRunnable = Runnable { saveDocument() }
-    private val AUTO_SAVE_DELAY_MS = 5000L
+    // Auto-save: initialized in onCreate after lifecycleScope is available
+    private lateinit var autoSaver: AutoSaver
 
     // Debug: remote bug report generation via adb broadcast
     private val bugReportReceiver = object : android.content.BroadcastReceiver() {
@@ -131,7 +130,7 @@ class WritingActivity : AppCompatActivity() {
                 coordinator?.userRenamed = true
                 getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
                     .putString(PREF_CURRENT_DOC, name).apply()
-                saveDocument()
+                snapshotAndSaveBlocking()
                 DocumentStorage.delete(this, oldName)
                 Toast.makeText(this, "Renamed to \"$name\"", Toast.LENGTH_SHORT).show()
             }
@@ -175,6 +174,8 @@ class WritingActivity : AppCompatActivity() {
         } else {
             registerReceiver(bugReportReceiver, filter)
         }
+
+        autoSaver = AutoSaver(lifecycleScope, DocumentStorageSink(applicationContext))
 
         setContentView(R.layout.activity_writing)
 
@@ -602,7 +603,7 @@ class WritingActivity : AppCompatActivity() {
     private var documentLoadJob: Job? = null
 
     private fun switchToDocument(name: String, scrollToLine: Int? = null) {
-        saveDocument()
+        snapshotAndSaveBlocking()
 
         // Clear immediately so the old document disappears
         coordinator?.stop()
@@ -661,7 +662,7 @@ class WritingActivity : AppCompatActivity() {
     }
 
     private fun newDocument() {
-        saveDocument()
+        snapshotAndSaveBlocking()
 
         coordinator?.stop()
         coordinator?.reset()
@@ -948,7 +949,7 @@ popupView.findViewById<android.view.View>(R.id.menuTutorial).setOnClickListener 
         }
         popupView.findViewById<android.view.View>(R.id.menuClose).setOnClickListener {
             popup.dismiss()
-            saveDocument()
+            snapshotAndSaveBlocking()
             finish()
         }
         popupView.findViewById<android.view.View>(R.id.menuDebugReset).setOnClickListener {
@@ -1518,42 +1519,46 @@ popupView.findViewById<android.view.View>(R.id.menuTutorial).setOnClickListener 
     override fun onStop() {
         super.onStop()
         orientationManager.stop()
-        saveDocument()
+        snapshotAndSaveBlocking()
     }
 
     private fun scheduleAutoSave() {
-        autoSaveHandler.removeCallbacks(autoSaveRunnable)
         // Trigger recognition for uncached lines so the save captures all text
         coordinator?.recognizeAllLines()
         cueCoordinator?.recognizeAllLines()
-        autoSaveHandler.postDelayed(autoSaveRunnable, AUTO_SAVE_DELAY_MS)
+        autoSaver.schedule { createSaveSnapshot() }
     }
 
-    private fun saveDocument() {
-        autoSaveHandler.removeCallbacks(autoSaveRunnable)
-        if (tutorialManager.isActive) return // Don't save tutorial state as a document
-        val mainState = coordinator?.getState() ?: return
-        // Merge cue column state if active
+    private fun snapshotAndSaveBlocking() {
+        val snapshot = createSaveSnapshot() ?: return
+        autoSaver.saveBlocking(snapshot)
+    }
+
+    private fun snapshotAndSaveAsync() {
+        val snapshot = createSaveSnapshot() ?: return
+        autoSaver.saveAsync(snapshot)
+    }
+
+    private fun createSaveSnapshot(): AutoSaver.Snapshot? {
+        if (tutorialManager.isActive) return null
+        val mainState = coordinator?.getState() ?: return null
         val cueColumnData = cueCoordinator?.getColumnState() ?: ColumnData(
             strokes = documentModel.cue.activeStrokes.toList(),
             diagramAreas = documentModel.cue.diagramAreas.toList()
         )
         val state = mainState.copy(cue = cueColumnData)
-        val saved = DocumentStorage.save(this, currentDocumentName, state)
-        if (!saved) {
-            android.widget.Toast.makeText(this, "Failed to save document", android.widget.Toast.LENGTH_LONG).show()
-        }
-
-        // Export to sync folder if configured
-        val syncUri = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+        val syncUriStr = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
             .getString(PREF_SYNC_FOLDER, null)
-        if (syncUri != null) {
+        val markdown = if (syncUriStr != null) {
             val cueBlocks = cueCoordinator?.getMarkdownBlocks() ?: emptyList()
-            val markdown = coordinator?.getMarkdownText(cueBlocks) ?: ""
-            DocumentStorage.exportToSyncFolder(
-                this, currentDocumentName, state, markdown, Uri.parse(syncUri)
-            )
-        }
+            coordinator?.getMarkdownText(cueBlocks) ?: ""
+        } else null
+        return AutoSaver.Snapshot(
+            name = currentDocumentName,
+            state = state,
+            markdown = markdown,
+            syncUri = syncUriStr?.let { Uri.parse(it) },
+        )
     }
 
     // --- Bug report ---

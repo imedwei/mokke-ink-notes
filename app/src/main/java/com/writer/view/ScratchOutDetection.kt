@@ -427,6 +427,13 @@ object ScratchOutDetection {
      */
     fun strokesIntersect(strokeA: List<StrokePoint>, strokeB: List<StrokePoint>): Boolean {
         if (strokeA.size < 2 || strokeB.size < 2) return false
+        // Bounding-box early-exit: if the two strokes don't overlap, no segments can intersect.
+        val aMinX = strokeA.minOf { it.x }; val aMaxX = strokeA.maxOf { it.x }
+        val aMinY = strokeA.minOf { it.y }; val aMaxY = strokeA.maxOf { it.y }
+        val bMinX = strokeB.minOf { it.x }; val bMaxX = strokeB.maxOf { it.x }
+        val bMinY = strokeB.minOf { it.y }; val bMaxY = strokeB.maxOf { it.y }
+        if (aMaxX < bMinX || bMaxX < aMinX || aMaxY < bMinY || bMaxY < aMinY) return false
+
         for (i in 0 until strokeA.size - 1) {
             for (j in 0 until strokeB.size - 1) {
                 if (segmentsIntersect(
