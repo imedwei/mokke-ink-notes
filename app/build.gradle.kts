@@ -2,11 +2,14 @@ plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("com.google.devtools.ksp")
+    id("org.jetbrains.kotlin.kapt")
 }
+
+val appName = "Mokke - Ink Notes"
 
 android {
     namespace = "com.writer"
-    compileSdk = 34
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "com.writer"
@@ -21,7 +24,7 @@ android {
     buildTypes {
         debug {
             applicationIdSuffix = ".dev"
-            resValue("string", "app_name", "Mokke Dev")
+            resValue("string", "app_name", "$appName Dev")
             ndk {
                 abiFilters += "arm64-v8a"
             }
@@ -174,6 +177,13 @@ dependencies {
     implementation("androidx.room:room-runtime:2.6.1")
     implementation("androidx.room:room-ktx:2.6.1")
     ksp("androidx.room:room-compiler:2.6.1")
+
+    // AppSearch (full-text search index)
+    implementation("androidx.appsearch:appsearch:1.1.0-alpha05")
+    implementation("androidx.appsearch:appsearch-local-storage:1.1.0-alpha05")
+    // kapt required — no KSP support yet: https://issuetracker.google.com/issues/234116803
+    kapt("androidx.appsearch:appsearch-compiler:1.1.0-alpha05")
+    implementation("androidx.concurrent:concurrent-futures-ktx:1.2.0")
 
     // Kotlin Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")

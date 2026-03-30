@@ -31,6 +31,7 @@ import com.writer.recognition.TextRecognizer
 import com.writer.recognition.TextRecognizerFactory
 import com.writer.model.DocumentData
 import com.writer.storage.DocumentStorage
+import com.writer.storage.SearchIndexManager
 import com.writer.view.CanvasTheme
 import com.writer.view.HandwritingCanvasView
 import com.writer.view.RecognizedTextView
@@ -154,8 +155,8 @@ class WritingActivity : AppCompatActivity() {
             // Restore documents from the newly configured sync folder
             lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
                 val count = DocumentStorage.restoreFromSyncFolder(this@WritingActivity, uri)
-                DocumentStorage.ensureSearchIndex(this@WritingActivity)
                 if (count > 0) {
+                    SearchIndexManager.rebuildIndex(this@WritingActivity)
                     runOnUiThread {
                         Toast.makeText(this@WritingActivity, "Restored $count documents", Toast.LENGTH_SHORT).show()
                     }
@@ -170,7 +171,7 @@ class WritingActivity : AppCompatActivity() {
 
         val filter = android.content.IntentFilter("${packageName}.GENERATE_BUG_REPORT")
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(bugReportReceiver, filter, RECEIVER_EXPORTED)
+            registerReceiver(bugReportReceiver, filter, RECEIVER_NOT_EXPORTED)
         } else {
             registerReceiver(bugReportReceiver, filter)
         }
@@ -312,18 +313,26 @@ class WritingActivity : AppCompatActivity() {
         pendingRestore = DocumentStorage.load(this, currentDocumentName)
         restoreDocumentVisuals()
 
-        // Restore any new documents from sync folder, then rebuild search index
+        // One-time migration: rebuild AppSearch index from existing documents
+        if (!prefs.getBoolean("appsearch_migrated", false)) {
+            lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                SearchIndexManager.rebuildIndex(this@WritingActivity)
+                prefs.edit().putBoolean("appsearch_migrated", true).apply()
+                // Clean up legacy search-index.json
+                java.io.File(filesDir, "documents/search-index.json").delete()
+            }
+        }
+
+        // Restore any new documents from sync folder
         val syncUri = prefs.getString(PREF_SYNC_FOLDER, null)
         if (syncUri != null) {
             lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                DocumentStorage.restoreFromSyncFolder(
+                val count = DocumentStorage.restoreFromSyncFolder(
                     this@WritingActivity, android.net.Uri.parse(syncUri)
                 )
-                DocumentStorage.ensureSearchIndex(this@WritingActivity)
-            }
-        } else {
-            lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                DocumentStorage.ensureSearchIndex(this@WritingActivity)
+                if (count > 0) {
+                    SearchIndexManager.rebuildIndex(this@WritingActivity)
+                }
             }
         }
 
@@ -693,9 +702,13 @@ class WritingActivity : AppCompatActivity() {
             setBackgroundResource(R.drawable.bg_dialog_border)
         }
 
+        var searchJob: kotlinx.coroutines.Job? = null
         val dialog = AlertDialog.Builder(this)
             .setView(container)
-            .setOnDismissListener { inkCanvas.resumeRawDrawing() }
+            .setOnDismissListener {
+                searchJob?.cancel()
+                inkCanvas.resumeRawDrawing()
+            }
             .create()
 
         // Title
@@ -783,63 +796,64 @@ class WritingActivity : AppCompatActivity() {
             docItems.add(DocItem(doc.name, itemLayout, matchContainer, divider))
         }
 
-        // Load search index in background so dialog opens instantly
-        var index: Map<String, List<DocumentStorage.SearchMatch>> = emptyMap()
-        lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-            val loaded = DocumentStorage.loadSearchIndex(this@WritingActivity)
-            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                index = loaded
-                // Re-trigger filter if user already typed something
-                val currentQuery = searchField.text?.toString() ?: ""
-                if (currentQuery.isNotEmpty()) {
-                    searchField.setText(searchField.text) // triggers afterTextChanged
-                    searchField.setSelection(currentQuery.length)
-                }
-            }
-        }
-
-        // Filter documents as user types
+        // Filter documents as user types, querying AppSearch with debounce
         searchField.addTextChangedListener(object : android.text.TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
             override fun afterTextChanged(s: android.text.Editable?) {
-                val query = s?.toString()?.lowercase() ?: ""
+                val query = s?.toString()?.trim() ?: ""
 
-                for (doc in docItems) {
-                    val nameMatch = query.isEmpty() || doc.name.lowercase().contains(query)
-                    val lines = index[doc.name] ?: emptyList()
-                    val matchingLines = if (query.isNotEmpty()) {
-                        lines.filter { it.text.contains(query) }
-                    } else emptyList()
-                    val visible = nameMatch || matchingLines.isNotEmpty()
-                    doc.nameView.visibility = if (visible) View.VISIBLE else View.GONE
-                    doc.dividerView.visibility = if (visible) View.VISIBLE else View.GONE
+                if (query.isEmpty()) {
+                    // Show all documents when no query
+                    for (doc in docItems) {
+                        doc.nameView.visibility = View.VISIBLE
+                        doc.dividerView.visibility = View.VISIBLE
+                        doc.matchContainer.removeAllViews()
+                    }
+                    return
+                }
 
-                    // Show clickable match snippets
-                    doc.matchContainer.removeAllViews()
-                    if (query.isNotEmpty() && matchingLines.isNotEmpty()) {
-                        for (match in matchingLines) {
-                            val matchIdx = match.text.indexOf(query)
-                            val snippetStart = (matchIdx - 20).coerceAtLeast(0)
-                            val snippetEnd = (matchIdx + query.length + 40).coerceAtMost(match.text.length)
-                            val prefix = if (snippetStart > 0) "..." else ""
-                            val suffix = if (snippetEnd < match.text.length) "..." else ""
-                            val snippet = "$prefix${match.text.substring(snippetStart, snippetEnd)}$suffix"
+                searchJob?.cancel()
+                searchJob = lifecycleScope.launch {
+                    kotlinx.coroutines.delay(150) // debounce
+                    val matches = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        SearchIndexManager.search(this@WritingActivity, query)
+                    }
+                    val lowerQuery = query.lowercase()
+                    for (doc in docItems) {
+                        val nameMatch = doc.name.lowercase().contains(lowerQuery)
+                        val lineMatches = matches[doc.name] ?: emptyList()
+                        val visible = nameMatch || lineMatches.isNotEmpty()
+                        doc.nameView.visibility = if (visible) View.VISIBLE else View.GONE
+                        doc.dividerView.visibility = if (visible) View.VISIBLE else View.GONE
 
-                            val matchView = android.widget.TextView(activity).apply {
-                                text = snippet
-                                textSize = 16f
-                                setTextColor(android.graphics.Color.parseColor("#666666"))
-                                maxLines = 1
-                                ellipsize = android.text.TextUtils.TruncateAt.END
-                                setPadding(16, 8, 0, 8)
-                                setBackgroundResource(android.R.drawable.list_selector_background)
-                                setOnClickListener {
-                                    dialog.dismiss()
-                                    switchToDocument(doc.name, match.lineIndex)
+                        // Show clickable match snippets
+                        doc.matchContainer.removeAllViews()
+                        if (lineMatches.isNotEmpty()) {
+                            for (match in lineMatches) {
+                                val matchIdx = match.text.indexOf(lowerQuery)
+                                if (matchIdx < 0) continue
+                                val snippetStart = (matchIdx - 20).coerceAtLeast(0)
+                                val snippetEnd = (matchIdx + lowerQuery.length + 40).coerceAtMost(match.text.length)
+                                val prefix = if (snippetStart > 0) "..." else ""
+                                val suffix = if (snippetEnd < match.text.length) "..." else ""
+                                val snippet = "$prefix${match.text.substring(snippetStart, snippetEnd)}$suffix"
+
+                                val matchView = android.widget.TextView(activity).apply {
+                                    text = snippet
+                                    textSize = 16f
+                                    setTextColor(android.graphics.Color.parseColor("#666666"))
+                                    maxLines = 1
+                                    ellipsize = android.text.TextUtils.TruncateAt.END
+                                    setPadding(16, 8, 0, 8)
+                                    setBackgroundResource(android.R.drawable.list_selector_background)
+                                    setOnClickListener {
+                                        dialog.dismiss()
+                                        switchToDocument(doc.name, match.lineIndex)
+                                    }
                                 }
+                                doc.matchContainer.addView(matchView)
                             }
-                            doc.matchContainer.addView(matchView)
                         }
                     }
                 }
