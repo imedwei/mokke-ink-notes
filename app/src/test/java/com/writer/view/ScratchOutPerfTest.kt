@@ -155,8 +155,8 @@ class ScratchOutPerfTest {
     }
 
     @Test
-    fun `strokesIntersect 700 pts vs overlapping stroke under 5ms`() {
-        // Scratch and stroke overlap — must do full segment intersection
+    fun `strokesIntersect 700 pts vs overlapping stroke under 3ms`() {
+        // Scratch and stroke overlap — grid spatial index keeps this fast
         val scratch = makeScratchPoints(startX = 50f, centerY = 125f, width = 200f, pointCount = 700)
         val overlapping = makeTextStroke(x = 100f, y = 100f, height = 50f, pointCount = 80)
 
@@ -165,8 +165,24 @@ class ScratchOutPerfTest {
         val elapsedMs = (System.nanoTime() - t0) / 1_000_000.0
 
         assertTrue(
-            "Overlapping strokesIntersect took ${elapsedMs}ms, budget is 5ms (700x80 segments)",
-            elapsedMs < 5.0
+            "Overlapping strokesIntersect took ${elapsedMs}ms, budget is 3ms (700x80 segments, grid)",
+            elapsedMs < 3.0
+        )
+    }
+
+    @Test
+    fun `strokesIntersect 700 pts vs large overlapping stroke under 3ms`() {
+        // Stress test: scratch-out over a long stroke with many points
+        val scratch = makeScratchPoints(startX = 50f, centerY = 125f, width = 300f, pointCount = 700)
+        val large = makeTextStroke(x = 80f, y = 100f, height = 50f, pointCount = 300)
+
+        val t0 = System.nanoTime()
+        ScratchOutDetection.strokesIntersect(scratch, large.points)
+        val elapsedMs = (System.nanoTime() - t0) / 1_000_000.0
+
+        assertTrue(
+            "Large overlapping strokesIntersect took ${elapsedMs}ms, budget is 3ms (700x300 segments, grid)",
+            elapsedMs < 3.0
         )
     }
 

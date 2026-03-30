@@ -434,12 +434,70 @@ object ScratchOutDetection {
         val bMinY = strokeB.minOf { it.y }; val bMaxY = strokeB.maxOf { it.y }
         if (aMaxX < bMinX || bMaxX < aMinX || aMaxY < bMinY || bMaxY < aMinY) return false
 
-        for (i in 0 until strokeA.size - 1) {
-            for (j in 0 until strokeB.size - 1) {
-                if (segmentsIntersect(
-                        strokeA[i].x, strokeA[i].y, strokeA[i + 1].x, strokeA[i + 1].y,
-                        strokeB[j].x, strokeB[j].y, strokeB[j + 1].x, strokeB[j + 1].y
-                    )) return true
+        // For small strokes, brute-force is faster than grid overhead.
+        val segA = strokeA.size - 1
+        val segB = strokeB.size - 1
+        if (segA * segB < 500) {
+            for (i in 0 until segA) {
+                for (j in 0 until segB) {
+                    if (segmentsIntersect(
+                            strokeA[i].x, strokeA[i].y, strokeA[i + 1].x, strokeA[i + 1].y,
+                            strokeB[j].x, strokeB[j].y, strokeB[j + 1].x, strokeB[j + 1].y
+                        )) return true
+                }
+            }
+            return false
+        }
+
+        // Grid-based spatial index: insert the smaller stroke's segments into a grid,
+        // then query with the larger stroke's segments. O(n+m) average.
+        val (indexed, query) = if (segB <= segA) strokeB to strokeA else strokeA to strokeB
+        val overlapMinX = maxOf(aMinX, bMinX); val overlapMaxX = minOf(aMaxX, bMaxX)
+        val overlapMinY = maxOf(aMinY, bMinY); val overlapMaxY = minOf(aMaxY, bMaxY)
+        val cellSize = maxOf(overlapMaxX - overlapMinX, overlapMaxY - overlapMinY) /
+            maxOf(1f, kotlin.math.sqrt(indexed.size.toFloat()))
+
+        // Each grid cell holds segment indices from the indexed stroke.
+        val grid = HashMap<Long, MutableList<Int>>()
+        fun cellKey(cx: Int, cy: Int) = cx.toLong() shl 32 or (cy.toLong() and 0xFFFFFFFFL)
+
+        for (i in 0 until indexed.size - 1) {
+            val x0 = indexed[i].x; val y0 = indexed[i].y
+            val x1 = indexed[i + 1].x; val y1 = indexed[i + 1].y
+            val cxMin = ((minOf(x0, x1) - overlapMinX) / cellSize).toInt()
+            val cxMax = ((maxOf(x0, x1) - overlapMinX) / cellSize).toInt()
+            val cyMin = ((minOf(y0, y1) - overlapMinY) / cellSize).toInt()
+            val cyMax = ((maxOf(y0, y1) - overlapMinY) / cellSize).toInt()
+            for (cx in cxMin..cxMax) {
+                for (cy in cyMin..cyMax) {
+                    grid.getOrPut(cellKey(cx, cy)) { mutableListOf() }.add(i)
+                }
+            }
+        }
+
+        // Query: for each segment of the larger stroke, check only grid-nearby segments.
+        val checked = HashSet<Long>() // avoid duplicate segment-pair checks
+        for (i in 0 until query.size - 1) {
+            val qx0 = query[i].x; val qy0 = query[i].y
+            val qx1 = query[i + 1].x; val qy1 = query[i + 1].y
+            val cxMin = ((minOf(qx0, qx1) - overlapMinX) / cellSize).toInt()
+            val cxMax = ((maxOf(qx0, qx1) - overlapMinX) / cellSize).toInt()
+            val cyMin = ((minOf(qy0, qy1) - overlapMinY) / cellSize).toInt()
+            val cyMax = ((maxOf(qy0, qy1) - overlapMinY) / cellSize).toInt()
+            checked.clear()
+            for (cx in cxMin..cxMax) {
+                for (cy in cyMin..cyMax) {
+                    val cell = grid[cellKey(cx, cy)] ?: continue
+                    for (j in cell) {
+                        val pairKey = i.toLong() shl 32 or (j.toLong() and 0xFFFFFFFFL)
+                        if (!checked.add(pairKey)) continue
+                        if (segmentsIntersect(
+                                qx0, qy0, qx1, qy1,
+                                indexed[j].x, indexed[j].y,
+                                indexed[j + 1].x, indexed[j + 1].y
+                            )) return true
+                    }
+                }
             }
         }
         return false
