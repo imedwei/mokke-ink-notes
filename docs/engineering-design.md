@@ -89,7 +89,7 @@ com.writer
 │       ├── DiagramManager.kt          # Diagram lifecycle orchestration
 │       ├── DiagramStrokeClassifier.kt # Text vs drawing heuristics
 │       ├── DiagramTextGrouping.kt     # Spatial clustering of diagram text
-│       ├── DisplayManager.kt          # Text view updates, auto-scroll
+│       ├── DisplayManager.kt          # Text view updates, scroll animation
 │       ├── GestureHandler.kt          # Strikethrough, underline, scribble-delete
 │       ├── LineRecognitionManager.kt  # Debounced OCR orchestration
 │       ├── ParagraphBuilder.kt        # Line→paragraph grouping with styles
@@ -696,7 +696,7 @@ Custom view displaying recognized text alongside the canvas:
 - Tracks `everHiddenLines` (scrolled off canvas)
 - Lazy-recognizes hidden lines in background
 - Builds text paragraphs and diagram displays for RecognizedTextView
-- Auto-scroll: monitors writing position, animates scroll when pen approaches bottom 25%
+- Tap-to-scroll: tapping a line in the text view scrolls the canvas to that line
 
 ### SplitLayout
 

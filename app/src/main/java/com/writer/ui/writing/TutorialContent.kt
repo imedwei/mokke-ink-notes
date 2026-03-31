@@ -230,16 +230,7 @@ object TutorialContent {
             TextAnnotation("Right/left then up/down for undo/redo", (undoStartX + undoCornerX) / 2f - 30f, undoMidY + 41f, blue, 32f, centered = true)
         )
 
-        // --- Auto-scroll hint below diagram area ---
-        textAnnotations.add(
-            TextAnnotation(
-                "Writing will auto-scroll up as you reach the bottom",
-                writingWidth / 2f, lineTop(10) + LINE_SPACING * 0.8f, blue, 34f,
-                centered = true
-            )
-        )
-
-        // Canvas content extends below diagram area + auto-scroll hint
+        // Canvas content extends below diagram area
         val canvasContentHeight = lineTop(12) + 20f - scrollOffset
 
         // --- Text paragraphs for the text view ---
