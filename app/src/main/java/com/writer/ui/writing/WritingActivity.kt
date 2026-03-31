@@ -1098,11 +1098,7 @@ popupView.findViewById<android.view.View>(R.id.menuTutorial).setOnClickListener 
             ensureCueCoordinator()
             cueCoordinator?.start()
 
-            // Block auto-scroll and linked scroll if pen was recently active on either canvas.
-            // Uses a 2s window to cover gaps between strokes during cursive writing.
             val penRecentOnEither = { inkCanvas.isPenRecentlyActive() || cueInkCanvas.isPenRecentlyActive() }
-            coordinator?.shouldBlockScroll = penRecentOnEither
-            cueCoordinator?.shouldBlockScroll = penRecentOnEither
 
             coordinator?.onLinkedScroll = {
                 if (!penRecentOnEither()) {
