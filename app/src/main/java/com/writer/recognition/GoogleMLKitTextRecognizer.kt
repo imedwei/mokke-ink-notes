@@ -64,6 +64,9 @@ class GoogleMLKitTextRecognizer : TextRecognizer {
             )
         }.filter { it.text.isNotEmpty() }
 
+        for ((i, c) in candidates.take(5).withIndex()) {
+            Log.d(TAG, "  candidate[$i]: \"${c.text}\" score=${c.score}")
+        }
         Log.d(TAG, "Recognized: \"${candidates.firstOrNull()?.text}\" (${candidates.size} candidates)")
         return RecognitionResult(candidates)
     }

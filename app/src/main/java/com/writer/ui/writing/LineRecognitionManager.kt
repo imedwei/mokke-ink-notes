@@ -63,9 +63,7 @@ class LineRecognitionManager(
         scope.launch {
             val text = doRecognizeLine(lineIndex) ?: return@launch
             Log.d(TAG, "Eager recognized line $lineIndex: \"$text\"")
-            if (lineIndex in host.everHiddenLines) {
-                host.onRecognitionComplete(lineIndex)
-            }
+            host.onRecognitionComplete(lineIndex)
         }
     }
 

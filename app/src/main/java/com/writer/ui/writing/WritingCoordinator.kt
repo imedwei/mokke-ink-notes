@@ -72,6 +72,8 @@ class WritingCoordinator(
      *  Parameters: anchorLine, lineDelta (positive = inserted, negative = removed). */
     var onSpaceChanged: ((anchorLine: Int, lineDelta: Int) -> Unit)? = null
     var onHeadingDetected: ((String) -> Unit)? = null
+    /** Called when a new recognized word should be shown in a popup. (word, screenX, screenY) */
+    var onWordPopup: ((word: String, screenX: Float, screenY: Float) -> Unit)? = null
     // Callback to notify activity when undo/redo availability changes
     var onUndoRedoStateChanged: (() -> Unit)? = null
     // Callback for tutorial step completion (fires action IDs like "stroke_completed")
@@ -150,6 +152,7 @@ class WritingCoordinator(
         }
         displayManager = DisplayManager(inkCanvas, scope, lineSegmenter, paragraphBuilder, displayHost, hersheyFont)
         displayManager.onScrollAnimated = { onLinkedScroll?.invoke() }
+        displayManager.onWordPopup = { word, x, y -> onWordPopup?.invoke(word, x, y) }
 
         inkCanvas.columnModel = columnModel
         inkCanvas.onPenDown = { onTutorialAction?.invoke("pen_down") }
@@ -269,13 +272,9 @@ class WritingCoordinator(
             currentLineIndex = lineIdx
         }
 
-        // If editing a line that has rendered text, re-recognize immediately
-        if (displayManager.isEverHidden(lineIdx)) {
-            Log.i(TAG, "Stroke on rendered line $lineIdx, triggering re-recognition")
-            recognitionManager.recognizeRenderedLine(lineIdx)
-        } else {
-            Log.d(TAG, "Stroke on line $lineIdx (not in everHiddenLines=${displayManager.getEverHiddenLinesSnapshot()})")
-        }
+        // Trigger recognition for the current line so the word popup updates.
+        // Uses recognizeRenderedLine which handles re-recognition if already in progress.
+        recognitionManager.recognizeRenderedLine(lineIdx)
 
         if (lineIdx > highestLineIndex) {
             highestLineIndex = lineIdx

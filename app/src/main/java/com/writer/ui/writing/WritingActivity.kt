@@ -77,6 +77,14 @@ class WritingActivity : AppCompatActivity() {
         get() = if (isFoldedToCues || (columnLayoutLogic.isDualColumn && isCueCanvasActive)) cueCoordinator else coordinator
     private var isCueCanvasActive = false
 
+    // Word recognition popup (uses PopupWindow for its own window layer above Onyx SDK)
+    private var wordPopupWindow: PopupWindow? = null
+    private var wordPopupText: TextView? = null
+    // Document-space coordinates for popup positioning (survives scroll)
+    private var popupDocX = 0f
+    private var popupDocY = 0f  // document Y of the line top
+    private var popupVisible = false
+
     // Floating gutter overlay
     private lateinit var gutterOverlay: View
     private lateinit var menuButton: ImageView
@@ -434,10 +442,75 @@ class WritingActivity : AppCompatActivity() {
         coordinator?.onHeadingDetected = { heading -> autoRenameFromHeading(heading) }
         coordinator?.onUndoRedoStateChanged = { updateUndoRedoButtons() }
         coordinator?.onTutorialAction = { actionId -> tutorialManager.onStepAction(actionId) }
+        coordinator?.onWordPopup = { word, screenX, screenY -> showWordPopup(word, screenX, screenY) }
         // Sync cue indicator strip scroll with canvas (portrait mode)
-        coordinator?.onLinkedScroll = { cueIndicatorStrip.scrollOffsetY = inkCanvas.scrollOffsetY }
+        coordinator?.onLinkedScroll = {
+            cueIndicatorStrip.scrollOffsetY = inkCanvas.scrollOffsetY
+            repositionWordPopup()
+        }
         coordinator?.start()
 
+    }
+
+    private fun showWordPopup(word: String, docX: Float, docLineScreenY: Float) {
+        popupDocX = docX
+        popupDocY = docLineScreenY + inkCanvas.scrollOffsetY
+        popupVisible = true
+
+        Log.i(TAG, "showWordPopup: \"$word\" docX=$docX screenY=$docLineScreenY")
+        // Always dismiss and recreate — only showAtLocation triggers e-ink refresh
+        wordPopupWindow?.dismiss()
+
+        val tv = TextView(this).apply {
+            text = word
+            textSize = 18f
+            setTypeface(null, android.graphics.Typeface.BOLD)
+            setTextColor(android.graphics.Color.BLACK)
+            setBackgroundResource(R.drawable.word_popup_bg)
+            setPadding(
+                ScreenMetrics.dp(12f).toInt(), ScreenMetrics.dp(6f).toInt(),
+                ScreenMetrics.dp(12f).toInt(), ScreenMetrics.dp(6f).toInt()
+            )
+        }
+        tv.measure(
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
+        )
+        wordPopupText = tv
+
+        val pw = PopupWindow(tv, tv.measuredWidth, tv.measuredHeight, true).apply {
+            elevation = 0f
+            isOutsideTouchable = true
+            setBackgroundDrawable(null)
+        }
+        wordPopupWindow = pw
+        val (x, y) = computePopupPosition(tv.measuredWidth, tv.measuredHeight)
+        Log.i(TAG, "PopupWindow.showAtLocation: x=$x y=$y w=${tv.measuredWidth} h=${tv.measuredHeight}")
+        pw.showAtLocation(inkCanvas, Gravity.NO_GRAVITY, x, y)
+    }
+
+    private fun hideWordPopup() {
+        popupVisible = false
+        wordPopupWindow?.dismiss()
+        wordPopupWindow = null
+    }
+
+    private fun repositionWordPopup() {
+        val pw = wordPopupWindow ?: return
+        val tv = wordPopupText ?: return
+        if (!popupVisible || !pw.isShowing) return
+        val (x, y) = computePopupPosition(tv.measuredWidth, tv.measuredHeight)
+        pw.update(x, y, -1, -1)
+    }
+
+    private fun computePopupPosition(popupWidth: Int, popupHeight: Int): Pair<Int, Int> {
+        val canvasLoc = IntArray(2)
+        inkCanvas.getLocationOnScreen(canvasLoc)
+        val screenY = popupDocY - inkCanvas.scrollOffsetY
+        val x = (canvasLoc[0] + popupDocX - popupWidth / 2f)
+            .coerceIn(8f, (window.decorView.width - popupWidth - 8).toFloat()).toInt()
+        val y = (canvasLoc[1] + screenY - popupHeight - 8f).coerceAtLeast(0f).toInt()
+        return x to y
     }
 
     private fun autoRenameFromHeading(heading: String) {
@@ -943,6 +1016,7 @@ popupView.findViewById<android.view.View>(R.id.menuTutorial).setOnClickListener 
                     cueInkCanvas.drawToSurface()
                     cueCoordinator?.refreshDisplay()
                 }
+                repositionWordPopup()
             }
             cueCoordinator?.onLinkedScroll = {
                 if (!penRecentOnEither()) {
@@ -1008,7 +1082,10 @@ popupView.findViewById<android.view.View>(R.id.menuTutorial).setOnClickListener 
         cueCoordinator?.onSpaceChanged = null
         coordinator?.onSpaceChanged = null
         // Restore portrait strip scroll sync
-        coordinator?.onLinkedScroll = { cueIndicatorStrip.scrollOffsetY = inkCanvas.scrollOffsetY }
+        coordinator?.onLinkedScroll = {
+            cueIndicatorStrip.scrollOffsetY = inkCanvas.scrollOffsetY
+            repositionWordPopup()
+        }
 
         closeDualCanvasOnyx()
         columnDivider.visibility = View.GONE

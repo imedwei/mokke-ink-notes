@@ -73,20 +73,6 @@ class HandwritingCanvasView @JvmOverloads constructor(
     private val linePaint = CanvasTheme.newLinePaint()
     private val diagramBorderPaint = CanvasTheme.newDiagramBorderPaint()
 
-    private val overlayTextPaint = Paint().apply {
-        color = Color.parseColor("#888888")
-        textSize = ScreenMetrics.sp(12f)
-        isAntiAlias = false
-        typeface = Typeface.MONOSPACE
-    }
-
-    private val overlayAltPaint = Paint().apply {
-        color = Color.parseColor("#AAAAAA")
-        textSize = ScreenMetrics.sp(10f)
-        isAntiAlias = false
-        typeface = Typeface.MONOSPACE
-    }
-
     private val overlayBorderPaint = Paint().apply {
         color = Color.parseColor("#CCCCCC")
         style = Paint.Style.STROKE
@@ -111,6 +97,10 @@ class HandwritingCanvasView @JvmOverloads constructor(
 
     /** Inline text overlay states, keyed by line index. Set by DisplayManager. */
     var inlineTextOverlays: Map<Int, InlineTextState> = emptyMap()
+
+    /** The line the user is currently writing on. Overlay label only shows for this line. */
+    var currentWritingLineIndex: Int = -1
+
 
     /** Lines currently consolidated (derived from inlineTextOverlays for O(1) lookup). */
     private var consolidatedLineIndices: Set<Int> = emptySet()
@@ -1185,34 +1175,11 @@ class HandwritingCanvasView @JvmOverloads constructor(
             }
         }
 
-        // Draw overlay text labels above non-consolidated lines that have recognized text
+        // Word popup is now rendered as a separate Android View (wordPopup in activity_writing.xml)
+        // instead of being drawn on the canvas surface (which is hidden by the Onyx SDK overlay).
+
+        // Consolidated lines: no separate overlay label (alternatives are baked into Hershey text)
         for ((lineIndex, state) in inlineTextOverlays) {
-            if (!state.consolidated || state.unConsolidated) {
-                val labelY = TOP_MARGIN + lineIndex * LINE_SPACING - ScreenMetrics.dp(4f)
-                val labelX = ScreenMetrics.dp(8f)
-                if (labelY >= viewTop - LINE_SPACING && labelY <= viewBottom) {
-                    if (state.wordAlternatives.isNotEmpty()) {
-                        // Show text with per-word alternatives inline
-                        val words = state.recognizedText.split(" ")
-                        val altsByIndex = state.wordAlternatives.associateBy { it.wordIndex }
-                        var x = labelX
-                        for ((i, word) in words.withIndex()) {
-                            val alt = altsByIndex[i]
-                            if (alt != null) {
-                                // Draw the word with alternatives: "word|alt1|alt2"
-                                val altText = (listOf(word) + alt.alternatives).joinToString("|")
-                                canvas.drawText(altText, x, labelY, overlayAltPaint)
-                                x += overlayAltPaint.measureText(altText) + overlayTextPaint.measureText(" ")
-                            } else {
-                                canvas.drawText(word, x, labelY, overlayTextPaint)
-                                x += overlayTextPaint.measureText(word) + overlayTextPaint.measureText(" ")
-                            }
-                        }
-                    } else {
-                        canvas.drawText(state.recognizedText, labelX, labelY, overlayTextPaint)
-                    }
-                }
-            }
             // Draw border around un-consolidated lines (user double-tapped to reveal originals)
             if (state.unConsolidated) {
                 val borderTop = TOP_MARGIN + lineIndex * LINE_SPACING

@@ -3,6 +3,7 @@ package com.writer.ui.writing
 import android.util.Log
 import com.writer.model.ColumnModel
 import com.writer.model.InkStroke
+import com.writer.model.maxX
 import com.writer.model.maxY
 import com.writer.recognition.RecognitionResult
 import com.writer.view.CanvasTheme
@@ -62,8 +63,8 @@ class DisplayManager(
         private const val TAG = "DisplayManager"
         // Delay before refreshing e-ink display after text view updates
         private const val TEXT_REFRESH_DELAY_MS = 500L
-        // Score threshold below which inline alternatives are shown
-        private const val LOW_CONFIDENCE_THRESHOLD = 0.8f
+        // Minimum number of distinct candidates to consider low confidence
+        private const val MIN_DISTINCT_CANDIDATES = 2
     }
 
     /** Lines that have ever scrolled above the viewport (text stays rendered once shown). */
@@ -75,6 +76,8 @@ class DisplayManager(
     fun isEverHidden(lineIndex: Int): Boolean = lineIndex in everHiddenLines
     /** Called during scroll animation so the activity can sync linked columns. */
     var onScrollAnimated: (() -> Unit)? = null
+    /** Called when a new recognized word should be shown in the popup. (word, screenX, screenY) */
+    var onWordPopup: ((word: String, screenX: Float, screenY: Float) -> Unit)? = null
 
     /** Scroll animation state. */
     var scrollAnimating = false
@@ -83,6 +86,37 @@ class DisplayManager(
     var textRefreshJob: Job? = null
 
     private var lastConsolidatedUpTo = -1
+    /** Cached overlays — only rebuilt when lineTextCache changes or currentLineIndex advances. */
+    private var cachedOverlays: Map<Int, InlineTextState> = emptyMap()
+    private var cachedOverlayTextHash = 0
+    private var cachedOverlayLineIndex = -1
+    /** Cache of generated Hershey strokes keyed by (lineIndex, displayText) to avoid regeneration. */
+    private val hersheyStrokeCache = mutableMapOf<Pair<Int, String>, List<InkStroke>>()
+
+    // Precomputed Hershey metrics (lazy-initialized once)
+    private var hScale = 0f
+    private var hBaselineY = 9f
+    private var hMargin = 0f
+    private var hMaxWidthUnits = Float.MAX_VALUE
+
+    private fun ensureHersheyMetrics() {
+        if (hScale > 0f) return
+        val ls = HandwritingCanvasView.LINE_SPACING
+        hScale = ls * 0.8f / 21f
+        hMargin = ScreenMetrics.dp(10f)
+        val w = inkCanvas.width.toFloat()
+        if (w > 0f) hMaxWidthUnits = (w - hMargin * 2) / hScale
+    }
+
+    private fun getHersheyStrokes(lineIdx: Int, text: String): List<InkStroke> {
+        val font = hersheyFont ?: return emptyList()
+        return hersheyStrokeCache.getOrPut(lineIdx to text) {
+            val ls = HandwritingCanvasView.LINE_SPACING
+            val tm = HandwritingCanvasView.TOP_MARGIN
+            val ruledY = tm + (lineIdx + 1) * ls
+            font.textToStrokes(text, hMargin, ruledY - hBaselineY * hScale, hScale, 0.5f)
+        }
+    }
 
     fun onIdle(currentLineIndex: Int) {
         if (currentLineIndex >= 0) {
@@ -137,12 +171,14 @@ class DisplayManager(
         }
     }
 
-    /** Schedule a deferred e-ink refresh so text view updates become visible.
-     *  Cancelled if a new stroke arrives, so we never interrupt active writing. */
+    /** Schedule a deferred e-ink refresh so inline overlay updates become visible.
+     *  Cancelled if a new stroke arrives, so we never interrupt active writing.
+     *  Skips pause/resume if pen is still active to avoid stroke disappearance. */
     fun scheduleTextRefresh() {
         textRefreshJob?.cancel()
         textRefreshJob = scope.launch {
             delay(TEXT_REFRESH_DELAY_MS)
+            if (inkCanvas.isPenRecentlyActive()) return@launch
             inkCanvas.pauseRawDrawing()
             inkCanvas.drawToSurface()
             inkCanvas.resumeRawDrawing()
@@ -260,36 +296,27 @@ class DisplayManager(
     }
 
     fun buildInlineOverlays(currentLineIndex: Int): Map<Int, InlineTextState> {
-        val overlays = mutableMapOf<Int, InlineTextState>()
         val font = hersheyFont
-        val ls = HandwritingCanvasView.LINE_SPACING
-        val tm = HandwritingCanvasView.TOP_MARGIN
-        val margin = ScreenMetrics.dp(10f)
-        val canvasWidth = inkCanvas.width.toFloat()
-        // Hershey script font metrics (from scripts.jhf analysis):
-        //   Capitals/ascenders top: Y = -12,  lowercase bottom (baseline): Y = 9
-        //   Descenders bottom: Y = 21
-        // The "baseline" (bottom of 'a', 'H') is at Y=9 in glyph coordinates.
-        // Scale so capital height (Y -12 to 9 = 21 units) fills ~80% of line spacing.
-        // Baseline positioned on the ruled line; descenders extend below.
-        val capitalHeight = 21f  // -12 to 9
-        val baselineGlyphY = 9f // Y coordinate of the baseline in glyph space
-        val scale = if (font != null) ls * 0.8f / capitalHeight else 1f
-        val availableWidthUnits = if (font != null) (canvasWidth - margin * 2) / scale else Float.MAX_VALUE
+        val overlays = mutableMapOf<Int, InlineTextState>()
 
-        // Collect lines to consolidate and group into paragraphs for reflow
-        val consolidateLines = host.lineTextCache.entries
-            .filter { (lineIdx, text) ->
-                text.isNotBlank() && text != "[?]"
-                    && !host.diagramManager.isDiagramLine(lineIdx)
-                    && lineIdx < currentLineIndex
-                    && font != null
+        // Collect lines to consolidate — simple iteration, no chained operators
+        val consolidateLines = ArrayList<Map.Entry<Int, String>>()
+        if (font != null) {
+            ensureHersheyMetrics()
+            for (entry in host.lineTextCache) {
+                val lineIdx = entry.key
+                val text = entry.value
+                if (text.isBlank() || text == "[?]") continue
+                if (host.diagramManager.isDiagramLine(lineIdx)) continue
+                if (lineIdx >= currentLineIndex) continue
+                consolidateLines.add(entry)
             }
-            .sortedBy { it.key }
+            consolidateLines.sortBy { it.key }
+        }
 
         // Group consecutive lines into paragraphs (break on gaps or diagram lines)
-        val paragraphs = mutableListOf<List<Map.Entry<Int, String>>>()
-        var currentGroup = mutableListOf<Map.Entry<Int, String>>()
+        val paragraphs = ArrayList<ArrayList<Map.Entry<Int, String>>>()
+        var currentGroup = ArrayList<Map.Entry<Int, String>>()
         for (entry in consolidateLines) {
             if (currentGroup.isNotEmpty()) {
                 val prevIdx = currentGroup.last().key
@@ -297,36 +324,25 @@ class DisplayManager(
                 val hasDiagramBetween = (prevIdx + 1 until entry.key).any { host.diagramManager.isDiagramLine(it) }
                 if (gap > 1 || hasDiagramBetween) {
                     paragraphs.add(currentGroup)
-                    currentGroup = mutableListOf()
+                    currentGroup = ArrayList()
                 }
             }
             currentGroup.add(entry)
         }
         if (currentGroup.isNotEmpty()) paragraphs.add(currentGroup)
 
-        // For each paragraph, concatenate text and word-wrap to fill line width
+        // For each paragraph, concatenate text and word-wrap
         for (paragraph in paragraphs) {
             if (font == null) break
             val fullText = paragraph.joinToString(" ") { it.value }
-            val wrappedLines = font.wordWrap(fullText, availableWidthUnits)
+            val wrappedLines = font.wordWrap(fullText, hMaxWidthUnits)
             val startLineIdx = paragraph.first().key
-            val originalLineIndices = paragraph.map { it.key }.toSet()
 
-            // Generate Hershey strokes for the wrapped lines
-            for ((i, wrappedText) in wrappedLines.withIndex()) {
+            // Generate Hershey strokes for each wrapped line
+            for (i in wrappedLines.indices) {
                 val lineIdx = startLineIdx + i
-                // Position so glyph baseline (Y=9 in glyph coords) aligns with the ruled line.
-                // startY + baselineGlyphY * scale = ruledLineY  →  startY = ruledLineY - baselineGlyphY * scale
-                val ruledLineY = tm + (lineIdx + 1) * ls
-                val startY = ruledLineY - baselineGlyphY * scale
-                val syntheticStrokes = font.textToStrokes(
-                    wrappedText,
-                    startX = margin,
-                    startY = startY,
-                    scale = scale,
-                    jitter = 0.5f
-                ).map { it.copy(strokeType = com.writer.model.StrokeType.SYNTHETIC) }
-
+                val wrappedText = wrappedLines[i]
+                val syntheticStrokes = getHersheyStrokes(lineIdx, wrappedText)
                 overlays[lineIdx] = InlineTextState(
                     lineIndex = lineIdx,
                     recognizedText = wrappedText,
@@ -335,48 +351,63 @@ class DisplayManager(
                 )
             }
 
-            // Mark remaining original lines as consolidated (hide strokes) even if
-            // the reflowed text doesn't use them — prevents overlap
-            for (lineIdx in originalLineIndices) {
+            // Mark remaining original lines as consolidated (hide strokes)
+            for (entry in paragraph) {
+                val lineIdx = entry.key
                 if (lineIdx !in overlays) {
                     overlays[lineIdx] = InlineTextState(
                         lineIndex = lineIdx,
                         recognizedText = "",
-                        consolidated = true,
-                        syntheticStrokes = emptyList()
+                        consolidated = true
                     )
                 }
             }
         }
 
-        // Add non-consolidated overlays (lines with recognized text but not yet consolidated)
+        // Non-consolidated overlays for current writing line and other non-consolidated lines
         for ((lineIdx, text) in host.lineTextCache) {
             if (lineIdx in overlays) continue
             if (text.isBlank() || text == "[?]") continue
             if (host.diagramManager.isDiagramLine(lineIdx)) continue
 
-            val result = host.lineRecognitionResults[lineIdx]
-            val candidates = result?.candidates ?: emptyList()
-            val isLowConfidence = candidates.size > 1 && (candidates[0].score?.let { it < LOW_CONFIDENCE_THRESHOLD } ?: false)
-            val wordAlts = if (isLowConfidence) findWordAlternatives(candidates) else emptyList()
-
             overlays[lineIdx] = InlineTextState(
                 lineIndex = lineIdx,
                 recognizedText = text,
-                consolidated = false,
-                candidates = candidates,
-                lowConfidence = isLowConfidence,
-                wordAlternatives = wordAlts
+                consolidated = false
             )
         }
 
         return overlays
     }
 
+    /** Track the last recognized text per line to detect any changes. */
+    private var lastPopupText = ""
+    private var lastPopupLine = -1
+
     fun updateInlineOverlays(currentLineIndex: Int) {
         val overlays = buildInlineOverlays(currentLineIndex)
+        inkCanvas.currentWritingLineIndex = currentLineIndex
         inkCanvas.updateInlineOverlays(overlays)
-        scheduleTextRefresh()
+
+        // Update the popup card: show last recognized word on the current line
+        val currentText = host.lineTextCache[currentLineIndex]
+        if (currentText != null && currentText.isNotBlank() && currentText != "[?]") {
+            val lastWord = currentText.trim().split(" ").lastOrNull()
+
+            // Fire popup whenever text or line changes
+            if (lastWord != null && (currentText != lastPopupText || currentLineIndex != lastPopupLine)) {
+                lastPopupText = currentText
+                lastPopupLine = currentLineIndex
+                val lineStrokes = host.columnModel.activeStrokes.filter { stroke ->
+                    val y = (stroke.points.sumOf { it.y.toDouble() }.toFloat() / stroke.points.size)
+                    lineSegmenter.getLineIndex(y) == currentLineIndex
+                }
+                val rightX = lineStrokes.maxOfOrNull { it.maxX } ?: (inkCanvas.width / 2f)
+                val lineTop = HandwritingCanvasView.TOP_MARGIN + currentLineIndex * HandwritingCanvasView.LINE_SPACING
+                val screenY = lineTop - inkCanvas.scrollOffsetY
+                onWordPopup?.invoke(lastWord, rightX, screenY)
+            }
+        }
     }
 
     /** Called when the text view is scrolled via overscroll. */
@@ -397,5 +428,13 @@ class DisplayManager(
         scrollAnimating = false
         textRefreshJob?.cancel()
         everHiddenLines.clear()
+        lastPopupText = ""
+        lastPopupLine = -1
+        cachedOverlays = emptyMap()
+        cachedOverlayTextHash = 0
+        cachedOverlayLineIndex = -1
+        hersheyStrokeCache.clear()
+        hScale = 0f
+        hMaxWidthUnits = Float.MAX_VALUE
     }
 }
