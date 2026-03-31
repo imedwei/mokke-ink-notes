@@ -478,15 +478,23 @@ class WritingActivity : AppCompatActivity() {
         )
         wordPopupText = tv
 
-        val pw = PopupWindow(tv, tv.measuredWidth, tv.measuredHeight, true).apply {
+        val pw = PopupWindow(tv, tv.measuredWidth, tv.measuredHeight, false).apply {
             elevation = 0f
-            isOutsideTouchable = true
-            setBackgroundDrawable(null)
+            isTouchable = false
         }
         wordPopupWindow = pw
+        wordPopupText = tv
         val (x, y) = computePopupPosition(tv.measuredWidth, tv.measuredHeight)
-        Log.i(TAG, "PopupWindow.showAtLocation: x=$x y=$y w=${tv.measuredWidth} h=${tv.measuredHeight}")
+
+        // E-ink rendering rule: Onyx SDK suppresses all Android View rendering
+        // while raw drawing is active. Must pause SDK briefly to let the
+        // PopupWindow render, then resume immediately.
+        // drawToSurface() preserves strokes on the SurfaceView before SDK clears its overlay.
+        inkCanvas.pauseRawDrawing()
+        inkCanvas.drawToSurface()
         pw.showAtLocation(inkCanvas, Gravity.NO_GRAVITY, x, y)
+        // Post resume to next frame so the PopupWindow has time to render
+        inkCanvas.post { inkCanvas.resumeRawDrawing() }
     }
 
     private fun hideWordPopup() {
