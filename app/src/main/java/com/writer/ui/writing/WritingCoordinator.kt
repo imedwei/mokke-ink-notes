@@ -68,10 +68,8 @@ class WritingCoordinator(
     // Whether the user has manually renamed this document
     var userRenamed = false
     // Callback to notify activity when heading-based rename should happen
-    /** Called after any manual or auto scroll — used by the activity for linked scroll sync. */
+    /** Called after any scroll animation — used by the activity for linked scroll sync. */
     var onLinkedScroll: (() -> Unit)? = null
-    /** If set and returns true, auto-scroll is suppressed (e.g. pen active on another canvas). */
-    var shouldBlockScroll: (() -> Boolean)? = null
     /** Called after space insert/remove — used by the activity to sync the other column.
      *  Parameters: anchorLine, lineDelta (positive = inserted, negative = removed). */
     var onSpaceChanged: ((anchorLine: Int, lineDelta: Int) -> Unit)? = null
@@ -142,8 +140,7 @@ class WritingCoordinator(
             override fun isRecognizing(lineIndex: Int): Boolean = recognitionManager.isRecognizing(lineIndex)
         }
         displayManager = DisplayManager(inkCanvas, textView, scope, lineSegmenter, paragraphBuilder, displayHost)
-        displayManager.onAutoScroll = { onLinkedScroll?.invoke() }
-        displayManager.shouldBlockScroll = shouldBlockScroll
+        displayManager.onScrollAnimated = { onLinkedScroll?.invoke() }
 
         inkCanvas.columnModel = columnModel
         inkCanvas.onPenDown = { onTutorialAction?.invoke("pen_down") }

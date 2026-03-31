@@ -425,7 +425,7 @@ functors to each other.
 
 3. **Landscape → portrait transition**: Always returns to Notes view. The cue column is a composition-phase tool; portrait default should be capture-ready.
 
-4. **Auto-scroll**: Applies to both columns in lockstep. (Future consideration: may remove auto-scroll entirely.)
+4. **Scroll**: Manual scroll only — no auto-scroll. Users scroll via finger drag or tap-to-scroll in the text view.
 
 5. **Cue indicator touch target**: 40 dp touch-receptive area (visual indicator remains 16 dp).
 

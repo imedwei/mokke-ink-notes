@@ -57,7 +57,6 @@ class DisplayManager(
     companion object {
         private const val TAG = "DisplayManager"
         // Scroll when writing passes this fraction of canvas height from top
-        private const val SCROLL_THRESHOLD = 0.25f
         // Delay before refreshing e-ink display after text view updates
         private const val TEXT_REFRESH_DELAY_MS = 500L
     }
@@ -69,14 +68,10 @@ class DisplayManager(
     fun addEverHiddenLines(lines: Set<Int>) { everHiddenLines.addAll(lines) }
     fun getEverHiddenLinesSnapshot(): Set<Int> = everHiddenLines.toSet()
     fun isEverHidden(lineIndex: Int): Boolean = lineIndex in everHiddenLines
-    /** Called during auto-scroll animation so the activity can sync linked columns. */
-    var onAutoScroll: (() -> Unit)? = null
+    /** Called during scroll animation so the activity can sync linked columns. */
+    var onScrollAnimated: (() -> Unit)? = null
 
-    /** Optional check — if set and returns true, auto-scroll is suppressed.
-     *  Used to block scroll when pen is active on ANY canvas in landscape. */
-    var shouldBlockScroll: (() -> Boolean)? = null
-
-    /** Auto-scroll animation state. */
+    /** Scroll animation state. */
     var scrollAnimating = false
         private set
     /** Deferred e-ink refresh for text view updates. */
@@ -85,39 +80,6 @@ class DisplayManager(
     fun onIdle(currentLineIndex: Int) {
         if (currentLineIndex >= 0) {
             host.eagerRecognizeLine(currentLineIndex)
-        }
-        checkAutoScroll(currentLineIndex)
-    }
-
-    fun checkAutoScroll(currentLineIndex: Int) {
-        if (scrollAnimating) return
-        // Don't auto-scroll while the pen is active or was recently active on ANY canvas.
-        // Changing scrollOffsetY mid-word causes broken text across multiple lines.
-        if (inkCanvas.isPenRecentlyActive()) return
-        if (shouldBlockScroll?.invoke() == true) return
-
-        val strokes = host.columnModel.activeStrokes
-        if (strokes.isEmpty()) return
-
-        val canvasHeight = inkCanvas.height.toFloat()
-        if (canvasHeight <= 0) return
-
-        val bottomLine = lineSegmenter.getBottomOccupiedLine(strokes)
-        if (bottomLine < 0) return
-
-        if (currentLineIndex != bottomLine) return
-
-        val bottomLineDocY = lineSegmenter.getLineY(bottomLine) + HandwritingCanvasView.LINE_SPACING
-        val bottomLineScreenY = bottomLineDocY - inkCanvas.scrollOffsetY
-        val targetY = canvasHeight * SCROLL_THRESHOLD
-
-        if (bottomLineScreenY < 0 || bottomLineScreenY > canvasHeight) return
-        if (bottomLineScreenY < targetY) return
-
-        val rawOffset = bottomLineDocY - targetY
-        val newOffset = inkCanvas.snapToLine(rawOffset)
-        if (newOffset > inkCanvas.scrollOffsetY) {
-            animateScroll(inkCanvas.scrollOffsetY, newOffset)
         }
     }
 
@@ -154,7 +116,7 @@ class DisplayManager(
                 inkCanvas.scrollOffsetY = fromOffset + distance * interpolated
                 inkCanvas.drawToSurface()
                 displayHiddenLines()
-                onAutoScroll?.invoke()
+                onScrollAnimated?.invoke()
 
                 kotlinx.coroutines.delay(33) // ~30fps
             }
@@ -164,7 +126,7 @@ class DisplayManager(
             inkCanvas.resumeRawDrawing()
             scrollAnimating = false
             displayHiddenLines()
-            onAutoScroll?.invoke()
+            onScrollAnimated?.invoke()
         }
     }
 
