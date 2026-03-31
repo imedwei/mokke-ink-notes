@@ -302,16 +302,20 @@ class WritingActivity : AppCompatActivity() {
             ?: DocumentStorage.generateName(this)
         prefs.edit().putString(PREF_CURRENT_DOC, currentDocumentName).apply()
 
-        // Load saved document data and restore strokes immediately (no recognizer needed)
-        pendingRestore = DocumentStorage.load(this, currentDocumentName)
-        restoreDocumentVisuals()
+        // Load document on IO thread, then restore visuals on main thread
+        lifecycleScope.launch {
+            pendingRestore = withContext(Dispatchers.IO) {
+                DocumentStorage.load(this@WritingActivity, currentDocumentName)
+            }
+            restoreDocumentVisuals()
+            restoreCoordinatorState()
+        }
 
         // One-time migration: rebuild AppSearch index from existing documents
         if (!prefs.getBoolean("appsearch_migrated", false)) {
-            lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            lifecycleScope.launch(Dispatchers.IO) {
                 SearchIndexManager.rebuildIndex(this@WritingActivity)
                 prefs.edit().putBoolean("appsearch_migrated", true).apply()
-                // Clean up legacy search-index.json
                 java.io.File(filesDir, "documents/search-index.json").delete()
             }
         }
@@ -319,7 +323,7 @@ class WritingActivity : AppCompatActivity() {
         // Restore any new documents from sync folder
         val syncUri = prefs.getString(PREF_SYNC_FOLDER, null)
         if (syncUri != null) {
-            lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            lifecycleScope.launch(Dispatchers.IO) {
                 val count = DocumentStorage.restoreFromSyncFolder(
                     this@WritingActivity, android.net.Uri.parse(syncUri)
                 )
@@ -355,7 +359,7 @@ class WritingActivity : AppCompatActivity() {
         startCoordinator()
 
         inkCanvas.post {
-            restoreCoordinatorState()
+            // restoreCoordinatorState is called from the async document load coroutine
             if (tutorialManager.shouldAutoShow()) {
                 inkCanvas.pauseRawDrawing()
                 showTutorial()

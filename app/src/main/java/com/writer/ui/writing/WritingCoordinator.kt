@@ -426,8 +426,8 @@ class WritingCoordinator(
             diagramManager.recognizeDiagramArea(area, immediate = true)
         }
         scope.launch {
+            var recognized = 0
             for (lineIndex in strokesByLine.keys.sorted()) {
-                // Re-recognize lines that failed ("[?]") or were never cached
                 val cached = lineTextCache[lineIndex]
                 if (cached != null && cached != "[?]") continue
                 if (recognitionManager.isRecognizing(lineIndex)) continue
@@ -435,9 +435,13 @@ class WritingCoordinator(
                 lineTextCache.remove(lineIndex)
                 val text = recognitionManager.doRecognizeLine(lineIndex)
                 if (text != null) {
+                    recognized++
                     Log.d(TAG, "Post-load recognized line $lineIndex: \"$text\"")
-                    displayManager.displayHiddenLines()
                 }
+            }
+            // Update overlays once after all lines are recognized
+            if (recognized > 0) {
+                displayManager.displayHiddenLines()
             }
         }
     }
