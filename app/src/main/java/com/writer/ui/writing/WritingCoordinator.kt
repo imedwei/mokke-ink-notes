@@ -272,15 +272,13 @@ class WritingCoordinator(
             currentLineIndex = lineIdx
         }
 
-        // Trigger recognition for the current line so the word popup updates.
-        // Uses recognizeRenderedLine which handles re-recognition if already in progress.
-        recognitionManager.recognizeRenderedLine(lineIdx)
+        // Recognition for the current line fires on idle timeout (2s) or line change.
+        // Don't trigger on every stroke — causes cascading work on main thread.
 
         if (lineIdx > highestLineIndex) {
             highestLineIndex = lineIdx
         }
-
-        displayManager.updateInlineOverlays(currentLineIndex)
+        // Overlays update via onRecognitionComplete → displayHiddenLines, not per-stroke.
     }
 
     private fun onStrokeReplaced(oldStrokeId: String, newStroke: InkStroke) {
@@ -497,10 +495,6 @@ class WritingCoordinator(
 
     // --- Text display sync ---
 
-    /** Called when the text view is scrolled via overscroll. */
-    fun onManualTextScroll() {
-        displayManager.onManualTextScroll(inkCanvas.textOverscroll)
-    }
 
     // --- Markdown export ---
 

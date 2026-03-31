@@ -4,11 +4,7 @@ import android.util.Log
 import com.writer.model.ColumnModel
 import com.writer.model.InkStroke
 import com.writer.model.maxX
-import com.writer.model.maxY
-import com.writer.recognition.RecognitionResult
-import com.writer.view.CanvasTheme
 import com.writer.view.HandwritingCanvasView
-import com.writer.view.PreviewLayoutCalculator
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -90,8 +86,15 @@ class DisplayManager(
     private var cachedOverlays: Map<Int, InlineTextState> = emptyMap()
     private var cachedOverlayTextHash = 0
     private var cachedOverlayLineIndex = -1
-    /** Cache of generated Hershey strokes keyed by (lineIndex, displayText) to avoid regeneration. */
-    private val hersheyStrokeCache = mutableMapOf<Pair<Int, String>, List<InkStroke>>()
+    /** Cache of generated Hershey strokes keyed by (lineIndex, displayText).
+     *  Limited to 20 entries to prevent unbounded memory growth. */
+    private val hersheyStrokeCache = object : LinkedHashMap<Pair<Int, String>, List<InkStroke>>(20, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Pair<Int, String>, List<InkStroke>>?) = size > 20
+    }
+    /** Cache of word-wrap results keyed by (fullText, maxWidthUnits). */
+    private val wordWrapCache = object : LinkedHashMap<String, List<String>>(20, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<String>>?) = size > 20
+    }
 
     // Precomputed Hershey metrics (lazy-initialized once)
     private var hScale = 0f
@@ -186,120 +189,45 @@ class DisplayManager(
     }
 
     fun displayHiddenLines() {
-        val strokesByLine = lineSegmenter.groupByLine(host.columnModel.activeStrokes)
+        // Track which lines have scrolled off for eager recognition
+        val scrollOff = inkCanvas.scrollOffsetY
+        val ls = HandwritingCanvasView.LINE_SPACING
+        val tm = HandwritingCanvasView.TOP_MARGIN
+        for ((lineIdx, _) in host.lineTextCache) {
+            val lineBottom = tm + (lineIdx + 1) * ls
+            if (lineBottom <= scrollOff) everHiddenLines.add(lineIdx)
+        }
 
-        val currentlyHidden = PreviewLayoutCalculator.currentlyHiddenLines(
-            strokesByLine.keys, inkCanvas.scrollOffsetY,
-            HandwritingCanvasView.TOP_MARGIN, HandwritingCanvasView.LINE_SPACING
-        )
-
-        val notYetVisible = PreviewLayoutCalculator.notYetVisibleLines(
-            strokesByLine.keys, inkCanvas.scrollOffsetY,
-            HandwritingCanvasView.TOP_MARGIN, HandwritingCanvasView.LINE_SPACING
-        )
-
-        everHiddenLines.addAll(currentlyHidden)
-        everHiddenLines.retainAll(strokesByLine.keys)
-
-        updateTextView(notYetVisible, strokesByLine)
-        updateTextScrollOffset()
-
+        // Trigger recognition for hidden lines not yet cached
         val uncached = everHiddenLines.filter { !host.lineTextCache.containsKey(it) && !host.isRecognizing(it) }
         if (uncached.isNotEmpty()) {
-            for (lineIdx in uncached) {
-                host.markRecognizing(lineIdx)
-            }
+            for (lineIdx in uncached) host.markRecognizing(lineIdx)
             scope.launch {
-                for (lineIdx in uncached) {
-                    host.doRecognizeLine(lineIdx)
-                }
-                val freshStrokesByLine = lineSegmenter.groupByLine(host.columnModel.activeStrokes)
-                val stillNotVisible = PreviewLayoutCalculator.notYetVisibleLines(
-                    freshStrokesByLine.keys, inkCanvas.scrollOffsetY,
-                    HandwritingCanvasView.TOP_MARGIN, HandwritingCanvasView.LINE_SPACING
-                )
-                updateTextView(stillNotVisible, freshStrokesByLine)
+                for (lineIdx in uncached) host.doRecognizeLine(lineIdx)
             }
         }
 
         updateInlineOverlays(host.currentLineIndex)
     }
 
-    private fun updateTextView(currentlyHidden: Set<Int>, strokesByLine: Map<Int, List<InkStroke>>) {
-        val writingWidth = inkCanvas.width.toFloat()
-
-        val classifiedLines = currentlyHidden.sorted()
-            .filter { !host.diagramManager.isDiagramLine(it) }
-            .mapNotNull { lineIdx ->
-                paragraphBuilder.classifyLine(lineIdx, host.lineTextCache[lineIdx], strokesByLine[lineIdx], writingWidth, strokesByLine[lineIdx + 1])
-            }
-
-        val grouped = paragraphBuilder.groupIntoParagraphs(classifiedLines, strokesByLine, writingWidth, host.columnModel.diagramAreas)
-
-        val paragraphs = grouped.map { group ->
-            group.map { line ->
-                TextSegment(
-                    text = line.text,
-                    dimmed = line.lineIndex !in currentlyHidden,
-                    lineIndex = line.lineIndex,
-                    listItem = line.isList,
-                    heading = line.isHeading
-                )
-            }
-        }
-
-        // Build diagram displays -- include as soon as any part scrolls off the canvas
-        val strokeMaxYByArea = host.columnModel.diagramAreas.associate { area ->
-            val areaStrokes = host.columnModel.activeStrokes.filter { stroke ->
-                area.containsLine(lineSegmenter.getStrokeLineIndex(stroke))
-            }
-            area.startLineIndex to (if (areaStrokes.isNotEmpty()) areaStrokes.maxOf { it.maxY } else null)
-        }.filterValues { it != null }.mapValues { it.value!! }
-
-        val visibilities = PreviewLayoutCalculator.diagramVisibilities(
-            areas = host.columnModel.diagramAreas,
-            scrollOffsetY = inkCanvas.scrollOffsetY,
-            topMargin = HandwritingCanvasView.TOP_MARGIN,
-            lineSpacing = HandwritingCanvasView.LINE_SPACING,
-            strokeMaxYByArea = strokeMaxYByArea,
-            strokeWidthPadding = CanvasTheme.DEFAULT_STROKE_WIDTH
-        )
-
-        val areaByStartLine = host.columnModel.diagramAreas.associateBy { it.startLineIndex }
-        val diagrams = visibilities.map { vis ->
-            val area = areaByStartLine[vis.startLineIndex]
-            val areaStrokes = if (area != null) {
-                host.columnModel.activeStrokes.filter { stroke ->
-                    area.containsLine(lineSegmenter.getStrokeLineIndex(stroke))
-                }
-            } else emptyList()
-
-            // Use diagram text cache for recognized spatial groups
-            val textGroups = host.diagramManager.getTextGroups(vis.startLineIndex)
-            val hiddenIds = textGroups.flatMap { it.strokeIds }.toSet()
-            val displayStrokes = areaStrokes.filter { it.strokeId !in hiddenIds }
-            val textLabels = textGroups.map { group ->
-                DiagramTextLabel(text = group.text, x = group.centerX, y = group.centerY)
-            }
-            DiagramDisplay(
-                startLineIndex = vis.startLineIndex,
-                strokes = displayStrokes,
-                canvasWidth = writingWidth,
-                heightPx = vis.fullHeight,
-                offsetY = vis.areaTop,
-                visibleHeightPx = vis.visibleHeight,
-                textLabels = textLabels
-            )
-        }
-
-        // Paragraphs and diagrams computed for future use (markdown export, etc.)
-    }
+    // updateTextView removed — RecognizedTextView no longer exists.
+    // Paragraph/diagram display data can be rebuilt for markdown export if needed.
 
     fun buildInlineOverlays(currentLineIndex: Int): Map<Int, InlineTextState> {
+        val t0 = android.os.SystemClock.elapsedRealtime()
         val font = hersheyFont
         val overlays = mutableMapOf<Int, InlineTextState>()
 
-        // Collect lines to consolidate — simple iteration, no chained operators
+        // Only process lines within the visible viewport + a small buffer
+        val viewTop = inkCanvas.scrollOffsetY
+        val viewBottom = viewTop + inkCanvas.height
+        val ls = HandwritingCanvasView.LINE_SPACING
+        val tm = HandwritingCanvasView.TOP_MARGIN
+        val bufferLines = 3  // extra lines above/below viewport
+        val minVisibleLine = ((viewTop - tm) / ls - bufferLines).toInt().coerceAtLeast(0)
+        val maxVisibleLine = ((viewBottom - tm) / ls + bufferLines).toInt()
+
+        // Collect lines to consolidate — only within visible range
         val consolidateLines = ArrayList<Map.Entry<Int, String>>()
         if (font != null) {
             ensureHersheyMetrics()
@@ -335,14 +263,19 @@ class DisplayManager(
         for (paragraph in paragraphs) {
             if (font == null) break
             val fullText = paragraph.joinToString(" ") { it.value }
-            val wrappedLines = font.wordWrap(fullText, hMaxWidthUnits)
+            val wrappedLines = wordWrapCache.getOrPut(fullText) {
+                font.wordWrap(fullText, hMaxWidthUnits)
+            }
             val startLineIdx = paragraph.first().key
 
-            // Generate Hershey strokes for each wrapped line
+            // Generate Hershey strokes only for visible wrapped lines
             for (i in wrappedLines.indices) {
                 val lineIdx = startLineIdx + i
                 val wrappedText = wrappedLines[i]
-                val syntheticStrokes = getHersheyStrokes(lineIdx, wrappedText)
+                // Only generate strokes for lines near the viewport
+                val syntheticStrokes = if (lineIdx in minVisibleLine..maxVisibleLine) {
+                    getHersheyStrokes(lineIdx, wrappedText)
+                } else emptyList()
                 overlays[lineIdx] = InlineTextState(
                     lineIndex = lineIdx,
                     recognizedText = wrappedText,
@@ -377,6 +310,8 @@ class DisplayManager(
             )
         }
 
+        val elapsed = android.os.SystemClock.elapsedRealtime() - t0
+        if (elapsed > 10) Log.w(TAG, "buildInlineOverlays took ${elapsed}ms (${overlays.size} overlays, ${host.lineTextCache.size} cached lines)")
         return overlays
     }
 
@@ -384,10 +319,20 @@ class DisplayManager(
     private var lastPopupText = ""
     private var lastPopupLine = -1
 
+    /** Cache key for last overlay build to skip redundant rebuilds. */
+    private var lastOverlayHash = 0
+    private var lastOverlayLine = -1
+
     fun updateInlineOverlays(currentLineIndex: Int) {
-        val overlays = buildInlineOverlays(currentLineIndex)
+        // Skip expensive rebuild if text cache content and line haven't changed
+        val hash = host.lineTextCache.hashCode()
+        if (hash != lastOverlayHash || currentLineIndex != lastOverlayLine) {
+            val overlays = buildInlineOverlays(currentLineIndex)
+            inkCanvas.updateInlineOverlays(overlays)
+            lastOverlayHash = hash
+            lastOverlayLine = currentLineIndex
+        }
         inkCanvas.currentWritingLineIndex = currentLineIndex
-        inkCanvas.updateInlineOverlays(overlays)
 
         // Update the popup card: show last recognized word on the current line
         val currentText = host.lineTextCache[currentLineIndex]
@@ -410,15 +355,6 @@ class DisplayManager(
         }
     }
 
-    /** Called when the text view is scrolled via overscroll. */
-    fun onManualTextScroll(textOverscroll: Float) {
-        // No-op: RecognizedTextView removed
-    }
-
-    private fun updateTextScrollOffset() {
-        // No-op: RecognizedTextView removed
-    }
-
     fun stop() {
         scrollAnimating = false
         textRefreshJob?.cancel()
@@ -433,7 +369,12 @@ class DisplayManager(
         cachedOverlays = emptyMap()
         cachedOverlayTextHash = 0
         cachedOverlayLineIndex = -1
+        lastOverlayHash = 0
+        lastOverlayLine = -1
+        lastPopupText = ""
+        lastPopupLine = -1
         hersheyStrokeCache.clear()
+        wordWrapCache.clear()
         hScale = 0f
         hMaxWidthUnits = Float.MAX_VALUE
     }
