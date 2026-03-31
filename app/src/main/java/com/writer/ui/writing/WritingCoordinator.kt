@@ -20,7 +20,6 @@ import com.writer.recognition.StrokeClassifier
 import com.writer.model.DocumentData
 import com.writer.storage.SvgExporter
 import com.writer.view.HandwritingCanvasView
-import com.writer.view.RecognizedTextView
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
@@ -29,7 +28,6 @@ class WritingCoordinator(
     private val columnModel: ColumnModel,
     private val recognizer: TextRecognizer,
     private val inkCanvas: HandwritingCanvasView,
-    private val textView: RecognizedTextView,
     private val scope: CoroutineScope,
     private val onStatusUpdate: (String) -> Unit
 ) : DiagramManagerHost {
@@ -78,6 +76,8 @@ class WritingCoordinator(
     var onUndoRedoStateChanged: (() -> Unit)? = null
     // Callback for tutorial step completion (fires action IDs like "stroke_completed")
     var onTutorialAction: ((String) -> Unit)? = null
+    // Hershey font for inline text consolidation
+    private var hersheyFont: HersheyFont? = null
     // Diagram lifecycle manager (created in start())
     private lateinit var diagramManager: DiagramManager
     // Display manager (created in start())
@@ -129,17 +129,25 @@ class WritingCoordinator(
             recognitionHost, canvasWidthProvider = { inkCanvas.width.toFloat() }
         )
 
+        hersheyFont = try {
+            HersheyFont.loadScript(inkCanvas.context)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to load Hershey font: ${e.message}")
+            null
+        }
+
         val displayHost = object : DisplayManagerHost {
             override val columnModel: ColumnModel get() = this@WritingCoordinator.columnModel
             override val diagramManager: DiagramManager get() = this@WritingCoordinator.diagramManager
             override val lineTextCache: Map<Int, String> get() = this@WritingCoordinator.lineTextCache
             override val highestLineIndex: Int get() = this@WritingCoordinator.highestLineIndex
+            override val currentLineIndex: Int get() = this@WritingCoordinator.currentLineIndex
             override fun eagerRecognizeLine(lineIndex: Int) = recognitionManager.eagerRecognizeLine(lineIndex)
             override fun markRecognizing(lineIndex: Int) { recognitionManager.markRecognizing(lineIndex) }
             override suspend fun doRecognizeLine(lineIndex: Int): String? = recognitionManager.doRecognizeLine(lineIndex)
             override fun isRecognizing(lineIndex: Int): Boolean = recognitionManager.isRecognizing(lineIndex)
         }
-        displayManager = DisplayManager(inkCanvas, textView, scope, lineSegmenter, paragraphBuilder, displayHost)
+        displayManager = DisplayManager(inkCanvas, scope, lineSegmenter, paragraphBuilder, displayHost, hersheyFont)
         displayManager.onScrollAnimated = { onLinkedScroll?.invoke() }
 
         inkCanvas.columnModel = columnModel
@@ -150,16 +158,10 @@ class WritingCoordinator(
         inkCanvas.onStrokeCompleted = { stroke -> onStrokeCompleted(stroke) }
         inkCanvas.onIdleTimeout = { displayManager.onIdle(currentLineIndex) }
         inkCanvas.onManualScroll = {
-            // Clamp text overscroll so text doesn't scroll completely out of view
-            val maxOverscroll = (textView.totalTextHeight - textView.height).coerceAtLeast(0).toFloat()
-            if (inkCanvas.textOverscroll > maxOverscroll) {
-                inkCanvas.textOverscroll = maxOverscroll
-            }
             displayManager.displayHiddenLines()
             onTutorialAction?.invoke("manual_scroll")
             onLinkedScroll?.invoke()
         }
-        textView.onTextTap = { lineIndex -> displayManager.scrollToLine(lineIndex) }
         inkCanvas.onDiagramShapeDetected = { stroke ->
             val result = diagramManager.onShapeDetected(stroke)
             onTutorialAction?.invoke("diagram_created")
@@ -180,7 +182,6 @@ class WritingCoordinator(
         inkCanvas.onStrokeCompleted = null
         inkCanvas.onIdleTimeout = null
         inkCanvas.onManualScroll = null
-        textView.onTextTap = null
         inkCanvas.onDiagramShapeDetected = null
         inkCanvas.onDiagramStrokeOverflow = null
         inkCanvas.onScratchOut = null
@@ -278,6 +279,8 @@ class WritingCoordinator(
         if (lineIdx > highestLineIndex) {
             highestLineIndex = lineIdx
         }
+
+        displayManager.updateInlineOverlays(currentLineIndex)
     }
 
     private fun onStrokeReplaced(oldStrokeId: String, newStroke: InkStroke) {

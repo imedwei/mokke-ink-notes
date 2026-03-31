@@ -106,6 +106,63 @@ class HersheyFont(rawLines: List<String>) {
         return result
     }
 
+    /** Maximum Y extent above baseline (negative = above, returned as positive value). */
+    val ascent: Float by lazy {
+        glyphs.values.flatMap { g -> g.strokes.flatMap { s -> s.map { it.second } } }
+            .filter { it < 0f }.minOrNull()?.let { -it } ?: 9f
+    }
+
+    /** Maximum Y extent below baseline (positive = below). */
+    val descent: Float by lazy {
+        glyphs.values.flatMap { g -> g.strokes.flatMap { s -> s.map { it.second } } }
+            .filter { it > 0f }.maxOrNull() ?: 5f
+    }
+
+    /** Total glyph height in raw units (ascent + descent). */
+    val totalHeight: Float get() = ascent + descent
+
+    /**
+     * Measure the width of [text] in raw glyph units (before scaling).
+     * Multiply by scale to get pixel width.
+     */
+    fun measureWidth(text: String): Float {
+        var width = 0f
+        for (char in text) {
+            val glyph = glyphs[char.code] ?: continue
+            width += (glyph.rightBound - glyph.leftBound)
+        }
+        return width
+    }
+
+    /**
+     * Word-wrap [text] to fit within [maxWidthUnits] glyph units.
+     * Returns a list of lines, each fitting within the width.
+     */
+    fun wordWrap(text: String, maxWidthUnits: Float): List<String> {
+        val words = text.split(" ")
+        val lines = mutableListOf<String>()
+        val current = StringBuilder()
+        var currentWidth = 0f
+        val spaceWidth = measureWidth(" ")
+
+        for (word in words) {
+            val wordWidth = measureWidth(word)
+            if (current.isNotEmpty() && currentWidth + spaceWidth + wordWidth > maxWidthUnits) {
+                lines.add(current.toString())
+                current.clear()
+                currentWidth = 0f
+            }
+            if (current.isNotEmpty()) {
+                current.append(" ")
+                currentWidth += spaceWidth
+            }
+            current.append(word)
+            currentWidth += wordWidth
+        }
+        if (current.isNotEmpty()) lines.add(current.toString())
+        return lines
+    }
+
     companion object {
         /** Load the cursive Hershey font from assets. */
         fun loadScript(context: Context): HersheyFont {

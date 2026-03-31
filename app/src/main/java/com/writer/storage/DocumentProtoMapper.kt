@@ -98,6 +98,7 @@ fun StrokeType.toProto(): StrokeTypeProto = when (this) {
     StrokeType.ROUNDED_RECTANGLE -> StrokeTypeProto.ROUNDED_RECTANGLE
     StrokeType.TRIANGLE -> StrokeTypeProto.TRIANGLE
     StrokeType.DIAMOND -> StrokeTypeProto.DIAMOND
+    StrokeType.SYNTHETIC -> StrokeTypeProto.FREEHAND // Synthetic strokes are ephemeral, never serialized
 }
 
 // ── Proto → Domain ───────────────────────────────────────────────────────

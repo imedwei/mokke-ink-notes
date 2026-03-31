@@ -7,12 +7,12 @@ import com.writer.model.maxY
 import com.writer.view.CanvasTheme
 import com.writer.view.HandwritingCanvasView
 import com.writer.view.PreviewLayoutCalculator
-import com.writer.view.RecognizedTextView
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import com.writer.recognition.LineSegmenter
+import com.writer.view.ScreenMetrics
 
 /** Callback interface for DisplayManager to communicate with its host. */
 interface DisplayManagerHost {
@@ -20,6 +20,7 @@ interface DisplayManagerHost {
     val diagramManager: DiagramManager
     val lineTextCache: Map<Int, String>
     val highestLineIndex: Int
+    val currentLineIndex: Int
     fun eagerRecognizeLine(lineIndex: Int)
     /** Batch-recognize a line, adding/removing from recognizingLines internally. */
     fun markRecognizing(lineIndex: Int)
@@ -48,11 +49,11 @@ data class DiagramDisplay(
 
 class DisplayManager(
     private val inkCanvas: HandwritingCanvasView,
-    private val textView: RecognizedTextView,
     private val scope: CoroutineScope,
     private val lineSegmenter: LineSegmenter,
     private val paragraphBuilder: ParagraphBuilder,
-    private val host: DisplayManagerHost
+    private val host: DisplayManagerHost,
+    private val hersheyFont: HersheyFont? = null
 ) {
     companion object {
         private const val TAG = "DisplayManager"
@@ -76,6 +77,8 @@ class DisplayManager(
         private set
     /** Deferred e-ink refresh for text view updates. */
     var textRefreshJob: Job? = null
+
+    private var lastConsolidatedUpTo = -1
 
     fun onIdle(currentLineIndex: Int) {
         if (currentLineIndex >= 0) {
@@ -178,6 +181,8 @@ class DisplayManager(
                 updateTextView(stillNotVisible, freshStrokesByLine)
             }
         }
+
+        updateInlineOverlays(host.currentLineIndex)
     }
 
     private fun updateTextView(currentlyHidden: Set<Int>, strokesByLine: Map<Int, List<InkStroke>>) {
@@ -247,18 +252,128 @@ class DisplayManager(
             )
         }
 
-        textView.setContent(paragraphs, diagrams)
+        // Paragraphs and diagrams computed for future use (markdown export, etc.)
+    }
+
+    fun buildInlineOverlays(currentLineIndex: Int): Map<Int, InlineTextState> {
+        val overlays = mutableMapOf<Int, InlineTextState>()
+        val font = hersheyFont
+        val ls = HandwritingCanvasView.LINE_SPACING
+        val tm = HandwritingCanvasView.TOP_MARGIN
+        val margin = ScreenMetrics.dp(10f)
+        val canvasWidth = inkCanvas.width.toFloat()
+        // Hershey script font metrics (from scripts.jhf analysis):
+        //   Capitals/ascenders top: Y = -12,  lowercase bottom (baseline): Y = 9
+        //   Descenders bottom: Y = 21
+        // The "baseline" (bottom of 'a', 'H') is at Y=9 in glyph coordinates.
+        // Scale so capital height (Y -12 to 9 = 21 units) fills ~80% of line spacing.
+        // Baseline positioned on the ruled line; descenders extend below.
+        val capitalHeight = 21f  // -12 to 9
+        val baselineGlyphY = 9f // Y coordinate of the baseline in glyph space
+        val scale = if (font != null) ls * 0.8f / capitalHeight else 1f
+        val availableWidthUnits = if (font != null) (canvasWidth - margin * 2) / scale else Float.MAX_VALUE
+
+        // Collect lines to consolidate and group into paragraphs for reflow
+        val consolidateLines = host.lineTextCache.entries
+            .filter { (lineIdx, text) ->
+                text.isNotBlank() && text != "[?]"
+                    && !host.diagramManager.isDiagramLine(lineIdx)
+                    && lineIdx < currentLineIndex
+                    && font != null
+            }
+            .sortedBy { it.key }
+
+        // Group consecutive lines into paragraphs (break on gaps or diagram lines)
+        val paragraphs = mutableListOf<List<Map.Entry<Int, String>>>()
+        var currentGroup = mutableListOf<Map.Entry<Int, String>>()
+        for (entry in consolidateLines) {
+            if (currentGroup.isNotEmpty()) {
+                val prevIdx = currentGroup.last().key
+                val gap = entry.key - prevIdx
+                val hasDiagramBetween = (prevIdx + 1 until entry.key).any { host.diagramManager.isDiagramLine(it) }
+                if (gap > 1 || hasDiagramBetween) {
+                    paragraphs.add(currentGroup)
+                    currentGroup = mutableListOf()
+                }
+            }
+            currentGroup.add(entry)
+        }
+        if (currentGroup.isNotEmpty()) paragraphs.add(currentGroup)
+
+        // For each paragraph, concatenate text and word-wrap to fill line width
+        for (paragraph in paragraphs) {
+            if (font == null) break
+            val fullText = paragraph.joinToString(" ") { it.value }
+            val wrappedLines = font.wordWrap(fullText, availableWidthUnits)
+            val startLineIdx = paragraph.first().key
+            val originalLineIndices = paragraph.map { it.key }.toSet()
+
+            // Generate Hershey strokes for the wrapped lines
+            for ((i, wrappedText) in wrappedLines.withIndex()) {
+                val lineIdx = startLineIdx + i
+                // Position so glyph baseline (Y=9 in glyph coords) aligns with the ruled line.
+                // startY + baselineGlyphY * scale = ruledLineY  →  startY = ruledLineY - baselineGlyphY * scale
+                val ruledLineY = tm + (lineIdx + 1) * ls
+                val startY = ruledLineY - baselineGlyphY * scale
+                val syntheticStrokes = font.textToStrokes(
+                    wrappedText,
+                    startX = margin,
+                    startY = startY,
+                    scale = scale,
+                    jitter = 0.5f
+                ).map { it.copy(strokeType = com.writer.model.StrokeType.SYNTHETIC) }
+
+                overlays[lineIdx] = InlineTextState(
+                    lineIndex = lineIdx,
+                    recognizedText = wrappedText,
+                    consolidated = true,
+                    syntheticStrokes = syntheticStrokes
+                )
+            }
+
+            // Mark remaining original lines as consolidated (hide strokes) even if
+            // the reflowed text doesn't use them — prevents overlap
+            for (lineIdx in originalLineIndices) {
+                if (lineIdx !in overlays) {
+                    overlays[lineIdx] = InlineTextState(
+                        lineIndex = lineIdx,
+                        recognizedText = "",
+                        consolidated = true,
+                        syntheticStrokes = emptyList()
+                    )
+                }
+            }
+        }
+
+        // Add non-consolidated overlays (lines with recognized text but not yet consolidated)
+        for ((lineIdx, text) in host.lineTextCache) {
+            if (lineIdx in overlays) continue
+            if (text.isBlank() || text == "[?]") continue
+            if (host.diagramManager.isDiagramLine(lineIdx)) continue
+
+            overlays[lineIdx] = InlineTextState(
+                lineIndex = lineIdx,
+                recognizedText = text,
+                consolidated = false
+            )
+        }
+
+        return overlays
+    }
+
+    fun updateInlineOverlays(currentLineIndex: Int) {
+        val overlays = buildInlineOverlays(currentLineIndex)
+        inkCanvas.updateInlineOverlays(overlays)
+        scheduleTextRefresh()
     }
 
     /** Called when the text view is scrolled via overscroll. */
     fun onManualTextScroll(textOverscroll: Float) {
-        textView.textContentScroll = textOverscroll
-        textView.invalidate()
+        // No-op: RecognizedTextView removed
     }
 
     private fun updateTextScrollOffset() {
-        // Content is flush with the divider -- preview and canvas are complementary
-        textView.textScrollOffset = 0f
+        // No-op: RecognizedTextView removed
     }
 
     fun stop() {

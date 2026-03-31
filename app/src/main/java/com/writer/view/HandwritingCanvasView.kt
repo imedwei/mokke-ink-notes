@@ -23,6 +23,7 @@ import com.onyx.android.sdk.pen.TouchHelper
 import com.onyx.android.sdk.pen.data.TouchPointList
 import com.writer.model.DiagramArea
 import com.writer.ui.writing.DiagramStrokeClassifier
+import com.writer.ui.writing.InlineTextState
 import com.writer.ui.writing.SpaceInsertMode
 import com.writer.model.ColumnModel
 import com.writer.model.InkStroke
@@ -72,6 +73,20 @@ class HandwritingCanvasView @JvmOverloads constructor(
     private val linePaint = CanvasTheme.newLinePaint()
     private val diagramBorderPaint = CanvasTheme.newDiagramBorderPaint()
 
+    private val overlayTextPaint = Paint().apply {
+        color = Color.parseColor("#888888")
+        textSize = ScreenMetrics.sp(12f)
+        isAntiAlias = false
+        typeface = Typeface.MONOSPACE
+    }
+
+    private val overlayBorderPaint = Paint().apply {
+        color = Color.parseColor("#CCCCCC")
+        style = Paint.Style.STROKE
+        strokeWidth = 1f
+        isAntiAlias = false
+    }
+
     private val annotationPaint = Paint().apply {
         style = Paint.Style.STROKE
         isAntiAlias = false
@@ -86,6 +101,12 @@ class HandwritingCanvasView @JvmOverloads constructor(
 
     /** Diagram areas in the current document. */
     var diagramAreas: List<DiagramArea> = emptyList()
+
+    /** Inline text overlay states, keyed by line index. Set by DisplayManager. */
+    var inlineTextOverlays: Map<Int, InlineTextState> = emptyMap()
+
+    /** Lines currently consolidated (derived from inlineTextOverlays for O(1) lookup). */
+    private var consolidatedLineIndices: Set<Int> = emptySet()
 
     /** Column model reference for magnetic snap access. */
     var columnModel: ColumnModel? = null
@@ -1146,7 +1167,41 @@ class HandwritingCanvasView @JvmOverloads constructor(
             TOP_MARGIN + shiftFromLine * LINE_SPACING
         } else Float.MAX_VALUE
 
+        // Draw consolidated Hershey text strokes for consolidated lines
+        for ((_, state) in inlineTextOverlays) {
+            if (state.consolidated && !state.unConsolidated) {
+                for (synStroke in state.syntheticStrokes) {
+                    if (synStroke.maxY >= viewTop && synStroke.minY <= viewBottom) {
+                        drawStroke(canvas, synStroke)
+                    }
+                }
+            }
+        }
+
+        // Draw overlay text labels above non-consolidated lines that have recognized text
+        for ((lineIndex, state) in inlineTextOverlays) {
+            if (!state.consolidated || state.unConsolidated) {
+                val labelY = TOP_MARGIN + lineIndex * LINE_SPACING - ScreenMetrics.dp(4f)
+                val labelX = ScreenMetrics.dp(8f)
+                if (labelY >= viewTop - LINE_SPACING && labelY <= viewBottom) {
+                    canvas.drawText(state.recognizedText, labelX, labelY, overlayTextPaint)
+                }
+            }
+            // Draw border around un-consolidated lines (user double-tapped to reveal originals)
+            if (state.unConsolidated) {
+                val borderTop = TOP_MARGIN + lineIndex * LINE_SPACING
+                val borderBottom = borderTop + LINE_SPACING
+                if (borderBottom >= viewTop && borderTop <= viewBottom) {
+                    canvas.drawRect(0f, borderTop, canvasRight, borderBottom, overlayBorderPaint)
+                }
+            }
+        }
+
         for (stroke in completedStrokes) {
+            // Skip strokes on consolidated lines (replaced by Hershey text)
+            val strokeLineIndex = ((stroke.minY + stroke.maxY) / 2f - TOP_MARGIN) / LINE_SPACING
+            if (strokeLineIndex.toInt() in consolidatedLineIndices) continue
+
             val strokeCenterY = (stroke.minY + stroke.maxY) / 2f
             val shift = if (spaceInsertMode && spaceInsertDragActive && strokeCenterY >= anchorY) previewShiftPx else 0f
             if (stroke.maxY + shift >= viewTop && stroke.minY + shift <= viewBottom) {
@@ -1267,6 +1322,11 @@ class HandwritingCanvasView @JvmOverloads constructor(
             }
             canvas.restore()
         }
+    }
+
+    fun updateInlineOverlays(overlays: Map<Int, InlineTextState>) {
+        inlineTextOverlays = overlays
+        consolidatedLineIndices = overlays.filter { it.value.consolidated && !it.value.unConsolidated }.keys
     }
 
     private fun drawStroke(canvas: Canvas, stroke: InkStroke) {

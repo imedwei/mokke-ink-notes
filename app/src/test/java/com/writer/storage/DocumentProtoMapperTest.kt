@@ -73,7 +73,8 @@ class DocumentProtoMapperTest {
 
     @Test
     fun allStrokeTypes_surviveRoundTrip() {
-        for (type in StrokeType.entries) {
+        // SYNTHETIC is ephemeral (display-only), maps to FREEHAND in proto — skip it
+        for (type in StrokeType.entries.filter { it != StrokeType.SYNTHETIC }) {
             val stroke = InkStroke(
                 strokeId = "id-$type",
                 points = samplePoints(),

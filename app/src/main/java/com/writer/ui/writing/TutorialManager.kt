@@ -2,7 +2,6 @@ package com.writer.ui.writing
 
 import android.content.Context
 import android.graphics.Rect
-import android.widget.LinearLayout
 import com.writer.model.DocumentData
 import com.writer.model.InkStroke
 import com.writer.model.minX
@@ -10,7 +9,6 @@ import com.writer.model.maxX
 import com.writer.model.minY
 import com.writer.model.maxY
 import com.writer.view.HandwritingCanvasView
-import com.writer.view.RecognizedTextView
 import com.writer.view.TutorialOverlay
 
 /**
@@ -28,7 +26,6 @@ import com.writer.view.TutorialOverlay
 class TutorialManager(
     private val context: Context,
     private val inkCanvas: HandwritingCanvasView,
-    private val textView: RecognizedTextView,
     private val getCoordinator: () -> WritingCoordinator?,
     private val getPendingRestore: () -> DocumentData?,
     private val clearPendingRestore: () -> Unit,
@@ -65,8 +62,6 @@ class TutorialManager(
     private var savedStrokes: List<InkStroke>? = null
     private var savedScrollY: Float = 0f
     private var savedState: DocumentData? = null
-    private var savedTextHeight = 0
-    private var savedTextWeight = 0f
     private var savedCanvasHeight = 0
     private var savedCanvasWeight = 0f
 
@@ -120,12 +115,9 @@ class TutorialManager(
         savedScrollY = inkCanvas.scrollOffsetY
 
         // Save layout params
-        val textParams = textView.layoutParams as LinearLayout.LayoutParams
-        val canvasParams = inkCanvas.layoutParams as LinearLayout.LayoutParams
-        savedTextHeight = textParams.height
-        savedTextWeight = textParams.weight
+        val canvasParams = inkCanvas.layoutParams
         savedCanvasHeight = canvasParams.height
-        savedCanvasWeight = canvasParams.weight
+        savedCanvasWeight = if (canvasParams is android.widget.LinearLayout.LayoutParams) canvasParams.weight else 0f
 
         // Clear canvas for a blank tutorial
         coordinator?.stop()
@@ -135,9 +127,6 @@ class TutorialManager(
         inkCanvas.scrollOffsetY = 0f
         // Flush Onyx hardware overlay so old strokes aren't visible
         inkCanvas.reinitializeRawDrawing()
-        textView.setParagraphs(emptyList())
-        textView.showScrollHint = false
-
         // Restart coordinator and load the showcase document
         coordinator?.start()
         loadShowcaseDocument()
@@ -392,7 +381,8 @@ class TutorialManager(
         val step = steps[currentStepIndex]
         if (step.id != "scroll") return@Runnable
 
-        if (textView.totalTextHeight > 0) {
+        // Auto-advance scroll step after recognition runs (textView removed)
+        if (!scrollTextAppeared) {
             scrollTextAppeared = true
             overlay?.currentStep = step.copy(
                 cutoutRect = Rect(0, 0, inkCanvas.rootView.width, inkCanvas.rootView.height),
@@ -475,14 +465,12 @@ class TutorialManager(
         // Hide overlay
         overlay?.currentStep = null
 
-        // Restore split size
-        val textParams = textView.layoutParams as LinearLayout.LayoutParams
-        val canvasParams = inkCanvas.layoutParams as LinearLayout.LayoutParams
-        textParams.height = savedTextHeight
-        textParams.weight = savedTextWeight
-        textView.layoutParams = textParams
+        // Restore canvas size
+        val canvasParams = inkCanvas.layoutParams
         canvasParams.height = savedCanvasHeight
-        canvasParams.weight = savedCanvasWeight
+        if (canvasParams is android.widget.LinearLayout.LayoutParams) {
+            canvasParams.weight = savedCanvasWeight
+        }
         inkCanvas.layoutParams = canvasParams
 
         // Restore original document
@@ -498,9 +486,6 @@ class TutorialManager(
             inkCanvas.scrollOffsetY = savedScrollY
             inkCanvas.drawToSurface()
         }
-
-        textView.setParagraphs(emptyList())
-        textView.showScrollHint = true
 
         // Restart coordinator with restored state.
         // restoreState() expects strokes already in documentModel — add them
@@ -521,7 +506,6 @@ class TutorialManager(
             }
         }
 
-        textView.invalidate()
         inkCanvas.reinitializeRawDrawing()
 
         savedStrokes = null
