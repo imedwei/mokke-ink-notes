@@ -320,18 +320,8 @@ class WritingActivity : AppCompatActivity() {
             }
         }
 
-        // Restore any new documents from sync folder
-        val syncUri = prefs.getString(PREF_SYNC_FOLDER, null)
-        if (syncUri != null) {
-            lifecycleScope.launch(Dispatchers.IO) {
-                val count = DocumentStorage.restoreFromSyncFolder(
-                    this@WritingActivity, android.net.Uri.parse(syncUri)
-                )
-                if (count > 0) {
-                    SearchIndexManager.rebuildIndex(this@WritingActivity)
-                }
-            }
-        }
+        // Restore any new documents from sync folder — defer to onResume
+        // so it doesn't compete with startup for GC/CPU.
 
         // Update undo/redo buttons when pen lifts and track active canvas
         inkCanvas.onPenStateChanged = { active ->

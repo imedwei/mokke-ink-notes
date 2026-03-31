@@ -304,33 +304,15 @@ class WritingCoordinator(
     }
 
     private fun onScratchOut(scratchPoints: List<StrokePoint>, left: Float, top: Float, right: Float, bottom: Float) {
-        // Erase strokes that the scratch-out physically intersects.
-        // The caller (checkPostStrokeScratchOut) already verified this is a focused
-        // scratch-out via isFocusedScratchOut — most of its path covers existing strokes.
+        // Find strokes within the scratch-out region using bounding-box overlap.
+        // isFocusedScratchOut already verified this is a real scratch-out, so
+        // bbox proximity is sufficient — no expensive segment intersection needed.
         val radius = ScreenMetrics.dp(ScratchOutDetection.COVERAGE_RADIUS_DP)
-        val radiusSq = radius * radius
         val overlapping = columnModel.activeStrokes.filter { stroke ->
-            // Bounding-box pre-filter: skip strokes that don't overlap the
-            // scratch-out region (expanded by radius). Without this, every
-            // stroke is checked with O(n*m) segment intersection tests.
             val sMinX = stroke.minX; val sMaxX = stroke.maxX
             val sMinY = stroke.minY; val sMaxY = stroke.maxY
-            if (sMaxX < left - radius || sMinX > right + radius ||
-                sMaxY < top - radius || sMinY > bottom + radius) return@filter false
-
-            if (stroke.points.size < 5) {
-                // Small strokes (dots, taps): segment intersection is unreliable,
-                // use proximity check instead — any scratch point within radius counts.
-                stroke.points.any { tp ->
-                    scratchPoints.any { sp ->
-                        val dx = sp.x - tp.x; val dy = sp.y - tp.y
-                        dx * dx + dy * dy <= radiusSq
-                    }
-                }
-            } else {
-                ScratchOutDetection.strokesIntersect(scratchPoints, stroke.points)
-            } || stroke.strokeType.isConnector
-                    && ScratchOutDetection.strokeIntersectsRect(stroke.points, left, top, right, bottom)
+            sMaxX >= left - radius && sMinX <= right + radius &&
+                sMaxY >= top - radius && sMinY <= bottom + radius
         }
         if (overlapping.isEmpty()) return
 

@@ -687,10 +687,13 @@ class HandwritingCanvasView @JvmOverloads constructor(
 
     /** Post-stroke pipeline for strokes OUTSIDE any diagram area. */
     private fun finishTextStroke() {
+        val ft0 = android.os.SystemClock.elapsedRealtime()
         if (checkPostStrokeScratchOut()) return
 
         // Shape-intent: dwell at end → shape detection → auto-create diagram
         val snapData = checkShapeSnap()
+        val snapMs = android.os.SystemClock.elapsedRealtime() - ft0
+        if (snapMs > 20) Log.w(TAG, "finishTextStroke pre-emit took ${snapMs}ms (${currentStrokePoints.size} pts)")
         if (snapData != null) {
             val rawPoints = currentStrokePoints.toList()
             val rawStroke = emitStroke(rawPoints, null)
@@ -715,9 +718,12 @@ class HandwritingCanvasView @JvmOverloads constructor(
         // create a diagram area around it. No dwell required — the system
         // infers intent from the stroke shape.
         val stroke = InkStroke(points = currentStrokePoints.toList())
+        val ct0 = android.os.SystemClock.elapsedRealtime()
         val drawingScore = DiagramStrokeClassifier.classifyStroke(
             stroke, LINE_SPACING, includeConnector = false
         )
+        val classifyMs = android.os.SystemClock.elapsedRealtime() - ct0
+        if (classifyMs > 10) Log.w(TAG, "classifyStroke took ${classifyMs}ms (${stroke.points.size} pts)")
         completedStrokes.add(stroke)
         onStrokeCompleted?.invoke(stroke)
         if (drawingScore >= 0.5f) {
@@ -995,7 +1001,11 @@ class HandwritingCanvasView @JvmOverloads constructor(
 
     /** Check if the completed stroke is a scratch-out erase gesture. */
     private fun checkPostStrokeScratchOut(): Boolean {
-        if (!ScratchOutDetection.isScratchOut(currentStrokePoints, completedStrokes, LINE_SPACING)) return false
+        val t0 = android.os.SystemClock.elapsedRealtime()
+        val isScratch = ScratchOutDetection.isScratchOut(currentStrokePoints, completedStrokes, LINE_SPACING)
+        val elapsed = android.os.SystemClock.elapsedRealtime() - t0
+        if (elapsed > 10) Log.w(TAG, "isScratchOut took ${elapsed}ms (${currentStrokePoints.size} pts, ${completedStrokes.size} strokes)")
+        if (!isScratch) return false
 
         val scratchPoints = currentStrokePoints.toList()
         val left = strokeMinX; val top = strokeMinY
@@ -1004,9 +1014,15 @@ class HandwritingCanvasView @JvmOverloads constructor(
         currentStrokePoints.clear()
         currentPath.reset()
 
-        pauseRawDrawing()
         onScratchOut?.invoke(scratchPoints, left, top, right, bottom)
-        resumeRawDrawing()
+
+        // Deferred e-ink refresh: flush SDK overlay so erased strokes disappear.
+        // Posted to next frame to avoid blocking during stroke processing.
+        post {
+            pauseRawDrawing()
+            drawToSurface()
+            resumeRawDrawing()
+        }
 
         Log.i(TAG, "Post-stroke scratch-out: region=[$left,$top,$right,$bottom]")
         return true

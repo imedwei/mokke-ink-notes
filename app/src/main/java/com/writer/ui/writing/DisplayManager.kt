@@ -324,30 +324,32 @@ class DisplayManager(
     private var lastOverlayLine = -1
 
     fun updateInlineOverlays(currentLineIndex: Int) {
-        // Skip expensive rebuild if text cache content and line haven't changed
-        val hash = host.lineTextCache.hashCode()
-        if (hash != lastOverlayHash || currentLineIndex != lastOverlayLine) {
-            val overlays = buildInlineOverlays(currentLineIndex)
-            inkCanvas.updateInlineOverlays(overlays)
-            lastOverlayHash = hash
-            lastOverlayLine = currentLineIndex
-        }
         inkCanvas.currentWritingLineIndex = currentLineIndex
+
+        // Skip everything if text cache hasn't changed
+        val hash = host.lineTextCache.hashCode()
+        if (hash == lastOverlayHash && currentLineIndex == lastOverlayLine) return
+
+        val overlays = buildInlineOverlays(currentLineIndex)
+        inkCanvas.updateInlineOverlays(overlays)
+        lastOverlayHash = hash
+        lastOverlayLine = currentLineIndex
 
         // Update the popup card: show last recognized word on the current line
         val currentText = host.lineTextCache[currentLineIndex]
         if (currentText != null && currentText.isNotBlank() && currentText != "[?]") {
             val lastWord = currentText.trim().split(" ").lastOrNull()
-
-            // Fire popup whenever text or line changes
             if (lastWord != null && (currentText != lastPopupText || currentLineIndex != lastPopupLine)) {
                 lastPopupText = currentText
                 lastPopupLine = currentLineIndex
-                val lineStrokes = host.columnModel.activeStrokes.filter { stroke ->
-                    val y = (stroke.points.sumOf { it.y.toDouble() }.toFloat() / stroke.points.size)
-                    lineSegmenter.getLineIndex(y) == currentLineIndex
+                // Use rightmost stroke X for popup position
+                var rightX = inkCanvas.width / 2f
+                for (stroke in host.columnModel.activeStrokes) {
+                    val y = stroke.points[stroke.points.size / 2].y
+                    if (lineSegmenter.getLineIndex(y) == currentLineIndex) {
+                        if (stroke.maxX > rightX) rightX = stroke.maxX
+                    }
                 }
-                val rightX = lineStrokes.maxOfOrNull { it.maxX } ?: (inkCanvas.width / 2f)
                 val lineTop = HandwritingCanvasView.TOP_MARGIN + currentLineIndex * HandwritingCanvasView.LINE_SPACING
                 val screenY = lineTop - inkCanvas.scrollOffsetY
                 onWordPopup?.invoke(lastWord, rightX, screenY)
