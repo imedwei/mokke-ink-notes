@@ -335,7 +335,8 @@ class DisplayManager(
         lastOverlayHash = hash
         lastOverlayLine = currentLineIndex
 
-        // Update the popup card: show last recognized word on the current line
+        // Update the popup card — skip during scroll (pen not active = user is scrolling)
+        if (inkCanvas.isPenRecentlyActive()) {
         val currentText = host.lineTextCache[currentLineIndex]
         if (currentText != null && currentText.isNotBlank() && currentText != "[?]") {
             val lastWord = currentText.trim().split(" ").lastOrNull()
@@ -355,6 +356,7 @@ class DisplayManager(
                 onWordPopup?.invoke(lastWord, rightX, screenY)
             }
         }
+        } // isPenRecentlyActive guard
     }
 
     fun stop() {
