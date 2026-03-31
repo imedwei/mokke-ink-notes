@@ -173,29 +173,53 @@ object SearchIndexManager {
         try {
             val s = getSession(context)
             withContext(dispatcher) {
-                // Clear existing index
                 s.removeAsync(
-                    "",  // empty query removes all
+                    "",
                     SearchSpec.Builder().build()
                 ).await()
             }
 
-            // Re-index all documents from disk
             val docsDir = context.filesDir.resolve("documents")
             if (!docsDir.exists()) return
 
             val files = docsDir.listFiles() ?: return
             val seen = mutableSetOf<String>()
 
-            // Index .inkup files first (preferred format)
+            // Index .inkup files — read only text cache from proto, skip stroke loading
             for (file in files.filter { it.extension == "inkup" }) {
                 val name = file.nameWithoutExtension
                 seen.add(name)
-                val data = DocumentStorage.load(context, name) ?: continue
-                indexDocument(context, name, data)
+                try {
+                    val bytes = androidx.core.util.AtomicFile(file).readFully()
+                    val proto = com.writer.model.proto.DocumentProto.ADAPTER.decode(bytes)
+                    // Extract text caches directly from proto — no stroke deserialization
+                    val mainCache = proto.main?.line_text_cache ?: emptyMap()
+                    val cueCache = proto.cue?.line_text_cache ?: emptyMap()
+                    val bodyLines = (mainCache.values + cueCache.values)
+                        .filter { it.isNotEmpty() }
+                        .map { it.lowercase() }
+                    val lineDataJson = JSONObject()
+                    for ((idx, text) in mainCache) {
+                        if (text.isNotEmpty()) lineDataJson.put(idx.toString(), text.lowercase())
+                    }
+                    for ((idx, text) in cueCache) {
+                        if (text.isNotEmpty()) lineDataJson.put("c$idx", text.lowercase())
+                    }
+                    val doc = NoteDocument(
+                        id = name, title = name,
+                        body = bodyLines.joinToString("\n"),
+                        lastModified = file.lastModified(),
+                        lineData = lineDataJson.toString()
+                    )
+                    withContext(dispatcher) {
+                        s.putAsync(PutDocumentsRequest.Builder().addDocuments(doc).build()).await()
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to index $name: ${e.message}")
+                }
             }
 
-            // Index legacy .json files not already seen
+            // Legacy .json — still needs full load (rare, small files)
             for (file in files.filter { it.extension == "json" && it.name != "search-index.json" }) {
                 val name = file.nameWithoutExtension
                 if (name in seen) continue
