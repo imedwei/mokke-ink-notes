@@ -4,6 +4,7 @@ import android.util.Log
 import com.writer.model.ColumnModel
 import com.writer.model.InkStroke
 import com.writer.model.maxY
+import com.writer.recognition.RecognitionResult
 import com.writer.view.CanvasTheme
 import com.writer.view.HandwritingCanvasView
 import com.writer.view.PreviewLayoutCalculator
@@ -21,6 +22,8 @@ interface DisplayManagerHost {
     val lineTextCache: Map<Int, String>
     val highestLineIndex: Int
     val currentLineIndex: Int
+    /** Full recognition results with candidates, keyed by line index. */
+    val lineRecognitionResults: Map<Int, com.writer.recognition.RecognitionResult>
     fun eagerRecognizeLine(lineIndex: Int)
     /** Batch-recognize a line, adding/removing from recognizingLines internally. */
     fun markRecognizing(lineIndex: Int)
@@ -57,9 +60,10 @@ class DisplayManager(
 ) {
     companion object {
         private const val TAG = "DisplayManager"
-        // Scroll when writing passes this fraction of canvas height from top
         // Delay before refreshing e-ink display after text view updates
         private const val TEXT_REFRESH_DELAY_MS = 500L
+        // Score threshold below which inline alternatives are shown
+        private const val LOW_CONFIDENCE_THRESHOLD = 0.8f
     }
 
     /** Lines that have ever scrolled above the viewport (text stays rendered once shown). */
@@ -351,10 +355,18 @@ class DisplayManager(
             if (text.isBlank() || text == "[?]") continue
             if (host.diagramManager.isDiagramLine(lineIdx)) continue
 
+            val result = host.lineRecognitionResults[lineIdx]
+            val candidates = result?.candidates ?: emptyList()
+            val isLowConfidence = candidates.size > 1 && (candidates[0].score?.let { it < LOW_CONFIDENCE_THRESHOLD } ?: false)
+            val wordAlts = if (isLowConfidence) findWordAlternatives(candidates) else emptyList()
+
             overlays[lineIdx] = InlineTextState(
                 lineIndex = lineIdx,
                 recognizedText = text,
-                consolidated = false
+                consolidated = false,
+                candidates = candidates,
+                lowConfidence = isLowConfidence,
+                wordAlternatives = wordAlts
             )
         }
 

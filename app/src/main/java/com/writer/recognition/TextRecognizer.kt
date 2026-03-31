@@ -2,6 +2,17 @@ package com.writer.recognition
 
 import com.writer.model.InkLine
 
+/** A single recognition candidate with optional confidence score. */
+data class RecognitionCandidate(val text: String, val score: Float?)
+
+/** Recognition result containing one or more ranked candidates. */
+data class RecognitionResult(val candidates: List<RecognitionCandidate>) {
+    /** The top candidate's text, or empty string if no candidates. */
+    val text: String get() = candidates.firstOrNull()?.text ?: ""
+    /** The top candidate's score, or null if unavailable. */
+    val topScore: Float? get() = candidates.firstOrNull()?.score
+}
+
 /**
  * Abstraction for handwriting-to-text recognition engines.
  *
@@ -29,6 +40,14 @@ interface TextRecognizer {
      * @return recognized text (trimmed), or empty string if recognition fails
      */
     suspend fun recognizeLine(line: InkLine, preContext: String = ""): String
+
+    /**
+     * Recognize with full candidate list and confidence scores.
+     * Default implementation wraps [recognizeLine] as a single candidate.
+     */
+    suspend fun recognizeLineWithCandidates(line: InkLine, preContext: String = ""): RecognitionResult {
+        return RecognitionResult(listOf(RecognitionCandidate(recognizeLine(line, preContext), null)))
+    }
 
     /** Release resources (models, service bindings, etc.). */
     fun close()

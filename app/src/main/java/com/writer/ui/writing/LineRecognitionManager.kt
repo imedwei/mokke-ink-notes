@@ -5,6 +5,7 @@ import com.writer.model.ColumnModel
 import com.writer.model.InkStroke
 import com.writer.recognition.LineSegmenter
 import com.writer.recognition.StrokeClassifier
+import com.writer.recognition.RecognitionResult
 import com.writer.recognition.TextRecognizer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -45,6 +46,9 @@ class LineRecognitionManager(
 
     /** Track which lines are currently being recognized (avoid duplicates). */
     internal val recognizingLines = mutableSetOf<Int>()
+
+    /** Full recognition results with candidates, keyed by line index. */
+    val lineRecognitionResults = mutableMapOf<Int, RecognitionResult>()
 
     fun isRecognizing(lineIndex: Int): Boolean = recognizingLines.contains(lineIndex)
     fun markRecognizing(lineIndex: Int) { recognizingLines.add(lineIndex) }
@@ -113,11 +117,13 @@ class LineRecognitionManager(
 
             val line = lineSegmenter.buildInkLine(strokes, lineIndex)
             val preContext = buildPreContext(lineIndex)
-            val text = withContext(Dispatchers.IO) {
-                recognizer.recognizeLine(line, preContext)
-            }.trim()
+            val result = withContext(Dispatchers.IO) {
+                recognizer.recognizeLineWithCandidates(line, preContext)
+            }
+            val text = result.text
 
             host.lineTextCache[lineIndex] = text
+            lineRecognitionResults[lineIndex] = result
             recognizingLines.remove(lineIndex)
             checkHeadingRename(lineIndex, text, allStrokes)
             return text

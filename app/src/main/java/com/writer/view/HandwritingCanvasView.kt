@@ -80,6 +80,13 @@ class HandwritingCanvasView @JvmOverloads constructor(
         typeface = Typeface.MONOSPACE
     }
 
+    private val overlayAltPaint = Paint().apply {
+        color = Color.parseColor("#AAAAAA")
+        textSize = ScreenMetrics.sp(10f)
+        isAntiAlias = false
+        typeface = Typeface.MONOSPACE
+    }
+
     private val overlayBorderPaint = Paint().apply {
         color = Color.parseColor("#CCCCCC")
         style = Paint.Style.STROKE
@@ -1184,7 +1191,26 @@ class HandwritingCanvasView @JvmOverloads constructor(
                 val labelY = TOP_MARGIN + lineIndex * LINE_SPACING - ScreenMetrics.dp(4f)
                 val labelX = ScreenMetrics.dp(8f)
                 if (labelY >= viewTop - LINE_SPACING && labelY <= viewBottom) {
-                    canvas.drawText(state.recognizedText, labelX, labelY, overlayTextPaint)
+                    if (state.wordAlternatives.isNotEmpty()) {
+                        // Show text with per-word alternatives inline
+                        val words = state.recognizedText.split(" ")
+                        val altsByIndex = state.wordAlternatives.associateBy { it.wordIndex }
+                        var x = labelX
+                        for ((i, word) in words.withIndex()) {
+                            val alt = altsByIndex[i]
+                            if (alt != null) {
+                                // Draw the word with alternatives: "word|alt1|alt2"
+                                val altText = (listOf(word) + alt.alternatives).joinToString("|")
+                                canvas.drawText(altText, x, labelY, overlayAltPaint)
+                                x += overlayAltPaint.measureText(altText) + overlayTextPaint.measureText(" ")
+                            } else {
+                                canvas.drawText(word, x, labelY, overlayTextPaint)
+                                x += overlayTextPaint.measureText(word) + overlayTextPaint.measureText(" ")
+                            }
+                        }
+                    } else {
+                        canvas.drawText(state.recognizedText, labelX, labelY, overlayTextPaint)
+                    }
                 }
             }
             // Draw border around un-consolidated lines (user double-tapped to reveal originals)

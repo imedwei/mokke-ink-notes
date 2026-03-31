@@ -18,7 +18,7 @@ class GoogleMLKitTextRecognizer : TextRecognizer {
 
     companion object {
         private const val TAG = "GoogleMLKitTextRecognizer"
-        private const val PRE_CONTEXT_LENGTH = 20
+        private const val PRE_CONTEXT_LENGTH = 200
     }
 
     private var recognizer: DigitalInkRecognizer? = null
@@ -33,6 +33,10 @@ class GoogleMLKitTextRecognizer : TextRecognizer {
     }
 
     override suspend fun recognizeLine(line: InkLine, preContext: String): String {
+        return recognizeLineWithCandidates(line, preContext).text
+    }
+
+    override suspend fun recognizeLineWithCandidates(line: InkLine, preContext: String): RecognitionResult {
         val rec = recognizer ?: throw IllegalStateException("Recognizer not initialized")
 
         val inkBuilder = Ink.builder()
@@ -53,9 +57,15 @@ class GoogleMLKitTextRecognizer : TextRecognizer {
         }
 
         val result = rec.recognize(ink, contextBuilder.build()).await()
-        val text = result.getCandidates().firstOrNull()?.getText() ?: ""
-        Log.d(TAG, "Recognized: \"$text\" (${result.getCandidates().size} candidates)")
-        return text
+        val candidates = result.getCandidates().map { candidate ->
+            RecognitionCandidate(
+                text = candidate.getText().trim(),
+                score = candidate.getScore()
+            )
+        }.filter { it.text.isNotEmpty() }
+
+        Log.d(TAG, "Recognized: \"${candidates.firstOrNull()?.text}\" (${candidates.size} candidates)")
+        return RecognitionResult(candidates)
     }
 
     override fun close() {

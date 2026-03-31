@@ -129,15 +129,45 @@ object HwrProtobuf {
      * Error: `{"exception":{"cause":{"message":"..."}}}` → returns empty string
      */
     fun parseHwrResult(json: String): String {
+        return parseHwrResultWithCandidates(json).text
+    }
+
+    /**
+     * Parse the JSON result with full candidate extraction.
+     * Attempts to find candidates in the MyScript JSON response.
+     * Falls back to single candidate from the "label" field.
+     */
+    fun parseHwrResultWithCandidates(json: String): RecognitionResult {
         return try {
             val obj = JSONObject(json)
-            if (obj.has("exception")) return ""
+            if (obj.has("exception")) return RecognitionResult(emptyList())
+
             val result = obj.optJSONObject("result")
-            if (result != null) return result.optString("label", "")
-            obj.optString("label", "")
+            val label = result?.optString("label", "") ?: obj.optString("label", "")
+
+            // Try to extract candidates array from MyScript response
+            val candidatesArray = result?.optJSONArray("candidates")
+                ?: obj.optJSONArray("candidates")
+            if (candidatesArray != null) {
+                val candidates = (0 until candidatesArray.length()).map { i ->
+                    val c = candidatesArray.getJSONObject(i)
+                    RecognitionCandidate(
+                        text = c.optString("label", "").trim(),
+                        score = if (c.has("score")) c.getDouble("score").toFloat() else null
+                    )
+                }.filter { it.text.isNotEmpty() }
+                if (candidates.isNotEmpty()) return RecognitionResult(candidates)
+            }
+
+            // Fallback: single candidate from label
+            if (label.isNotEmpty()) {
+                RecognitionResult(listOf(RecognitionCandidate(label.trim(), null)))
+            } else {
+                RecognitionResult(emptyList())
+            }
         } catch (e: Exception) {
             Log.w("HwrProtobuf", "Failed to parse HWR result: ${e.message}")
-            ""
+            RecognitionResult(emptyList())
         }
     }
 }

@@ -135,9 +135,18 @@ class OnyxHwrTextRecognizer(private val context: Context) : TextRecognizer {
     // Note: preContext is accepted by the interface but not used here —
     // MyScript context is set via HWRInputArgs on init, not per-recognition.
     override suspend fun recognizeLine(line: InkLine, preContext: String): String {
+        return recognizeLineWithCandidates(line, preContext).text
+    }
+
+    override suspend fun recognizeLineWithCandidates(line: InkLine, preContext: String): RecognitionResult {
+        val json = recognizeRawJson(line) ?: return RecognitionResult(emptyList())
+        return HwrProtobuf.parseHwrResultWithCandidates(json)
+    }
+
+    private suspend fun recognizeRawJson(line: InkLine): String? {
         val svc = service ?: throw IllegalStateException("Recognizer not initialized")
         if (!initialized) throw IllegalStateException("Recognizer not initialized")
-        if (line.strokes.isEmpty()) return ""
+        if (line.strokes.isEmpty()) return null
 
         val bb = line.boundingBox
         val viewWidth = if (bb.width() > 0) bb.width() else 1000f
@@ -149,7 +158,7 @@ class OnyxHwrTextRecognizer(private val context: Context) : TextRecognizer {
             ParcelFileDescriptor.createPipe()
         } catch (e: Exception) {
             Log.e(TAG, "Failed to create pipe: ${e.message}")
-            return ""
+            return null
         }
         val readPfd = pipe[0]
         val writePfd = pipe[1]
@@ -167,38 +176,35 @@ class OnyxHwrTextRecognizer(private val context: Context) : TextRecognizer {
         }
 
         return try {
-            val result = withTimeoutOrNull(RECOGNIZE_TIMEOUT_MS) {
+            withTimeoutOrNull(RECOGNIZE_TIMEOUT_MS) {
                 suspendCancellableCoroutine { cont ->
                     svc.batchRecognize(readPfd, object : HWROutputCallback.Stub() {
                         override fun read(args: HWROutputArgs?) {
                             if (!cont.isActive) return
                             try {
-                                // Boox API: hwrResult is populated only on error; on success it's null and pfd carries the result
                                 val errorJson = args?.hwrResult
                                 if (!errorJson.isNullOrBlank()) {
                                     Log.e(TAG, "HWR error: ${errorJson.take(300)}")
-                                    cont.resume("")
+                                    cont.resume(null)
                                     return
                                 }
                                 val resultPfd = args?.pfd
                                 if (resultPfd == null) {
-                                    cont.resume("")
+                                    cont.resume(null)
                                     return
                                 }
                                 val json = readPfdAsString(resultPfd)
                                 resultPfd.close()
-                                val text = HwrProtobuf.parseHwrResult(json)
-                                Log.d(TAG, "Recognized: \"$text\"")
-                                cont.resume(text)
+                                Log.d(TAG, "HWR raw JSON: ${json.take(500)}")
+                                cont.resume(json)
                             } catch (e: Exception) {
                                 Log.e(TAG, "Error parsing HWR result: ${e.message}")
-                                cont.resume("")
+                                cont.resume(null)
                             }
                         }
                     })
                 }
             }
-            result ?: ""
         } finally {
             writeJob.cancel()
             readPfd.close()
