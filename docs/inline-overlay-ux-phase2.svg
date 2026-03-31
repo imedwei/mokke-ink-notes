@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 700" width="400" height="700">
+  <title>Phase 2: Inline Text Overlay with Consolidation</title>
+
+  <!-- Background -->
+  <rect width="400" height="700" fill="white" stroke="#333" stroke-width="2"/>
+
+  <!-- Title -->
+  <text x="200" y="24" text-anchor="middle" font-family="monospace" font-size="13" font-weight="bold" fill="#333">PHASE 2: Inline Overlay + Consolidation</text>
+
+  <!-- Full-screen canvas -->
+  <rect x="10" y="38" width="380" height="652" fill="white" stroke="#999" stroke-width="1"/>
+
+  <!-- Ruled lines -->
+  <line x1="10" y1="80" x2="390" y2="80" stroke="#DDD" stroke-width="1"/>
+  <line x1="10" y1="140" x2="390" y2="140" stroke="#DDD" stroke-width="1"/>
+  <line x1="10" y1="200" x2="390" y2="200" stroke="#DDD" stroke-width="1"/>
+  <line x1="10" y1="260" x2="390" y2="260" stroke="#DDD" stroke-width="1"/>
+  <line x1="10" y1="320" x2="390" y2="320" stroke="#DDD" stroke-width="1"/>
+  <line x1="10" y1="380" x2="390" y2="380" stroke="#DDD" stroke-width="1"/>
+  <line x1="10" y1="440" x2="390" y2="440" stroke="#DDD" stroke-width="1"/>
+  <line x1="10" y1="500" x2="390" y2="500" stroke="#DDD" stroke-width="1"/>
+  <line x1="10" y1="560" x2="390" y2="560" stroke="#DDD" stroke-width="1"/>
+  <line x1="10" y1="620" x2="390" y2="620" stroke="#DDD" stroke-width="1"/>
+
+  <!-- ===== CONSOLIDATED LINE 1 ===== -->
+  <!-- Hershey font text (simulated with thin strokes) -->
+  <text x="25" y="72" font-family="cursive, 'Segoe Script', serif" font-size="16" fill="black" font-style="italic">The quick brown fox jumps over</text>
+
+  <!-- Label -->
+  <rect x="300" y="46" width="85" height="16" rx="3" fill="#E8F5E9" stroke="#4CAF50" stroke-width="0.5"/>
+  <text x="342" y="57" text-anchor="middle" font-family="monospace" font-size="8" fill="#2E7D32">consolidated</text>
+
+  <!-- ===== CONSOLIDATED LINE 2 ===== -->
+  <text x="25" y="132" font-family="cursive, 'Segoe Script', serif" font-size="16" fill="black" font-style="italic">the lazy dog. Today the weather</text>
+
+  <rect x="300" y="106" width="85" height="16" rx="3" fill="#E8F5E9" stroke="#4CAF50" stroke-width="0.5"/>
+  <text x="342" y="117" text-anchor="middle" font-family="monospace" font-size="8" fill="#2E7D32">consolidated</text>
+
+  <!-- ===== CONSOLIDATED LINE 3 ===== -->
+  <text x="25" y="192" font-family="cursive, 'Segoe Script', serif" font-size="16" fill="black" font-style="italic">is pleasant and warm with a</text>
+
+  <rect x="300" y="166" width="85" height="16" rx="3" fill="#E8F5E9" stroke="#4CAF50" stroke-width="0.5"/>
+  <text x="342" y="177" text-anchor="middle" font-family="monospace" font-size="8" fill="#2E7D32">consolidated</text>
+
+  <!-- ===== RECOGNIZED BUT NOT CONSOLIDATED (line 4) ===== -->
+  <!-- Small text label above handwritten strokes -->
+  <text x="25" y="248" font-family="monospace" font-size="10" fill="#888">"gentle breeze blowing"</text>
+
+  <!-- Handwritten strokes -->
+  <path d="M25,275 Q40,268 55,278 Q70,285 90,272 Q108,262 130,275 Q148,284 165,270 Q180,260 200,272 Q218,282 235,268 Q250,260 270,275 Q288,283 305,270 Q318,262 335,275"
+        stroke="black" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+
+  <!-- Label -->
+  <rect x="300" y="232" width="85" height="16" rx="3" fill="#FFF3E0" stroke="#FF9800" stroke-width="0.5"/>
+  <text x="342" y="243" text-anchor="middle" font-family="monospace" font-size="8" fill="#E65100">recognized</text>
+
+  <!-- ===== ACTIVE WRITING LINE (line 5) ===== -->
+  <!-- Handwritten strokes being written -->
+  <path d="M25,335 Q45,328 65,338 Q82,345 100,332 Q118,322 140,335 Q155,344 172,330"
+        stroke="black" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+
+  <!-- Pen cursor -->
+  <circle cx="172" cy="330" r="3" fill="black"/>
+  <line x1="172" y1="327" x2="180" y2="310" stroke="#666" stroke-width="1.5"/>
+  <text x="188" y="315" font-family="monospace" font-size="9" fill="#666">writing...</text>
+
+  <!-- Label -->
+  <rect x="300" y="292" width="85" height="16" rx="3" fill="#E3F2FD" stroke="#2196F3" stroke-width="0.5"/>
+  <text x="342" y="303" text-anchor="middle" font-family="monospace" font-size="8" fill="#1565C0">active line</text>
+
+  <!-- ===== EMPTY LINES BELOW ===== -->
+  <!-- (just ruled lines, no content) -->
+
+  <!-- ===== LEGEND ===== -->
+  <rect x="15" y="630" width="370" height="55" rx="4" fill="#FAFAFA" stroke="#DDD" stroke-width="1"/>
+  <text x="25" y="647" font-family="monospace" font-size="9" font-weight="bold" fill="#333">Legend:</text>
+
+  <!-- Consolidated -->
+  <rect x="25" y="653" width="8" height="8" fill="#E8F5E9" stroke="#4CAF50" stroke-width="0.5"/>
+  <text x="38" y="661" font-family="monospace" font-size="8" fill="#555">Consolidated = Hershey font replaces handwritten</text>
+
+  <!-- Recognized -->
+  <rect x="25" y="668" width="8" height="8" fill="#FFF3E0" stroke="#FF9800" stroke-width="0.5"/>
+  <text x="38" y="676" font-family="monospace" font-size="8" fill="#555">Recognized = text label shown, strokes visible</text>
+</svg>

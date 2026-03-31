@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 450" width="400" height="450">
+  <title>Phase 4: Typeahead Predictions</title>
+
+  <!-- Background -->
+  <rect width="400" height="450" fill="white" stroke="#333" stroke-width="2"/>
+
+  <!-- Title -->
+  <text x="200" y="24" text-anchor="middle" font-family="monospace" font-size="13" font-weight="bold" fill="#333">PHASE 4: Typeahead Predictions</text>
+
+  <!-- Canvas -->
+  <rect x="10" y="38" width="380" height="402" fill="white" stroke="#999" stroke-width="1"/>
+
+  <!-- Ruled lines -->
+  <line x1="10" y1="100" x2="390" y2="100" stroke="#DDD" stroke-width="1"/>
+  <line x1="10" y1="160" x2="390" y2="160" stroke="#DDD" stroke-width="1"/>
+  <line x1="10" y1="220" x2="390" y2="220" stroke="#DDD" stroke-width="1"/>
+  <line x1="10" y1="280" x2="390" y2="280" stroke="#DDD" stroke-width="1"/>
+  <line x1="10" y1="340" x2="390" y2="340" stroke="#DDD" stroke-width="1"/>
+  <line x1="10" y1="400" x2="390" y2="400" stroke="#DDD" stroke-width="1"/>
+
+  <!-- Consolidated line 1 -->
+  <text x="25" y="90" font-family="cursive, 'Segoe Script', serif" font-size="16" fill="black" font-style="italic">The quick brown fox jumps over</text>
+
+  <!-- Consolidated line 2 -->
+  <text x="25" y="150" font-family="cursive, 'Segoe Script', serif" font-size="16" fill="black" font-style="italic">the lazy dog. Today the weather</text>
+
+  <!-- Consolidated line 3 -->
+  <text x="25" y="210" font-family="cursive, 'Segoe Script', serif" font-size="16" fill="black" font-style="italic">is pleasant and warm with a</text>
+
+  <!-- ===== ACTIVE LINE WITH TYPEAHEAD ABOVE ===== -->
+
+  <!-- Recognized text + prediction ABOVE the active line -->
+  <text x="25" y="258" font-family="monospace" font-size="10" fill="#888">"gentle breez"</text>
+  <!-- Ghost prediction extending the recognized text -->
+  <text x="130" y="258" font-family="cursive, 'Segoe Script', serif" font-size="13" fill="#AAAAAA" font-style="italic">e blowing from the south</text>
+
+  <!-- Label for prediction -->
+  <rect x="280" y="244" width="85" height="16" rx="3" fill="#F3E5F5" stroke="#9C27B0" stroke-width="0.5"/>
+  <text x="322" y="255" text-anchor="middle" font-family="monospace" font-size="8" fill="#6A1B9A">prediction</text>
+
+  <!-- Handwritten strokes on line 4 (active) -->
+  <path d="M25,290 Q40,283 55,293 Q70,300 90,287 Q108,277 130,290 Q148,299 165,285"
+        stroke="black" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+
+  <!-- Pen cursor -->
+  <circle cx="165" cy="285" r="3" fill="black"/>
+  <line x1="165" y1="282" x2="173" y2="265" stroke="#666" stroke-width="1.5"/>
+
+  <!-- Label -->
+  <rect x="300" y="296" width="85" height="16" rx="3" fill="#E3F2FD" stroke="#2196F3" stroke-width="0.5"/>
+  <text x="342" y="307" text-anchor="middle" font-family="monospace" font-size="8" fill="#1565C0">active line</text>
+
+  <!-- ===== INTERACTION OPTIONS ===== -->
+  <text x="25" y="340" font-family="monospace" font-size="9" fill="#CC0000">keep writing = dismiss prediction</text>
+  <text x="25" y="355" font-family="monospace" font-size="9" fill="#4CAF50">tap prediction = accept &amp; consolidate</text>
+  <text x="25" y="370" font-family="monospace" font-size="9" fill="#555">predictions update immediately per word</text>
+
+  <!-- ===== FLOW DIAGRAM ===== -->
+  <rect x="15" y="385" width="370" height="50" rx="4" fill="#FAFAFA" stroke="#DDD" stroke-width="1"/>
+  <text x="200" y="403" text-anchor="middle" font-family="monospace" font-size="10" font-weight="bold" fill="#333">Typeahead Flow</text>
+
+  <!-- Flow boxes -->
+  <rect x="20" y="410" width="65" height="18" rx="3" fill="#E3F2FD" stroke="#2196F3" stroke-width="1"/>
+  <text x="52" y="423" text-anchor="middle" font-family="monospace" font-size="7" fill="#1565C0">write word</text>
+
+  <text x="90" y="423" font-family="monospace" font-size="10" fill="#999">-></text>
+
+  <rect x="98" y="410" width="65" height="18" rx="3" fill="#FFF3E0" stroke="#FF9800" stroke-width="1"/>
+  <text x="130" y="423" text-anchor="middle" font-family="monospace" font-size="7" fill="#E65100">recognize</text>
+
+  <text x="168" y="423" font-family="monospace" font-size="10" fill="#999">-></text>
+
+  <rect x="176" y="410" width="65" height="18" rx="3" fill="#F3E5F5" stroke="#9C27B0" stroke-width="1"/>
+  <text x="208" y="423" text-anchor="middle" font-family="monospace" font-size="7" fill="#6A1B9A">predict next</text>
+
+  <text x="246" y="423" font-family="monospace" font-size="10" fill="#999">-></text>
+
+  <rect x="254" y="410" width="65" height="18" rx="3" fill="#F5F5F5" stroke="#999" stroke-width="1"/>
+  <text x="286" y="423" text-anchor="middle" font-family="monospace" font-size="7" fill="#666">ghost above</text>
+
+  <text x="324" y="423" font-family="monospace" font-size="10" fill="#999">-></text>
+
+  <rect x="332" y="410" width="52" height="18" rx="3" fill="#E8F5E9" stroke="#4CAF50" stroke-width="1"/>
+  <text x="358" y="423" text-anchor="middle" font-family="monospace" font-size="7" fill="#2E7D32">tap/write</text>
+</svg>

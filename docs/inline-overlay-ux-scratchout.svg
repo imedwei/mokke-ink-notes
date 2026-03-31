@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 380" width="400" height="380">
+  <title>Scratch-Out on Consolidated Text</title>
+
+  <!-- Background -->
+  <rect width="400" height="380" fill="white" stroke="#333" stroke-width="2"/>
+
+  <!-- Title -->
+  <text x="200" y="24" text-anchor="middle" font-family="monospace" font-size="13" font-weight="bold" fill="#333">Scratch-Out on Consolidated Text</text>
+
+  <!-- ===== BEFORE ===== -->
+  <text x="200" y="52" text-anchor="middle" font-family="monospace" font-size="11" fill="#666">BEFORE</text>
+
+  <rect x="10" y="60" width="380" height="110" fill="white" stroke="#999" stroke-width="1"/>
+
+  <!-- Ruled lines -->
+  <line x1="10" y1="100" x2="390" y2="100" stroke="#DDD" stroke-width="1"/>
+  <line x1="10" y1="145" x2="390" y2="145" stroke="#DDD" stroke-width="1"/>
+
+  <!-- Consolidated line 1 -->
+  <text x="25" y="90" font-family="cursive, 'Segoe Script', serif" font-size="16" fill="black" font-style="italic">The quick brown fox jumps over</text>
+
+  <!-- Consolidated line 2 with scratch-out gesture -->
+  <text x="25" y="135" font-family="cursive, 'Segoe Script', serif" font-size="16" fill="black" font-style="italic">the lazy dog. Today the weather</text>
+
+  <!-- Scratch-out zigzag over "the lazy dog" -->
+  <path d="M20,132 L50,125 L30,138 L60,128 L40,140 L70,130 L55,142 L85,128 L65,140 L95,130 L80,142 L110,128 L95,140 L125,130 L110,142 L140,128 L125,140 L155,130 L140,142 L170,130"
+        stroke="#CC0000" stroke-width="2" fill="none" stroke-linecap="round"/>
+
+  <!-- Arrow label -->
+  <text x="250" y="125" font-family="monospace" font-size="9" fill="#CC0000">scratch-out gesture</text>
+  <line x1="245" y1="128" x2="175" y2="133" stroke="#CC0000" stroke-width="0.5" stroke-dasharray="3,2"/>
+
+  <!-- ===== AFTER ===== -->
+  <text x="200" y="202" text-anchor="middle" font-family="monospace" font-size="11" fill="#666">AFTER</text>
+
+  <rect x="10" y="210" width="380" height="110" fill="white" stroke="#999" stroke-width="1"/>
+
+  <!-- Ruled lines -->
+  <line x1="10" y1="250" x2="390" y2="250" stroke="#DDD" stroke-width="1"/>
+  <line x1="10" y1="295" x2="390" y2="295" stroke="#DDD" stroke-width="1"/>
+
+  <!-- Consolidated line 1 (unchanged) -->
+  <text x="25" y="240" font-family="cursive, 'Segoe Script', serif" font-size="16" fill="black" font-style="italic">The quick brown fox jumps over</text>
+
+  <!-- Line 2 is now empty (both synthetic + original strokes removed) -->
+  <!-- Just the ruled line remains -->
+
+  <!-- Label -->
+  <text x="200" y="280" text-anchor="middle" font-family="monospace" font-size="10" fill="#999">(line cleared - write here again)</text>
+
+  <!-- Explanation -->
+  <rect x="15" y="335" width="370" height="35" rx="4" fill="#FFF3E0" stroke="#FF9800" stroke-width="1"/>
+  <text x="200" y="350" text-anchor="middle" font-family="monospace" font-size="9" fill="#E65100">Scratch-out removes Hershey text AND original handwritten</text>
+  <text x="200" y="362" text-anchor="middle" font-family="monospace" font-size="9" fill="#E65100">strokes underneath. Undo restores both.</text>
+</svg>

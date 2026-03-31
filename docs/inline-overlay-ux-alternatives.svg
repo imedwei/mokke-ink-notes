@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 450" width="400" height="450">
+  <title>Phase 3: Recognition Alternatives Popup</title>
+
+  <!-- Background -->
+  <rect width="400" height="450" fill="white" stroke="#333" stroke-width="2"/>
+
+  <!-- Title -->
+  <text x="200" y="24" text-anchor="middle" font-family="monospace" font-size="13" font-weight="bold" fill="#333">PHASE 3: Alternatives Popup</text>
+
+  <!-- Canvas -->
+  <rect x="10" y="38" width="380" height="402" fill="white" stroke="#999" stroke-width="1"/>
+
+  <!-- Ruled lines -->
+  <line x1="10" y1="90" x2="390" y2="90" stroke="#DDD" stroke-width="1"/>
+  <line x1="10" y1="150" x2="390" y2="150" stroke="#DDD" stroke-width="1"/>
+  <line x1="10" y1="210" x2="390" y2="210" stroke="#DDD" stroke-width="1"/>
+  <line x1="10" y1="270" x2="390" y2="270" stroke="#DDD" stroke-width="1"/>
+  <line x1="10" y1="330" x2="390" y2="330" stroke="#DDD" stroke-width="1"/>
+  <line x1="10" y1="390" x2="390" y2="390" stroke="#DDD" stroke-width="1"/>
+
+  <!-- Consolidated line 1 -->
+  <text x="25" y="80" font-family="cursive, 'Segoe Script', serif" font-size="16" fill="black" font-style="italic">The quick brown fox jumps over</text>
+
+  <!-- Consolidated line 2 (tapped - showing popup) -->
+  <text x="25" y="140" font-family="cursive, 'Segoe Script', serif" font-size="16" fill="black" font-style="italic">the lazy dog. Today the weather</text>
+
+  <!-- Tap indicator -->
+  <circle cx="90" cy="135" r="12" fill="none" stroke="#2196F3" stroke-width="1.5" stroke-dasharray="3,2"/>
+  <text x="90" y="139" text-anchor="middle" font-family="monospace" font-size="8" fill="#2196F3">tap</text>
+
+  <!-- ===== POPUP ===== -->
+  <rect x="30" y="152" width="250" height="118" rx="4" fill="white" stroke="#333" stroke-width="2"/>
+
+  <!-- Popup title -->
+  <text x="45" y="170" font-family="monospace" font-size="10" font-weight="bold" fill="#333">Alternatives:</text>
+
+  <!-- Candidate rows -->
+  <!-- Selected (top candidate) -->
+  <rect x="38" y="178" width="234" height="24" rx="3" fill="#E3F2FD" stroke="#2196F3" stroke-width="1"/>
+  <text x="48" y="194" font-family="serif" font-size="13" fill="#1565C0">the lazy dog. Today the weather</text>
+  <text x="258" y="194" text-anchor="end" font-family="monospace" font-size="8" fill="#999">0.92</text>
+
+  <!-- Alternative 2 -->
+  <rect x="38" y="206" width="234" height="24" rx="3" fill="#FAFAFA" stroke="#DDD" stroke-width="1"/>
+  <text x="48" y="222" font-family="serif" font-size="13" fill="#333">the lazy dog. Today the whether</text>
+  <text x="258" y="222" text-anchor="end" font-family="monospace" font-size="8" fill="#999">0.78</text>
+
+  <!-- Alternative 3 -->
+  <rect x="38" y="234" width="234" height="24" rx="3" fill="#FAFAFA" stroke="#DDD" stroke-width="1"/>
+  <text x="48" y="250" font-family="serif" font-size="13" fill="#333">the lazy dig. Today the weather</text>
+  <text x="258" y="250" text-anchor="end" font-family="monospace" font-size="8" fill="#999">0.65</text>
+
+  <!-- Consolidated line 3 -->
+  <text x="25" y="200" font-family="cursive, 'Segoe Script', serif" font-size="16" fill="#CCC" font-style="italic">is pleasant and warm with a</text>
+
+  <!-- Active line -->
+  <path d="M25,285 Q45,278 65,288 Q82,295 100,282 Q118,272 140,285 Q155,294 172,280"
+        stroke="black" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+
+  <!-- Explanation -->
+  <rect x="15" y="398" width="370" height="38" rx="4" fill="#E3F2FD" stroke="#2196F3" stroke-width="1"/>
+  <text x="200" y="413" text-anchor="middle" font-family="monospace" font-size="9" fill="#1565C0">Tap consolidated text to see recognition alternatives.</text>
+  <text x="200" y="425" text-anchor="middle" font-family="monospace" font-size="9" fill="#1565C0">Scores from ML Kit / MyScript. Tap to select.</text>
+</svg>
