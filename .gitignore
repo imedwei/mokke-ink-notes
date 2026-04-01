@@ -1,4 +1,5 @@
 *.iml
+.mcp.json
 .gradle
 /local.properties
 /.idea
