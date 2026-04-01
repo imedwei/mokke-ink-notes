@@ -104,6 +104,8 @@ class HandwritingCanvasView @JvmOverloads constructor(
 
     /** Lines currently consolidated (derived from inlineTextOverlays for O(1) lookup). */
     private var consolidatedLineIndices: Set<Int> = emptySet()
+    /** Cached combined Path per consolidated line — avoids rebuilding on every scroll frame. */
+    private val consolidatedPathCache = mutableMapOf<Int, android.graphics.Path>()
 
     /** Column model reference for magnetic snap access. */
     var columnModel: ColumnModel? = null
@@ -1235,15 +1237,20 @@ class HandwritingCanvasView @JvmOverloads constructor(
             TOP_MARGIN + shiftFromLine * LINE_SPACING
         } else Float.MAX_VALUE
 
-        // Draw consolidated Hershey text strokes for consolidated lines
-        for ((_, state) in inlineTextOverlays) {
-            if (state.consolidated && !state.unConsolidated) {
-                for (synStroke in state.syntheticStrokes) {
-                    if (synStroke.maxY >= viewTop && synStroke.minY <= viewBottom) {
-                        drawStroke(canvas, synStroke)
-                    }
+        // Draw consolidated Hershey text — use cached combined Path per line
+        for ((lineIndex, state) in inlineTextOverlays) {
+            if (!state.consolidated || state.unConsolidated || state.syntheticStrokes.isEmpty()) continue
+            val lineTop = TOP_MARGIN + lineIndex * LINE_SPACING
+            val lineBottom = lineTop + LINE_SPACING * 1.5f  // include descenders
+            if (lineBottom < viewTop || lineTop > viewBottom) continue
+            val cachedPath = consolidatedPathCache.getOrPut(lineIndex) {
+                val path = android.graphics.Path()
+                for (stroke in state.syntheticStrokes) {
+                    CanvasTheme.appendStrokeToPath(path, stroke)
                 }
+                path
             }
+            canvas.drawPath(cachedPath, strokePaint)
         }
 
         // Word popup is now rendered as a separate Android View (wordPopup in activity_writing.xml)
@@ -1391,6 +1398,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
     fun updateInlineOverlays(overlays: Map<Int, InlineTextState>) {
         inlineTextOverlays = overlays
         consolidatedLineIndices = overlays.filter { it.value.consolidated && !it.value.unConsolidated }.keys
+        consolidatedPathCache.clear()  // rebuild paths for new overlays
     }
 
     private fun drawStroke(canvas: Canvas, stroke: InkStroke) {

@@ -45,6 +45,24 @@ object CanvasTheme {
      * Draw a stroke with quadratic-bezier smoothing.
      * [path] is a reusable Path to avoid allocation; it will be reset.
      */
+    /** Append a stroke's geometry to an existing Path without resetting it.
+     *  Used for combining multiple Hershey strokes into a single cached Path. */
+    fun appendStrokeToPath(path: Path, stroke: InkStroke) {
+        if (stroke.points.size < 2) return
+        val pts = stroke.points
+        val n = pts.size
+        path.moveTo(pts[0].x, pts[0].y)
+        // Hershey strokes are freehand — smooth bezier through midpoints
+        for (i in 1 until n) {
+            val prev = pts[i - 1]
+            val curr = pts[i]
+            val midX = (prev.x + curr.x) / 2f
+            val midY = (prev.y + curr.y) / 2f
+            path.quadTo(prev.x, prev.y, midX, midY)
+        }
+        path.lineTo(pts.last().x, pts.last().y)
+    }
+
     fun drawStroke(canvas: Canvas, stroke: InkStroke, path: Path, paint: Paint) {
         if (stroke.points.size < 2) return
         path.reset()

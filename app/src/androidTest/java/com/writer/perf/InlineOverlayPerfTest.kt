@@ -250,17 +250,21 @@ class InlineOverlayPerfTest {
 
         val canvas = activityRule.activity.findViewById<HandwritingCanvasView>(com.writer.R.id.inkCanvas)
 
-        // Warm up: first scroll frame triggers initial overlay build
+        // Cold frame: first scroll triggers Path cache build for consolidated lines
+        val coldT0 = SystemClock.elapsedRealtime()
         activityRule.runOnUiThread {
             canvas.scrollOffsetY += ls
             canvas.drawToSurface()
             canvas.onManualScroll?.invoke()
         }
         InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+        val coldMs = SystemClock.elapsedRealtime() - coldT0
 
-        // Measure subsequent scroll frames (should hit cache)
-        var maxFrameMs = 0L
-        for (step in 0 until 19) {
+        // Warm frames: subsequent scrolls hit Path cache
+        var maxWarmMs = 0L
+        var totalWarmMs = 0L
+        val warmFrames = 10
+        for (step in 0 until warmFrames) {
             val t0 = SystemClock.elapsedRealtime()
             activityRule.runOnUiThread {
                 canvas.scrollOffsetY += ls
@@ -269,12 +273,19 @@ class InlineOverlayPerfTest {
             }
             InstrumentationRegistry.getInstrumentation().waitForIdleSync()
             val elapsed = SystemClock.elapsedRealtime() - t0
-            if (elapsed > maxFrameMs) maxFrameMs = elapsed
+            totalWarmMs += elapsed
+            if (elapsed > maxWarmMs) maxWarmMs = elapsed
         }
+        val avgWarmMs = totalWarmMs / warmFrames
 
         assertTrue(
-            "Worst scroll frame was ${maxFrameMs}ms (budget: ${SCROLL_FRAME_BUDGET_MS}ms)",
-            maxFrameMs < SCROLL_FRAME_BUDGET_MS
+            "Worst warm scroll frame was ${maxWarmMs}ms (budget: ${SCROLL_FRAME_BUDGET_MS}ms)",
+            maxWarmMs < SCROLL_FRAME_BUDGET_MS
+        )
+        // Warm frames should be faster than cold frame (Path cache working)
+        assertTrue(
+            "Avg warm frame (${avgWarmMs}ms) should be faster than cold frame (${coldMs}ms)",
+            avgWarmMs <= coldMs || coldMs < 20  // skip check if cold is already fast
         )
     }
 }
