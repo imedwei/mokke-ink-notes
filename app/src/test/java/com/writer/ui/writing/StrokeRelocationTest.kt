@@ -153,15 +153,17 @@ class StrokeRelocationTest {
     }
 
     @Test
-    fun `replacement strokes moved to correct Y position`() {
+    fun `replacement strokes vertically centered on target line`() {
+        // Replacement stroke at Y=497-503 (center=500), target line center at Y=100
         val replacement = listOf(stroke(5, 300f, 400f, "r1"))
-        val targetY = tm + 0 * ls + ls * 0.5f
+        val srcCenterY = (replacement.minOf { it.minY } + replacement.maxOf { it.maxY }) / 2f
+        val targetCenterY = tm + 0 * ls + ls * 0.5f
 
-        val relocated = relocateToGap(replacement, 100f, 200f, targetY)
+        val relocated = relocateToGap(replacement, 100f, 200f, targetCenterY)
 
-        val relocMinY = relocated.minOf { it.minY }
-        assertTrue("Relocated Y should be near target line: $relocMinY vs $targetY",
-            kotlin.math.abs(relocMinY - (targetY - 3f)) < ls)
+        val relocCenterY = (relocated.minOf { it.minY } + relocated.maxOf { it.maxY }) / 2f
+        assertTrue("Relocated center Y should match target: $relocCenterY vs $targetCenterY",
+            kotlin.math.abs(relocCenterY - targetCenterY) < 5f)
     }
 
     @Test

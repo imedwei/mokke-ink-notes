@@ -431,20 +431,25 @@ class WritingCoordinator(
 
     /** Relocate strokes to fit within a gap, preserving relative positions.
      *  Caps horizontal stretch at 1.5x to avoid distortion. */
+    /** Relocate strokes to fit within a gap, preserving relative positions.
+     *  Aligns the vertical center of the replacement to the target line center.
+     *  Caps horizontal stretch at 1.5x to avoid distortion. */
     internal fun relocateToGap(
         strokes: List<InkStroke>,
         gapStartX: Float, gapEndX: Float,
-        targetLineY: Float
+        targetLineCenterY: Float
     ): List<InkStroke> {
         if (strokes.isEmpty()) return emptyList()
         val srcMinX = strokes.minOf { it.minX }
         val srcMaxX = strokes.maxOf { it.maxX }
         val srcMinY = strokes.minOf { it.minY }
+        val srcMaxY = strokes.maxOf { it.maxY }
+        val srcCenterY = (srcMinY + srcMaxY) / 2f
         val srcWidth = (srcMaxX - srcMinX).coerceAtLeast(1f)
         val gapWidth = (gapEndX - gapStartX).coerceAtLeast(1f)
         val scaleX = (gapWidth / srcWidth).coerceAtMost(1.5f)
         val dx = gapStartX - srcMinX * scaleX
-        val dy = targetLineY - srcMinY
+        val dy = targetLineCenterY - srcCenterY  // center-to-center alignment
         return strokes.map { s ->
             s.copy(points = s.points.map { p ->
                 p.copy(x = p.x * scaleX + dx, y = p.y + dy)
