@@ -313,11 +313,16 @@ class WritingCoordinator(
                                 Log.i(TAG, "EDIT: Split line $lineIdx: ${stay.size} stay + ${shifted.size} shifted to next line")
                             }
 
-                            // Replace the temporary strokes with relocated ones
+                            // Replace the temporary strokes with relocated ones.
+                            // Give relocated strokes NEW IDs so applyWordEdit's cleanup
+                            // (which removes replacementStrokeIds) doesn't remove them.
                             columnModel.activeStrokes.removeAll { it.strokeId in edit.replacementStrokeIds }
-                            columnModel.activeStrokes.addAll(relocated)
+                            val relocatedWithNewIds = relocated.map {
+                                it.copy(strokeId = java.util.UUID.randomUUID().toString())
+                            }
+                            columnModel.activeStrokes.addAll(relocatedWithNewIds)
                             inkCanvas.loadStrokes(columnModel.activeStrokes.toList())
-                            Log.i(TAG, "EDIT: Relocated ${relocated.size} strokes to gap [${edit.origStrokeStartX},${edit.origStrokeEndX}]")
+                            Log.i(TAG, "EDIT: Relocated ${relocatedWithNewIds.size} strokes to gap [${edit.origStrokeStartX},${edit.origStrokeEndX}]")
 
                             applyWordEdit(edit, newWord, lineIdx)
                         } else {

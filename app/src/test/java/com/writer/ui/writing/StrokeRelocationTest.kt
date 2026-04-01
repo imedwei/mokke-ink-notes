@@ -290,4 +290,68 @@ class StrokeRelocationTest {
         val relocated = relocateToGap(emptyList(), 100f, 200f, tm + ls * 0.5f)
         assertTrue(relocated.isEmpty())
     }
+
+    // ── Subproblem 4: Relocated strokes survive applyWordEdit cleanup ────
+
+    @Test
+    fun `relocated strokes with new IDs are not removed by replacement cleanup`() {
+        // This tests the bug: relocated strokes had the same IDs as the original
+        // replacement strokes. applyWordEdit removes all replacementStrokeIds,
+        // which deleted the just-relocated strokes.
+        //
+        // Fix: relocated strokes get new UUIDs.
+
+        val column = ColumnModel()
+
+        // Original replacement strokes (user wrote these, to be removed after edit)
+        val rep1 = stroke(5, 300f, 350f, "rep1")
+        val rep2 = stroke(5, 360f, 400f, "rep2")
+        column.activeStrokes.addAll(listOf(rep1, rep2))
+
+        val replacementStrokeIds = mutableSetOf("rep1", "rep2")
+
+        // Step 1: Remove originals and add relocated with NEW IDs
+        column.activeStrokes.removeAll { it.strokeId in replacementStrokeIds }
+        val relocated = relocateToGap(listOf(rep1, rep2), 100f, 200f, tm + ls * 0.5f)
+        val relocatedWithNewIds = relocated.map {
+            it.copy(strokeId = "relocated_${it.strokeId}")  // simulate UUID
+        }
+        column.activeStrokes.addAll(relocatedWithNewIds)
+
+        assertEquals("Should have 2 relocated strokes", 2, column.activeStrokes.size)
+
+        // Step 2: applyWordEdit cleanup — removes replacementStrokeIds
+        column.activeStrokes.removeAll { it.strokeId in replacementStrokeIds }
+
+        // Relocated strokes should SURVIVE because they have different IDs
+        assertEquals("Relocated strokes should survive cleanup", 2, column.activeStrokes.size)
+        assertTrue("Should contain relocated_rep1",
+            column.activeStrokes.any { it.strokeId == "relocated_rep1" })
+        assertTrue("Should contain relocated_rep2",
+            column.activeStrokes.any { it.strokeId == "relocated_rep2" })
+    }
+
+    @Test
+    fun `relocated strokes with SAME IDs would be removed by cleanup (regression)`() {
+        // This demonstrates the bug that existed before the fix.
+
+        val column = ColumnModel()
+        val rep1 = stroke(5, 300f, 350f, "rep1")
+        column.activeStrokes.add(rep1)
+
+        val replacementStrokeIds = mutableSetOf("rep1")
+
+        // Without new IDs: remove original and add relocated with SAME ID
+        column.activeStrokes.removeAll { it.strokeId in replacementStrokeIds }
+        val relocated = relocateToGap(listOf(rep1), 100f, 200f, tm + ls * 0.5f)
+        // Bug: keeping same ID
+        column.activeStrokes.addAll(relocated)
+
+        assertEquals("Should have 1 relocated stroke", 1, column.activeStrokes.size)
+
+        // Cleanup removes it because same ID!
+        column.activeStrokes.removeAll { it.strokeId in replacementStrokeIds }
+
+        assertEquals("Bug: relocated stroke removed because same ID", 0, column.activeStrokes.size)
+    }
 }
