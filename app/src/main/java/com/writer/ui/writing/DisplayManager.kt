@@ -91,7 +91,7 @@ class DisplayManager(
     private var cachedOverlayLineIndex = -1
     /** Cache of generated Hershey strokes keyed by (lineIndex, displayText).
      *  Limited to 20 entries to prevent unbounded memory growth. */
-    private val hersheyStrokeCache = object : LinkedHashMap<Pair<Int, String>, List<InkStroke>>(20, 0.75f, true) {
+    internal val hersheyStrokeCache = object : LinkedHashMap<Pair<Int, String>, List<InkStroke>>(20, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Pair<Int, String>, List<InkStroke>>?) = size > 20
     }
     /** Cache of word-wrap results keyed by (fullText, maxWidthUnits). */

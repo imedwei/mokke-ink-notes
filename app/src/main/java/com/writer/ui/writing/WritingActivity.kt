@@ -512,16 +512,20 @@ class WritingActivity : AppCompatActivity() {
         for ((i, candidate) in candidates.take(5).withIndex()) {
             layout.getChildAt(i).setOnClickListener {
                 coordinator?.let { coord ->
-                    // Replace the tapped word in all original line cache entries
-                    for ((idx, cached) in coord.lineTextCache.toMap()) {
-                        if (cached.contains(currentWord)) {
-                            coord.lineTextCache[idx] = cached.replace(currentWord, candidate.text)
-                        }
+                    // Replace only the first whole-word match in the tapped line
+                    val cachedText = coord.lineTextCache[lineIndex]
+                    if (cachedText != null) {
+                        val words = cachedText.split(" ").toMutableList()
+                        val idx = words.indexOf(currentWord)
+                        if (idx >= 0) words[idx] = candidate.text
+                        coord.lineTextCache[lineIndex] = words.joinToString(" ")
                     }
                     coord.displayManager.let { dm ->
                         dm.lastOverlayHash = 0
+                        dm.hersheyStrokeCache.clear()  // clear stale Hershey strokes for changed text
                         dm.updateInlineOverlays(coord.currentLineIndex)
                     }
+                    inkCanvas.drawToSurface()  // render before popup dismisses
                 }
                 popup.dismiss()
             }
