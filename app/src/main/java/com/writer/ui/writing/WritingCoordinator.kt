@@ -349,13 +349,11 @@ class WritingCoordinator(
     internal fun findStrokesForWord(origLineIdx: Int, wordIndex: Int): List<InkStroke> {
         val lineStrokes = lineSegmenter.getStrokesForLine(columnModel.activeStrokes, origLineIdx)
             .sortedBy { it.minX }
-        if (lineStrokes.size < 2) return lineStrokes
-
         // How many words are on this line?
         val lineText = lineTextCache[origLineIdx] ?: return lineStrokes
         val expectedWords = lineText.split(" ").size
-        if (expectedWords <= 1) return lineStrokes
         if (wordIndex >= expectedWords) return emptyList()
+        if (lineStrokes.size < 2 || expectedWords <= 1) return lineStrokes
 
         // Compute all inter-stroke gaps with their positions
         data class Gap(val index: Int, val size: Float)
