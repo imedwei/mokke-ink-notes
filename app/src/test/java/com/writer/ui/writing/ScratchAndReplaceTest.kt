@@ -139,7 +139,6 @@ class ScratchAndReplaceTest {
 
     @Test
     fun `original strokes for a word can be identified by line and X position`() {
-        // Get all strokes on line 0
         val line0Strokes = lineSegmenter.getStrokesForLine(column.activeStrokes, 0)
         assertEquals("Line 0 should have strokes for 3 words (the=3, quick=5, brown=5)", 13, line0Strokes.size)
 
@@ -155,19 +154,134 @@ class ScratchAndReplaceTest {
     fun `identifying strokes does not include adjacent words`() {
         val line0Strokes = lineSegmenter.getStrokesForLine(column.activeStrokes, 0)
 
-        // "the" strokes are at X range 10-80
         val theStrokes = line0Strokes.filter { stroke ->
             val cx = (stroke.minX + stroke.maxX) / 2f
             cx >= 5f && cx <= 85f
         }
         assertEquals("Should find 3 strokes for 'the'", 3, theStrokes.size)
 
-        // "brown" strokes are at X range 210-320
         val brownStrokes = line0Strokes.filter { stroke ->
             val cx = (stroke.minX + stroke.maxX) / 2f
             cx >= 205f && cx <= 325f
         }
         assertEquals("Should find 5 strokes for 'brown'", 5, brownStrokes.size)
+    }
+
+    @Test
+    fun `after reflow Hershey X does not map to original stroke X`() {
+        // This test exposes the bug: after paragraph reflow, the Hershey word
+        // positions don't correspond to the original handwriting positions.
+        //
+        // Original handwriting:
+        //   Line 0: "the quick brown"  — "quick" at X=90-200
+        //   Line 1: "fox jumps over"   — "jumps" at X=80-180
+        //
+        // After reflow into Hershey text, the paragraph "the quick brown fox
+        // jumps over" is word-wrapped to fill the line width. The Hershey word
+        // positions are computed from character widths, not from original stroke
+        // positions. So "quick" in Hershey might be at X=150-300 while the
+        // original strokes are at X=90-200.
+        //
+        // The X-ratio mapping used by onScratchOut:
+        //   approxWordStartX = origMinX + (hersheyWordX - margin) * (origWidth / hersheyWidth)
+        // This is wrong because reflow changes the text on each line.
+
+        // Simulate the mapping that onScratchOut does
+        val margin = ScreenMetrics.dp(10f)
+        val canvasWidth = 824f  // Palma 2 Pro width
+        val hersheyLineWidth = canvasWidth - margin * 2
+
+        // Original line 0 strokes
+        val origLineStrokes = lineSegmenter.getStrokesForLine(column.activeStrokes, 0)
+        val origLineMinX = origLineStrokes.minOf { it.minX }
+        val origLineMaxX = origLineStrokes.maxOf { it.maxX }
+        val origLineWidth = origLineMaxX - origLineMinX
+
+        // After reflow, "quick" might be at Hershey position X=200-350
+        // (different from original X=90-200 because reflow added words before it)
+        val hersheyWordStartX = 200f
+        val hersheyWordEndX = 350f
+        val radius = ScreenMetrics.dp(16f)
+
+        // The broken mapping:
+        val xRatio = origLineWidth / hersheyLineWidth
+        val approxWordStartX = origLineMinX + (hersheyWordStartX - margin) * xRatio
+        val approxWordEndX = origLineMinX + (hersheyWordEndX - margin) * xRatio
+
+        // Find strokes using the broken mapping
+        val foundStrokes = origLineStrokes.filter { stroke ->
+            val cx = (stroke.minX + stroke.maxX) / 2f
+            cx >= approxWordStartX - radius && cx <= approxWordEndX + radius
+        }
+
+        // The broken mapping finds WRONG strokes — it maps to a different
+        // X range than where "quick" actually is (90-200).
+        // This is the bug: we need a better way to identify which original
+        // strokes correspond to a word after reflow.
+        val quickStrokes = origLineStrokes.filter { stroke ->
+            val cx = (stroke.minX + stroke.maxX) / 2f
+            cx >= 85f && cx <= 205f
+        }
+
+        // The found strokes should match the quick strokes, but they DON'T
+        // because the X mapping is broken after reflow.
+        assertNotEquals(
+            "X-ratio mapping should NOT correctly find 'quick' strokes after reflow " +
+                "(found ${foundStrokes.size} strokes at X=[${approxWordStartX.toInt()},${approxWordEndX.toInt()}] " +
+                "but 'quick' is at X=[90,200])",
+            quickStrokes.map { it.strokeId }.toSet(),
+            foundStrokes.map { it.strokeId }.toSet()
+        )
+    }
+
+    @Test
+    fun `word index based stroke identification works after reflow`() {
+        // The correct approach: use the word INDEX to find which strokes
+        // belong to the scratched word, by counting words on the ORIGINAL
+        // line (before reflow) and finding the Nth word's strokes.
+        //
+        // Original line 0: "the quick brown"
+        // Word index 1 = "quick"
+        // The strokes for "quick" are the ones between "the" and "brown"
+        // in X-sorted order on the original line.
+
+        val origLineStrokes = lineSegmenter.getStrokesForLine(column.activeStrokes, 0)
+            .sortedBy { it.minX }
+
+        val origText = textCache[0]!!  // "the quick brown"
+        val origWords = origText.split(" ")
+        val targetWordIdx = 1  // "quick"
+
+        // Group strokes into words by finding gaps in X positions
+        val wordGroups = mutableListOf<MutableList<InkStroke>>()
+        var currentGroup = mutableListOf<InkStroke>()
+        val GAP_THRESHOLD = 5f  // gap between words (10px) is larger than between letters (~2px)
+
+        for ((i, stroke) in origLineStrokes.withIndex()) {
+            if (i > 0) {
+                val prevMaxX = origLineStrokes[i - 1].maxX
+                val gap = stroke.minX - prevMaxX
+                if (gap > GAP_THRESHOLD) {
+                    wordGroups.add(currentGroup)
+                    currentGroup = mutableListOf()
+                }
+            }
+            currentGroup.add(stroke)
+        }
+        if (currentGroup.isNotEmpty()) wordGroups.add(currentGroup)
+
+        // Verify we found the right number of word groups
+        assertEquals("Should find ${origWords.size} word groups", origWords.size, wordGroups.size)
+
+        // The strokes at targetWordIdx should be the "quick" strokes
+        val targetStrokes = wordGroups[targetWordIdx]
+        assertEquals("Word group for 'quick' should have 5 strokes", 5, targetStrokes.size)
+
+        // Verify they're actually at the right X range
+        val targetMinX = targetStrokes.minOf { it.minX }
+        val targetMaxX = targetStrokes.maxOf { it.maxX }
+        assertTrue("'quick' strokes should start near X=90: $targetMinX", targetMinX >= 85f && targetMinX <= 95f)
+        assertTrue("'quick' strokes should end near X=200: $targetMaxX", targetMaxX >= 195f && targetMaxX <= 205f)
     }
 
     // ── Subproblem 3: Replacement strokes relocated to original position ─
