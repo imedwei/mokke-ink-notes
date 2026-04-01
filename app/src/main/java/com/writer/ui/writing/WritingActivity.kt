@@ -1513,6 +1513,12 @@ popupView.findViewById<android.view.View>(R.id.menuTutorial).setOnClickListener 
 
     override fun onStop() {
         super.onStop()
+        // Dismiss popups and clear hidden strokes to prevent stale state
+        wordPopupWindow?.dismiss()
+        wordPopupWindow = null
+        alternativesPopup?.dismiss()
+        alternativesPopup = null
+        inkCanvas.hiddenStrokeIds = emptySet()
         orientationManager.stop()
         snapshotAndSaveBlocking()
     }
