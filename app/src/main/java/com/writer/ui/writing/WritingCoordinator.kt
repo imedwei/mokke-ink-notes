@@ -289,24 +289,34 @@ class WritingCoordinator(
                         Log.i(TAG, "EDIT: Recognition result: '$newWord'")
 
                         if (newWord.isNotBlank() && newWord != "[?]") {
-                            // Relocate replacement strokes to the gap position
-                            val targetY = edit.origLineY + HandwritingCanvasView.LINE_SPACING * 0.5f
+                            // Compute baseline from surrounding strokes on the original line
+                            val origLineStrokes = lineSegmenter.getStrokesForLine(
+                                columnModel.activeStrokes, lineIdx
+                            ).filter { it.strokeId !in edit.replacementStrokeIds }
+                            val targetCenterY = edit.origLineY + HandwritingCanvasView.LINE_SPACING * 0.5f
+                            val targetBaselineY = if (origLineStrokes.isNotEmpty()) {
+                                // 75th percentile Y of surrounding strokes = baseline
+                                val allYs = origLineStrokes.flatMap { s -> s.points.map { it.y } }.sorted()
+                                allYs[(allYs.size * 0.75f).toInt().coerceAtMost(allYs.size - 1)]
+                            } else null
+
                             val relocated = relocateToGap(
-                                replacementStrokes, edit.origStrokeStartX, edit.origStrokeEndX, targetY
+                                replacementStrokes, edit.origStrokeStartX, edit.origStrokeEndX,
+                                targetCenterY, targetBaselineY
                             )
 
                             if (!fitsInGap(relocated, edit.origStrokeStartX, edit.origStrokeEndX)) {
                                 // Overflow: split the line — shift words after gap down
-                                val origLineStrokes = lineSegmenter.getStrokesForLine(
+                                val overflowLineStrokes = lineSegmenter.getStrokesForLine(
                                     columnModel.activeStrokes, lineIdx
                                 ).filter { it.strokeId !in edit.replacementStrokeIds }
                                 val origText = lineTextCache[lineIdx] ?: ""
                                 val expectedWords = origText.split(" ").size
                                 val (stay, shifted) = splitLineForOverflow(
-                                    origLineStrokes, edit.origWordIndex, expectedWords
+                                    overflowLineStrokes, edit.origWordIndex, expectedWords
                                 )
                                 // Remove original strokes and re-add split versions
-                                val origIds = origLineStrokes.map { it.strokeId }.toSet()
+                                val origIds = overflowLineStrokes.map { it.strokeId }.toSet()
                                 columnModel.activeStrokes.removeAll { it.strokeId in origIds }
                                 columnModel.activeStrokes.addAll(stay)
                                 columnModel.activeStrokes.addAll(shifted)
@@ -432,24 +442,38 @@ class WritingCoordinator(
     /** Relocate strokes to fit within a gap, preserving relative positions.
      *  Caps horizontal stretch at 1.5x to avoid distortion. */
     /** Relocate strokes to fit within a gap, preserving relative positions.
-     *  Aligns the vertical center of the replacement to the target line center.
-     *  Caps horizontal stretch at 1.5x to avoid distortion. */
+     *  Aligns the baseline (bottom of main body) of the replacement to the
+     *  target baseline. Caps horizontal stretch at 1.5x to avoid distortion.
+     *
+     *  @param targetBaselineY the Y coordinate of the writing baseline on the target line.
+     *         If null, falls back to center-to-center alignment using targetLineCenterY. */
     internal fun relocateToGap(
         strokes: List<InkStroke>,
         gapStartX: Float, gapEndX: Float,
-        targetLineCenterY: Float
+        targetLineCenterY: Float,
+        targetBaselineY: Float? = null
     ): List<InkStroke> {
         if (strokes.isEmpty()) return emptyList()
         val srcMinX = strokes.minOf { it.minX }
         val srcMaxX = strokes.maxOf { it.maxX }
-        val srcMinY = strokes.minOf { it.minY }
-        val srcMaxY = strokes.maxOf { it.maxY }
-        val srcCenterY = (srcMinY + srcMaxY) / 2f
         val srcWidth = (srcMaxX - srcMinX).coerceAtLeast(1f)
         val gapWidth = (gapEndX - gapStartX).coerceAtLeast(1f)
         val scaleX = (gapWidth / srcWidth).coerceAtMost(1.5f)
         val dx = gapStartX - srcMinX * scaleX
-        val dy = targetLineCenterY - srcCenterY  // center-to-center alignment
+
+        // Compute baseline alignment:
+        // The "baseline" of handwriting is the bottom of the main letter body.
+        // Use the 75th percentile of all Y values as the baseline proxy —
+        // this captures the bottom of most letters while ignoring descenders.
+        val dy = if (targetBaselineY != null) {
+            val allYs = strokes.flatMap { s -> s.points.map { it.y } }.sorted()
+            val srcBaseline = if (allYs.isNotEmpty()) allYs[(allYs.size * 0.75f).toInt().coerceAtMost(allYs.size - 1)] else targetLineCenterY
+            targetBaselineY - srcBaseline
+        } else {
+            val srcMinY = strokes.minOf { it.minY }
+            val srcMaxY = strokes.maxOf { it.maxY }
+            targetLineCenterY - (srcMinY + srcMaxY) / 2f
+        }
         return strokes.map { s ->
             s.copy(points = s.points.map { p ->
                 p.copy(x = p.x * scaleX + dx, y = p.y + dy)
