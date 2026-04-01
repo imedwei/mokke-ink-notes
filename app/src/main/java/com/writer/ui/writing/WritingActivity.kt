@@ -479,11 +479,12 @@ class WritingActivity : AppCompatActivity() {
         }
 
         for (candidate in candidates.take(5)) {
+            val isSelected = candidate.text == currentWord
             val row = TextView(this).apply {
                 text = candidate.text
                 textSize = 18f
                 setTextColor(android.graphics.Color.BLACK)
-                if (candidate.text == currentWord) {
+                if (isSelected) {
                     setTypeface(null, android.graphics.Typeface.BOLD)
                 }
                 setPadding(

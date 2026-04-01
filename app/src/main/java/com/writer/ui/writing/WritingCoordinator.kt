@@ -192,30 +192,51 @@ class WritingCoordinator(
 
             val tappedWord = words[tappedWordIndex]
 
-            // Find word-level candidates from recognition results for this word
-            val wordCandidates = mutableListOf(
-                com.writer.recognition.RecognitionCandidate(tappedWord, null)
-            )
+            // Find word-level candidates from recognition results.
+            // Always include the original top-pick word so the user can revert.
+            val wordCandidates = mutableListOf<com.writer.recognition.RecognitionCandidate>()
+            var originalWord: String? = null
 
-            // Search ALL recognition results for word alternatives at this word position.
-            // After reflow, the tapped word might come from any original line.
+            // Search recognition results for lines that contain this word position
             for ((_, result) in recognitionManager.lineRecognitionResults) {
+                val topWords = result.text.split(" ")
+                if (tappedWordIndex >= topWords.size) continue
+
+                // Match if the original top word OR current tapped word is at this position
+                val topWord = topWords[tappedWordIndex]
+                if (topWord != tappedWord && tappedWord != topWord) {
+                    // Check if any candidate has the tapped word at this position
+                    val hasMatch = result.candidates.any { c ->
+                        val cw = c.text.split(" ")
+                        tappedWordIndex < cw.size && cw[tappedWordIndex] == tappedWord
+                    }
+                    if (!hasMatch) continue
+                }
+
+                originalWord = topWord
+
+                // Collect all unique alternatives at this word position
                 for (candidate in result.candidates) {
-                    val candidateWords = candidate.text.split(" ")
-                    // Check if this candidate has a word at the same position that differs
-                    for (word in candidateWords) {
-                        if (word != tappedWord && word.isNotBlank()
-                            && wordCandidates.none { it.text == word }
-                            // Only include words that look similar (share first letter or close length)
-                            && (word.first().equals(tappedWord.first(), ignoreCase = true)
-                                || kotlin.math.abs(word.length - tappedWord.length) <= 2)
-                        ) {
-                            wordCandidates.add(com.writer.recognition.RecognitionCandidate(word, candidate.score))
-                            if (wordCandidates.size >= 5) break
+                    val candWords = candidate.text.split(" ")
+                    if (tappedWordIndex < candWords.size) {
+                        val alt = candWords[tappedWordIndex]
+                        if (alt.isNotBlank() && wordCandidates.none { it.text == alt }) {
+                            wordCandidates.add(com.writer.recognition.RecognitionCandidate(alt, null))
                         }
                     }
+                    if (wordCandidates.size >= 6) break
                 }
-                if (wordCandidates.size >= 5) break
+                break
+            }
+
+            // If no recognition results found, just show the tapped word
+            if (wordCandidates.isEmpty()) {
+                wordCandidates.add(com.writer.recognition.RecognitionCandidate(tappedWord, null))
+            }
+
+            // Ensure the currently displayed word is in the list
+            if (wordCandidates.none { it.text == tappedWord }) {
+                wordCandidates.add(0, com.writer.recognition.RecognitionCandidate(tappedWord, null))
             }
 
             val lineTop = HandwritingCanvasView.TOP_MARGIN + lineIndex * HandwritingCanvasView.LINE_SPACING

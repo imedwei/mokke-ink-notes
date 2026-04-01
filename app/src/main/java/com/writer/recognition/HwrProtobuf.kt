@@ -134,8 +134,18 @@ object HwrProtobuf {
 
     /**
      * Parse the JSON result with full candidate extraction.
-     * Attempts to find candidates in the MyScript JSON response.
-     * Falls back to single candidate from the "label" field.
+     *
+     * MyScript returns word-level candidates in the `words` array:
+     * ```json
+     * {"result":{"label":"Writing some","words":[
+     *   {"label":"Writing","candidates":["Writing","writing","Writig"]},
+     *   {"label":"some","candidates":["some","sove","Jone"]}
+     * ]}}
+     * ```
+     *
+     * We build line-level candidates by substituting each word's alternatives
+     * one at a time (not combinatorial). This gives candidates like:
+     * ["Writing some", "writing some", "Writig some", "Writing sove", ...]
      */
     fun parseHwrResultWithCandidates(json: String): RecognitionResult {
         return try {
@@ -144,27 +154,51 @@ object HwrProtobuf {
 
             val result = obj.optJSONObject("result")
             val label = result?.optString("label", "") ?: obj.optString("label", "")
+            if (label.isEmpty()) return RecognitionResult(emptyList())
 
-            // Try to extract candidates array from MyScript response
-            val candidatesArray = result?.optJSONArray("candidates")
-                ?: obj.optJSONArray("candidates")
-            if (candidatesArray != null) {
-                val candidates = (0 until candidatesArray.length()).map { i ->
-                    val c = candidatesArray.getJSONObject(i)
-                    RecognitionCandidate(
-                        text = c.optString("label", "").trim(),
-                        score = if (c.has("score")) c.getDouble("score").toFloat() else null
+            // Extract per-word candidates from MyScript words array
+            val wordsArray = result?.optJSONArray("words")
+            if (wordsArray != null && wordsArray.length() > 0) {
+                val wordLabels = mutableListOf<String>()
+                val wordCandidates = mutableListOf<List<String>>()
+
+                for (i in 0 until wordsArray.length()) {
+                    val wordObj = wordsArray.getJSONObject(i)
+                    val wordLabel = wordObj.optString("label", "").trim()
+                    if (wordLabel.isEmpty() || wordLabel == " ") continue
+                    wordLabels.add(wordLabel)
+
+                    val candArray = wordObj.optJSONArray("candidates")
+                    val cands = if (candArray != null) {
+                        (0 until candArray.length()).map { candArray.getString(it).trim() }
+                            .filter { it.isNotEmpty() }
+                    } else listOf(wordLabel)
+                    wordCandidates.add(cands)
+                }
+
+                if (wordLabels.isNotEmpty()) {
+                    // Build line-level candidates by substituting one word at a time
+                    val candidates = mutableListOf(
+                        RecognitionCandidate(label.trim(), null)
                     )
-                }.filter { it.text.isNotEmpty() }
-                if (candidates.isNotEmpty()) return RecognitionResult(candidates)
+                    for ((wordIdx, cands) in wordCandidates.withIndex()) {
+                        for (alt in cands.drop(1).take(3)) {  // skip first (=label), take up to 3 alts
+                            val altWords = wordLabels.toMutableList()
+                            altWords[wordIdx] = alt
+                            val altText = altWords.joinToString(" ")
+                            if (candidates.none { it.text == altText }) {
+                                candidates.add(RecognitionCandidate(altText, null))
+                            }
+                            if (candidates.size >= 8) break
+                        }
+                        if (candidates.size >= 8) break
+                    }
+                    return RecognitionResult(candidates)
+                }
             }
 
             // Fallback: single candidate from label
-            if (label.isNotEmpty()) {
-                RecognitionResult(listOf(RecognitionCandidate(label.trim(), null)))
-            } else {
-                RecognitionResult(emptyList())
-            }
+            RecognitionResult(listOf(RecognitionCandidate(label.trim(), null)))
         } catch (e: Exception) {
             Log.w("HwrProtobuf", "Failed to parse HWR result: ${e.message}")
             RecognitionResult(emptyList())
