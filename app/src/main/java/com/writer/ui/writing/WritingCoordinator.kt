@@ -289,6 +289,36 @@ class WritingCoordinator(
                         Log.i(TAG, "EDIT: Recognition result: '$newWord'")
 
                         if (newWord.isNotBlank() && newWord != "[?]") {
+                            // Relocate replacement strokes to the gap position
+                            val targetY = edit.origLineY + HandwritingCanvasView.LINE_SPACING * 0.5f
+                            val relocated = relocateToGap(
+                                replacementStrokes, edit.origStrokeStartX, edit.origStrokeEndX, targetY
+                            )
+
+                            if (!fitsInGap(relocated, edit.origStrokeStartX, edit.origStrokeEndX)) {
+                                // Overflow: split the line — shift words after gap down
+                                val origLineStrokes = lineSegmenter.getStrokesForLine(
+                                    columnModel.activeStrokes, lineIdx
+                                ).filter { it.strokeId !in edit.replacementStrokeIds }
+                                val origText = lineTextCache[lineIdx] ?: ""
+                                val expectedWords = origText.split(" ").size
+                                val (stay, shifted) = splitLineForOverflow(
+                                    origLineStrokes, edit.origWordIndex, expectedWords
+                                )
+                                // Remove original strokes and re-add split versions
+                                val origIds = origLineStrokes.map { it.strokeId }.toSet()
+                                columnModel.activeStrokes.removeAll { it.strokeId in origIds }
+                                columnModel.activeStrokes.addAll(stay)
+                                columnModel.activeStrokes.addAll(shifted)
+                                Log.i(TAG, "EDIT: Split line $lineIdx: ${stay.size} stay + ${shifted.size} shifted to next line")
+                            }
+
+                            // Replace the temporary strokes with relocated ones
+                            columnModel.activeStrokes.removeAll { it.strokeId in edit.replacementStrokeIds }
+                            columnModel.activeStrokes.addAll(relocated)
+                            inkCanvas.loadStrokes(columnModel.activeStrokes.toList())
+                            Log.i(TAG, "EDIT: Relocated ${relocated.size} strokes to gap [${edit.origStrokeStartX},${edit.origStrokeEndX}]")
+
                             applyWordEdit(edit, newWord, lineIdx)
                         } else {
                             Log.w(TAG, "EDIT: Recognition failed or empty, not applying edit")
@@ -380,6 +410,63 @@ class WritingCoordinator(
 
         Log.d(TAG, "findStrokesForWord: line=$origLineIdx, ${lineStrokes.size} strokes → ${wordGroups.size} word groups (expected=$expectedWords, boundaries=$wordBoundaries)")
         return if (wordIndex in wordGroups.indices) wordGroups[wordIndex] else emptyList()
+    }
+
+    /** Relocate strokes to fit within a gap, preserving relative positions.
+     *  Caps horizontal stretch at 1.5x to avoid distortion. */
+    internal fun relocateToGap(
+        strokes: List<InkStroke>,
+        gapStartX: Float, gapEndX: Float,
+        targetLineY: Float
+    ): List<InkStroke> {
+        if (strokes.isEmpty()) return emptyList()
+        val srcMinX = strokes.minOf { it.minX }
+        val srcMaxX = strokes.maxOf { it.maxX }
+        val srcMinY = strokes.minOf { it.minY }
+        val srcWidth = (srcMaxX - srcMinX).coerceAtLeast(1f)
+        val gapWidth = (gapEndX - gapStartX).coerceAtLeast(1f)
+        val scaleX = (gapWidth / srcWidth).coerceAtMost(1.5f)
+        val dx = gapStartX - srcMinX * scaleX
+        val dy = targetLineY - srcMinY
+        return strokes.map { s ->
+            s.copy(points = s.points.map { p ->
+                p.copy(x = p.x * scaleX + dx, y = p.y + dy)
+            })
+        }
+    }
+
+    /** Check if replacement strokes fit within the gap (with 10% tolerance). */
+    internal fun fitsInGap(strokes: List<InkStroke>, gapStartX: Float, gapEndX: Float): Boolean {
+        if (strokes.isEmpty()) return true
+        val width = strokes.maxOf { it.maxX } - strokes.minOf { it.minX }
+        return width <= (gapEndX - gapStartX) * 1.1f
+    }
+
+    /** Split a line's strokes to make room for overflow. Words after the gap
+     *  are shifted down by one line spacing. Returns (stayOnLine, movedToNextLine). */
+    internal fun splitLineForOverflow(
+        lineStrokes: List<InkStroke>,
+        gapWordIndex: Int,
+        expectedWords: Int
+    ): Pair<List<InkStroke>, List<InkStroke>> {
+        if (lineStrokes.isEmpty() || expectedWords <= 1) return lineStrokes to emptyList()
+        val sorted = lineStrokes.sortedBy { it.minX }
+
+        data class Gap(val index: Int, val size: Float)
+        val gaps = (1 until sorted.size).map { Gap(it, sorted[it].minX - sorted[it - 1].maxX) }
+        val boundaries = gaps.sortedByDescending { it.size }
+            .take(expectedWords - 1)
+            .map { it.index }
+            .sorted()
+
+        val splitBoundary = if (gapWordIndex < boundaries.size) boundaries[gapWordIndex] else sorted.size
+        val before = sorted.subList(0, splitBoundary)
+        val after = sorted.subList(splitBoundary, sorted.size).map { s ->
+            s.copy(points = s.points.map { p ->
+                p.copy(y = p.y + HandwritingCanvasView.LINE_SPACING)
+            })
+        }
+        return before to after
     }
 
     /** Apply a pending word edit: replace the old word with the new one in lineTextCache. */
