@@ -418,10 +418,9 @@ class WritingCoordinator(
 
         pendingWordEdit = null
         inkCanvas.hiddenStrokeIds = emptySet()
-        // Advance currentLineIndex past the edit line so it re-consolidates
-        if (currentLineIndex <= edit.lineIndex) {
-            currentLineIndex = edit.lineIndex + 1
-        }
+        // Restore currentLineIndex to after all written content so the
+        // entire document re-consolidates, not just the edit line.
+        currentLineIndex = highestLineIndex + 1
 
         // Force full overlay + path cache rebuild and e-ink refresh
         displayManager.lastOverlayHash = 0

@@ -622,6 +622,37 @@ class ScratchAndReplaceTest {
         assertFalse("Should not contain 'jumps'", after.values.any { it.recognizedText.contains("jumps") })
     }
 
+    @Test
+    fun `after word edit entire document re-consolidates not just edit line`() {
+        val host = dm.host as TestHost
+        host.currentLine = 3  // user was writing on line 3
+
+        // Verify all lines 0-2 start consolidated
+        dm.lastOverlayHash = 0
+        val initial = dm.buildInlineOverlays(3)
+        for (line in 0 until 3) {
+            assertTrue("Line $line should start consolidated", initial[line]?.consolidated == true)
+        }
+
+        // Simulate scratch-replace on line 0: "quick" → "fast"
+        textCache[0] = "the fast brown"
+
+        // Simulate what applyWordEdit does: set currentLineIndex = highestLineIndex + 1
+        host.highestLine = 2
+        host.currentLine = host.highestLine + 1  // = 3
+
+        dm.lastOverlayHash = 0
+        val after = dm.buildInlineOverlays(host.currentLine)
+
+        // ALL lines 0-2 should be consolidated, not just line 0
+        for (line in 0 until 3) {
+            assertTrue("Line $line should be consolidated after edit (currentLine=${host.currentLine})",
+                after[line]?.consolidated == true)
+        }
+        assertTrue("Line 0 should contain 'fast'",
+            after.values.any { it.recognizedText.contains("fast") })
+    }
+
     // ── Test host ────────────────────────────────────────────────────────
 
     private inner class TestHost(
@@ -651,7 +682,8 @@ class ScratchAndReplaceTest {
                 stubHost, kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Unconfined))
         }
         override val lineTextCache: Map<Int, String> get() = cache
-        override val highestLineIndex get() = 2
+        var highestLine = 2
+        override val highestLineIndex get() = highestLine
         var currentLine = 3
         override val currentLineIndex get() = currentLine
         override val lineRecognitionResults: Map<Int, RecognitionResult> = emptyMap()
