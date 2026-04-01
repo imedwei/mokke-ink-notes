@@ -11,8 +11,12 @@ class WriterApplication : Application() {
         super.onCreate()
         ScreenMetrics.init(resources.displayMetrics, resources.configuration)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            HiddenApiBypass.addHiddenApiExemptions("")
-            Log.i("WriterApplication", "Hidden API bypass applied")
+            try {
+                HiddenApiBypass.addHiddenApiExemptions("")
+                Log.i("WriterApplication", "Hidden API bypass applied")
+            } catch (e: Throwable) {
+                Log.w("WriterApplication", "Hidden API bypass not available: ${e.message}")
+            }
         }
     }
 }

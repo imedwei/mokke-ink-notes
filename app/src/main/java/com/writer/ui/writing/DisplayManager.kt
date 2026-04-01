@@ -228,12 +228,13 @@ class DisplayManager(
         val tm = HandwritingCanvasView.TOP_MARGIN
         val bufferLines = 3  // extra lines above/below viewport
         val minVisibleLine = ((viewTop - tm) / ls - bufferLines).toInt().coerceAtLeast(0)
-        val maxVisibleLine = ((viewBottom - tm) / ls + bufferLines).toInt()
+        // When canvas height is 0 (tests, pre-layout), process all lines
+        val maxVisibleLine = if (inkCanvas.height > 0) ((viewBottom - tm) / ls + bufferLines).toInt() else Int.MAX_VALUE
 
         // Collect lines to consolidate — only within visible range
         val consolidateLines = ArrayList<Map.Entry<Int, String>>()
-        if (font != null) {
-            ensureHersheyMetrics()
+        if (font != null) ensureHersheyMetrics()
+        run {
             for (entry in host.lineTextCache) {
                 val lineIdx = entry.key
                 val text = entry.value
@@ -243,7 +244,7 @@ class DisplayManager(
                 consolidateLines.add(entry)
             }
             consolidateLines.sortBy { it.key }
-        }
+        }  // end run block
 
         // Group consecutive lines into paragraphs (break on gaps or diagram lines)
         val paragraphs = ArrayList<ArrayList<Map.Entry<Int, String>>>()
@@ -262,9 +263,18 @@ class DisplayManager(
         }
         if (currentGroup.isNotEmpty()) paragraphs.add(currentGroup)
 
-        // For each paragraph, concatenate text and word-wrap
+        // For each paragraph, concatenate text and word-wrap (or just mark consolidated if no font)
         for (paragraph in paragraphs) {
-            if (font == null) break
+            if (font == null) {
+                // No font — mark all lines consolidated with empty strokes
+                for (entry in paragraph) {
+                    overlays[entry.key] = InlineTextState(
+                        lineIndex = entry.key, recognizedText = entry.value,
+                        consolidated = true
+                    )
+                }
+                continue
+            }
             val fullText = paragraph.joinToString(" ") { it.value }
             val wrappedLines = wordWrapCache.getOrPut(fullText) {
                 font.wordWrap(fullText, hMaxWidthUnits)
