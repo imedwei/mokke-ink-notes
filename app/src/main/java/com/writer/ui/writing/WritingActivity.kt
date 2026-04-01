@@ -725,6 +725,10 @@ class WritingActivity : AppCompatActivity() {
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
             .putString(PREF_CURRENT_DOC, currentDocumentName).apply()
 
+        inkCanvas.updateInlineOverlays(emptyMap())
+        cueInkCanvas.updateInlineOverlays(emptyMap())
+        hideWordPopup()
+
         coordinator?.start()
         inkCanvas.drawToSurface()
         updateCueIndicatorStrip()
