@@ -25,7 +25,7 @@ import kotlinx.coroutines.launch
 
 class WritingCoordinator(
     private val documentModel: DocumentModel,
-    private val columnModel: ColumnModel,
+    internal val columnModel: ColumnModel,
     private val recognizer: TextRecognizer,
     private val inkCanvas: HandwritingCanvasView,
     private val scope: CoroutineScope,
