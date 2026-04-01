@@ -265,33 +265,14 @@ class WritingCoordinator(
                 }
                 Log.i(TAG, "EDIT: Found ${replacementStrokes.size} replacement strokes in activeStrokes (total=${columnModel.activeStrokes.size})")
                 if (replacementStrokes.isNotEmpty()) {
-                    // Relocate replacement strokes to the ORIGINAL stroke position
-                    // (not Hershey position) so they fit with the surrounding handwriting.
-                    val repMinX = replacementStrokes.minOf { it.minX }
-                    val repMaxX = replacementStrokes.maxOf { it.maxX }
-                    val repMinY = replacementStrokes.minOf { it.minY }
-                    val repWidth = (repMaxX - repMinX).coerceAtLeast(1f)
-                    val origGapWidth = (edit.origStrokeEndX - edit.origStrokeStartX).coerceAtLeast(1f)
-                    val scaleX = origGapWidth / repWidth
-                    val targetY = edit.origLineY + HandwritingCanvasView.LINE_SPACING * 0.5f
-                    val dx = edit.origStrokeStartX - repMinX * scaleX
-                    val dy = targetY - repMinY
-                    Log.i(TAG, "EDIT: Relocating to original stroke position: origX=[${edit.origStrokeStartX},${edit.origStrokeEndX}] repX=[$repMinX,$repMaxX] scaleX=$scaleX dy=$dy")
-
-                    val relocatedStrokes = replacementStrokes.map { stroke ->
-                        stroke.copy(points = stroke.points.map { pt ->
-                            pt.copy(x = pt.x * scaleX + dx, y = pt.y + dy)
-                        })
-                    }
-
-                    val origLineStrokes = lineSegmenter.getStrokesForLine(columnModel.activeStrokes, edit.lineIndex)
-                        .filter { it.strokeId !in edit.replacementStrokeIds }
-                    val fullLineStrokes = origLineStrokes + relocatedStrokes
+                    // Recognize just the replacement strokes with pre-context
+                    // from the surrounding consolidated text. Don't relocate or
+                    // merge with original strokes — that causes the recognizer
+                    // to split/merge words unpredictably.
                     val lineIdx = edit.lineIndex
-                    Log.i(TAG, "EDIT: Full line for recognition: ${origLineStrokes.size} orig + ${relocatedStrokes.size} relocated = ${fullLineStrokes.size} total on line $lineIdx")
+                    val line = lineSegmenter.buildInkLine(replacementStrokes, lineIdx)
 
-                    val line = lineSegmenter.buildInkLine(fullLineStrokes, lineIdx)
-
+                    // Build pre-context: text from lines above + words before the gap
                     val origText = lineTextCache[lineIdx] ?: ""
                     val wordsBeforeGap = origText.split(" ").take(edit.origWordIndex)
                     val contextFromLine = wordsBeforeGap.joinToString(" ")
@@ -299,27 +280,15 @@ class WritingCoordinator(
                     val preContext = if (contextFromAbove.isNotEmpty()) {
                         "$contextFromAbove $contextFromLine"
                     } else contextFromLine
-                    Log.i(TAG, "EDIT: Pre-context: '$preContext'")
-                    Log.i(TAG, "EDIT: Original text: '$origText'")
+                    Log.i(TAG, "EDIT: Recognizing ${replacementStrokes.size} replacement strokes with preContext='$preContext'")
 
                     scope.launch {
-                        val fullText = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        val newWord = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                             recognizer.recognizeLine(line, preContext)
                         }.trim()
-                        Log.i(TAG, "EDIT: Recognition result: '$fullText'")
+                        Log.i(TAG, "EDIT: Recognition result: '$newWord'")
 
-                        if (fullText.isNotBlank() && fullText != "[?]") {
-                            val origWords = origText.split(" ")
-                            val newWords = fullText.split(" ")
-                            Log.i(TAG, "EDIT: origWords=$origWords newWords=$newWords editIdx=${edit.origWordIndex}")
-
-                            val newWord = if (edit.origWordIndex < newWords.size) {
-                                newWords[edit.origWordIndex]
-                            } else {
-                                newWords.firstOrNull { it !in origWords } ?: fullText
-                            }
-
-                            Log.i(TAG, "EDIT: Extracted replacement word: '$newWord'")
+                        if (newWord.isNotBlank() && newWord != "[?]") {
                             applyWordEdit(edit, newWord, lineIdx)
                         } else {
                             Log.w(TAG, "EDIT: Recognition failed or empty, not applying edit")
@@ -449,12 +418,20 @@ class WritingCoordinator(
 
         pendingWordEdit = null
         inkCanvas.hiddenStrokeIds = emptySet()
+        // Advance currentLineIndex past the edit line so it re-consolidates
+        if (currentLineIndex <= edit.lineIndex) {
+            currentLineIndex = edit.lineIndex + 1
+        }
 
         // Force full overlay + path cache rebuild and e-ink refresh
         displayManager.lastOverlayHash = 0
         displayManager.hersheyStrokeCache.clear()
+        displayManager.wordWrapCache.clear()
         inkCanvas.consolidatedPathCache.clear()
         displayManager.updateInlineOverlays(currentLineIndex)
+        Log.i(TAG, "EDIT APPLY: After overlay rebuild, lineTextCache[${edit.lineIndex}]='${lineTextCache[edit.lineIndex]}', overlays=${inkCanvas.inlineTextOverlays.size}")
+        val editOverlay = inkCanvas.inlineTextOverlays[edit.lineIndex]
+        Log.i(TAG, "EDIT APPLY: overlay for line ${edit.lineIndex}: consolidated=${editOverlay?.consolidated} text='${editOverlay?.recognizedText?.take(30)}'")
         // Pause/draw/resume to force e-ink refresh (shows consolidated Hershey text)
         inkCanvas.post {
             inkCanvas.pauseRawDrawing()
@@ -612,8 +589,9 @@ class WritingCoordinator(
                         // lineTextCache for entries that have this word.
                         var origLineIdx = -1
                         var origWordIdx = -1
+                        Log.i(TAG, "SCRATCH: Looking for word '$word' in lineTextCache (${lineTextCache.size} entries):")
                         for ((idx, cached) in lineTextCache.entries.sortedBy { it.key }) {
-                            if (idx >= currentLineIndex) continue
+                            Log.i(TAG, "SCRATCH:   line $idx: '$cached'")
                             val cachedWords = cached.split(" ")
                             val foundIdx = cachedWords.indexOf(word)
                             if (foundIdx >= 0) {
@@ -667,6 +645,11 @@ class WritingCoordinator(
                     wordX = wordEndX + spaceWidth
                 }
             }
+            // Scratch-out was on consolidated text but didn't match any word —
+            // don't fall through to normal scratch-out (which would un-consolidate
+            // the line by removing lineTextCache).
+            Log.w(TAG, "SCRATCH: On consolidated line $scratchLineIdx but no word matched — ignoring")
+            return
         }
 
         // Normal scratch-out on handwritten strokes

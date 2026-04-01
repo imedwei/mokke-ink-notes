@@ -97,7 +97,7 @@ class DisplayManager(
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Pair<Int, String>, List<InkStroke>>?) = size > 20
     }
     /** Cache of word-wrap results keyed by (fullText, maxWidthUnits). */
-    private val wordWrapCache = object : LinkedHashMap<String, List<String>>(20, 0.75f, true) {
+    internal val wordWrapCache = object : LinkedHashMap<String, List<String>>(20, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<String>>?) = size > 20
     }
 
