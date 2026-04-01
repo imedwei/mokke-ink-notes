@@ -369,46 +369,49 @@ class WritingCoordinator(
      * sorting strokes by X and detecting inter-word gaps.
      */
     /**
-     * Find the original strokes for a word at [wordIndex] on [origLineIdx] by
-     * sorting strokes by X and detecting inter-word gaps.
+     * Find the original strokes for a word at [wordIndex] on [origLineIdx].
      *
-     * Uses adaptive gap threshold: computes median inter-stroke gap and uses
-     * 2x median as the word boundary threshold. This works regardless of
-     * handwriting size or density.
+     * Uses the known word count from lineTextCache to split strokes into
+     * exactly N groups by finding the N-1 largest inter-stroke gaps.
+     * This is more robust than threshold-based gap detection because
+     * cursive handwriting may have similar-sized gaps between letters
+     * and between words.
      */
     internal fun findStrokesForWord(origLineIdx: Int, wordIndex: Int): List<InkStroke> {
         val lineStrokes = lineSegmenter.getStrokesForLine(columnModel.activeStrokes, origLineIdx)
             .sortedBy { it.minX }
         if (lineStrokes.size < 2) return lineStrokes
 
-        // Compute all inter-stroke gaps
-        val gaps = mutableListOf<Float>()
+        // How many words are on this line?
+        val lineText = lineTextCache[origLineIdx] ?: return lineStrokes
+        val expectedWords = lineText.split(" ").size
+        if (expectedWords <= 1) return lineStrokes
+        if (wordIndex >= expectedWords) return emptyList()
+
+        // Compute all inter-stroke gaps with their positions
+        data class Gap(val index: Int, val size: Float)
+        val gaps = mutableListOf<Gap>()
         for (i in 1 until lineStrokes.size) {
             val gap = lineStrokes[i].minX - lineStrokes[i - 1].maxX
-            if (gap > 0) gaps.add(gap)
+            gaps.add(Gap(i, gap))
         }
-        if (gaps.isEmpty()) return lineStrokes
 
-        // Adaptive threshold: use median gap * 2 as word boundary.
-        // Inter-letter gaps cluster small; inter-word gaps are notably larger.
-        gaps.sort()
-        val medianGap = gaps[gaps.size / 2]
-        val gapThreshold = medianGap * 2f
+        // Find the N-1 largest gaps — these are the word boundaries
+        val wordBoundaries = gaps.sortedByDescending { it.size }
+            .take(expectedWords - 1)
+            .map { it.index }
+            .sorted()
 
-        // Group strokes into words
-        val wordGroups = mutableListOf<MutableList<InkStroke>>()
-        var currentGroup = mutableListOf(lineStrokes[0])
-        for (i in 1 until lineStrokes.size) {
-            val gap = lineStrokes[i].minX - lineStrokes[i - 1].maxX
-            if (gap > gapThreshold) {
-                wordGroups.add(currentGroup)
-                currentGroup = mutableListOf()
-            }
-            currentGroup.add(lineStrokes[i])
+        // Split strokes at the word boundaries
+        val wordGroups = mutableListOf<List<InkStroke>>()
+        var start = 0
+        for (boundary in wordBoundaries) {
+            wordGroups.add(lineStrokes.subList(start, boundary))
+            start = boundary
         }
-        if (currentGroup.isNotEmpty()) wordGroups.add(currentGroup)
+        wordGroups.add(lineStrokes.subList(start, lineStrokes.size))
 
-        Log.d(TAG, "findStrokesForWord: line=$origLineIdx, ${lineStrokes.size} strokes → ${wordGroups.size} word groups (medianGap=${"%.1f".format(medianGap)} threshold=${"%.1f".format(gapThreshold)})")
+        Log.d(TAG, "findStrokesForWord: line=$origLineIdx, ${lineStrokes.size} strokes → ${wordGroups.size} word groups (expected=$expectedWords, boundaries=$wordBoundaries)")
         return if (wordIndex in wordGroups.indices) wordGroups[wordIndex] else emptyList()
     }
 

@@ -252,31 +252,25 @@ class ScratchAndReplaceTest {
         val origWords = origText.split(" ")
         val targetWordIdx = 1  // "quick"
 
-        // Group strokes into words by finding gaps in X positions
-        val wordGroups = mutableListOf<MutableList<InkStroke>>()
-        var currentGroup = mutableListOf<InkStroke>()
-        // Adaptive threshold: compute median gap * 2
-        val gaps = mutableListOf<Float>()
+        // Split strokes into word groups using the N-1 largest gaps
+        val expectedWords = textCache[0]!!.split(" ").size  // 3 words
+        data class Gap(val index: Int, val size: Float)
+        val gaps = mutableListOf<Gap>()
         for (i in 1 until origLineStrokes.size) {
-            val gap = origLineStrokes[i].minX - origLineStrokes[i - 1].maxX
-            if (gap > 0) gaps.add(gap)
+            gaps.add(Gap(i, origLineStrokes[i].minX - origLineStrokes[i - 1].maxX))
         }
-        gaps.sort()
-        val medianGap = gaps[gaps.size / 2]
-        val GAP_THRESHOLD = medianGap * 2f
+        val boundaries = gaps.sortedByDescending { it.size }
+            .take(expectedWords - 1)
+            .map { it.index }
+            .sorted()
 
-        for ((i, stroke) in origLineStrokes.withIndex()) {
-            if (i > 0) {
-                val prevMaxX = origLineStrokes[i - 1].maxX
-                val gap = stroke.minX - prevMaxX
-                if (gap > GAP_THRESHOLD) {
-                    wordGroups.add(currentGroup)
-                    currentGroup = mutableListOf()
-                }
-            }
-            currentGroup.add(stroke)
+        val wordGroups = mutableListOf<List<InkStroke>>()
+        var start = 0
+        for (boundary in boundaries) {
+            wordGroups.add(origLineStrokes.subList(start, boundary))
+            start = boundary
         }
-        if (currentGroup.isNotEmpty()) wordGroups.add(currentGroup)
+        wordGroups.add(origLineStrokes.subList(start, origLineStrokes.size))
 
         // Verify we found the right number of word groups
         assertEquals("Should find ${origWords.size} word groups", origWords.size, wordGroups.size)
