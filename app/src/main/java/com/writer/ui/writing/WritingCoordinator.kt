@@ -259,12 +259,12 @@ class WritingCoordinator(
             // Apply pending word edit after user stops writing
             val edit = pendingWordEdit
             if (edit != null && edit.replacementStrokeIds.isNotEmpty()) {
+                Log.i(TAG, "EDIT: Idle fired with pending edit: oldWord='${edit.oldWord}' wordIdx=${edit.wordIndex} line=${edit.lineIndex} replacementStrokes=${edit.replacementStrokeIds.size}")
                 val replacementStrokes = columnModel.activeStrokes.filter {
                     it.strokeId in edit.replacementStrokeIds
                 }
+                Log.i(TAG, "EDIT: Found ${replacementStrokes.size} replacement strokes in activeStrokes (total=${columnModel.activeStrokes.size})")
                 if (replacementStrokes.isNotEmpty()) {
-                    // Relocate replacement strokes to the gap position on the original line.
-                    // This puts them in context with surrounding words for better recognition.
                     val repMinX = replacementStrokes.minOf { it.minX }
                     val repMaxX = replacementStrokes.maxOf { it.maxX }
                     val repMinY = replacementStrokes.minOf { it.minY }
@@ -274,6 +274,7 @@ class WritingCoordinator(
                     val targetY = edit.lineY + HandwritingCanvasView.LINE_SPACING * 0.5f
                     val dx = edit.wordStartX - repMinX * scaleX
                     val dy = targetY - repMinY
+                    Log.i(TAG, "EDIT: Relocating strokes: gap=[${edit.wordStartX},${edit.wordEndX}] repX=[$repMinX,$repMaxX] scaleX=$scaleX dy=$dy")
 
                     val relocatedStrokes = replacementStrokes.map { stroke ->
                         stroke.copy(points = stroke.points.map { pt ->
@@ -281,14 +282,14 @@ class WritingCoordinator(
                         })
                     }
 
-                    // Build full line: original strokes on the edit's line + relocated replacement
                     val origLineStrokes = lineSegmenter.getStrokesForLine(columnModel.activeStrokes, edit.lineIndex)
                         .filter { it.strokeId !in edit.replacementStrokeIds }
                     val fullLineStrokes = origLineStrokes + relocatedStrokes
                     val lineIdx = edit.lineIndex
+                    Log.i(TAG, "EDIT: Full line for recognition: ${origLineStrokes.size} orig + ${relocatedStrokes.size} relocated = ${fullLineStrokes.size} total on line $lineIdx")
+
                     val line = lineSegmenter.buildInkLine(fullLineStrokes, lineIdx)
 
-                    // Build pre-context from consolidated text (better context than raw cache)
                     val origText = lineTextCache[lineIdx] ?: ""
                     val wordsBeforeGap = origText.split(" ").take(edit.wordIndex)
                     val contextFromLine = wordsBeforeGap.joinToString(" ")
@@ -296,31 +297,34 @@ class WritingCoordinator(
                     val preContext = if (contextFromAbove.isNotEmpty()) {
                         "$contextFromAbove $contextFromLine"
                     } else contextFromLine
+                    Log.i(TAG, "EDIT: Pre-context: '$preContext'")
+                    Log.i(TAG, "EDIT: Original text: '$origText'")
 
                     scope.launch {
                         val fullText = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                             recognizer.recognizeLine(line, preContext)
                         }.trim()
+                        Log.i(TAG, "EDIT: Recognition result: '$fullText'")
 
                         if (fullText.isNotBlank() && fullText != "[?]") {
-                            // The full line was re-recognized with the replacement in context.
-                            // Extract the new word by comparing with the original text.
-                            val origText = lineTextCache[lineIdx] ?: ""
                             val origWords = origText.split(" ")
                             val newWords = fullText.split(" ")
+                            Log.i(TAG, "EDIT: origWords=$origWords newWords=$newWords editIdx=${edit.wordIndex}")
 
-                            // Find the word at the edit position
                             val newWord = if (edit.wordIndex < newWords.size) {
                                 newWords[edit.wordIndex]
                             } else {
-                                // Fallback: find the word that differs
                                 newWords.firstOrNull { it !in origWords } ?: fullText
                             }
 
-                            Log.i(TAG, "Word edit with context: '$origText' → '$fullText', extracted '$newWord' at index ${edit.wordIndex}")
+                            Log.i(TAG, "EDIT: Extracted replacement word: '$newWord'")
                             applyWordEdit(edit, newWord, lineIdx)
+                        } else {
+                            Log.w(TAG, "EDIT: Recognition failed or empty, not applying edit")
                         }
                     }
+                } else {
+                    Log.w(TAG, "EDIT: No replacement strokes found in activeStrokes!")
                 }
             }
         }
@@ -360,7 +364,9 @@ class WritingCoordinator(
 
     /** Apply a pending word edit: replace the old word with the new one in lineTextCache. */
     private fun applyWordEdit(edit: PendingWordEdit, newWord: String, replacementLineIndex: Int) {
-        Log.i(TAG, "Pending word edit resolved: '${edit.oldWord}' → '$newWord' on line ${edit.lineIndex}")
+        Log.i(TAG, "EDIT APPLY: '${edit.oldWord}' → '$newWord' on line ${edit.lineIndex}, replacementLine=$replacementLineIndex")
+        Log.i(TAG, "EDIT APPLY: lineTextCache[${edit.lineIndex}]='${lineTextCache[edit.lineIndex]}'")
+        Log.i(TAG, "EDIT APPLY: replacementStrokeIds=${edit.replacementStrokeIds.size}, activeStrokes=${columnModel.activeStrokes.size}")
 
         // Replace the old word at the original position
         val origText = lineTextCache[edit.lineIndex]
@@ -436,6 +442,7 @@ class WritingCoordinator(
         if (edit != null) {
             edit.replacementStrokeIds.add(stroke.strokeId)
             inkCanvas.hiddenStrokeIds = edit.replacementStrokeIds.toSet()
+            Log.d(TAG, "EDIT: Added replacement stroke ${stroke.strokeId.take(8)}, total=${edit.replacementStrokeIds.size}, lineIdx=${lineSegmenter.getStrokeLineIndex(stroke)}")
         }
         eventLog.recordEvent(lastStrokeIndex, StrokeEventLog.EventType.ADDED, "line=${lineSegmenter.getStrokeLineIndex(stroke)}", elapsedMs = elapsedMs)
         onTutorialAction?.invoke("stroke_completed")
@@ -478,8 +485,12 @@ class WritingCoordinator(
             return
         }
 
-        // If the user modified a previously recognized line, invalidate cache
-        lineTextCache.remove(lineIdx)
+        // If the user modified a previously recognized line, invalidate cache.
+        // But NOT if this stroke is a replacement for a pending word edit —
+        // removing the cache would un-consolidate the line and show raw strokes.
+        if (pendingWordEdit == null || stroke.strokeId !in (pendingWordEdit?.replacementStrokeIds ?: emptySet())) {
+            lineTextCache.remove(lineIdx)
+        }
 
         // Only trigger recognition when the user moves to a DIFFERENT line
         if (lineIdx != currentLineIndex) {
@@ -527,6 +538,7 @@ class WritingCoordinator(
         val scratchCenterY = (top + bottom) / 2f
         val scratchLineIdx = ((scratchCenterY - HandwritingCanvasView.TOP_MARGIN) / HandwritingCanvasView.LINE_SPACING).toInt()
         val overlay = inkCanvas.inlineTextOverlays[scratchLineIdx]
+        Log.d(TAG, "SCRATCH: lineIdx=$scratchLineIdx overlay=${overlay != null} consolidated=${overlay?.consolidated} text='${overlay?.recognizedText?.take(30)}'")
         if (overlay != null && overlay.consolidated && !overlay.unConsolidated && overlay.recognizedText.isNotBlank()) {
             // Scratch-out on consolidated text — identify which word was hit
             val words = overlay.recognizedText.split(" ")

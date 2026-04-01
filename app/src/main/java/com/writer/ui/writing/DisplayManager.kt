@@ -54,7 +54,7 @@ class DisplayManager(
     private val scope: CoroutineScope,
     private val lineSegmenter: LineSegmenter,
     private val paragraphBuilder: ParagraphBuilder,
-    private val host: DisplayManagerHost,
+    internal val host: DisplayManagerHost,
     private val hersheyFont: HersheyFont? = null
 ) {
     companion object {
