@@ -101,13 +101,16 @@ data class PendingWordEdit(
     val lineIndex: Int,
     /** The word that was scratched out. */
     val oldWord: String,
-    /** Index of the word within the line text (for position-based replacement). */
-    val wordIndex: Int,
-    /** X bounds of the erased word in document space (for positioning replacement). */
+    /** Index of the word within the ORIGINAL line text (before reflow). */
+    val origWordIndex: Int,
+    /** X bounds of the erased word in Hershey space (for gap rendering). */
     val wordStartX: Float,
     val wordEndX: Float,
-    /** Y position (line top in document space). */
-    val lineY: Float,
+    /** X bounds of the original handwriting strokes (for relocation). */
+    val origStrokeStartX: Float,
+    val origStrokeEndX: Float,
+    /** Y position of the original line (document space). */
+    val origLineY: Float,
     /** Stroke IDs added after this edit was created (the replacement strokes). */
     val replacementStrokeIds: MutableSet<String> = mutableSetOf()
 )

@@ -97,9 +97,9 @@ class ScratchAndReplaceTest {
     fun `pending edit creates gap in consolidated overlay`() {
         // Simulate scratch-out on "quick" (word index 1 on line 0)
         val edit = PendingWordEdit(
-            lineIndex = 0, oldWord = "quick", wordIndex = 1,
+            lineIndex = 0, oldWord = "quick", origWordIndex = 1,
             wordStartX = 90f, wordEndX = 200f,
-            lineY = tm + 0 * ls
+            origStrokeStartX = 90f, origStrokeEndX = 200f, origLineY = tm + 0 * ls
         )
 
         // Build overlays with pending edit
@@ -119,9 +119,9 @@ class ScratchAndReplaceTest {
     @Test
     fun `gap leaves space between surrounding words`() {
         val edit = PendingWordEdit(
-            lineIndex = 0, oldWord = "quick", wordIndex = 1,
+            lineIndex = 0, oldWord = "quick", origWordIndex = 1,
             wordStartX = 90f, wordEndX = 200f,
-            lineY = tm + 0 * ls
+            origStrokeStartX = 90f, origStrokeEndX = 200f, origLineY = tm + 0 * ls
         )
         val host = dm.host as TestHost
         host.pendingEdit = edit
@@ -377,9 +377,9 @@ class ScratchAndReplaceTest {
     fun `after word replacement lineTextCache is updated`() {
         // Simulate applying a word edit: "quick" → "fast"
         val edit = PendingWordEdit(
-            lineIndex = 0, oldWord = "quick", wordIndex = 1,
+            lineIndex = 0, oldWord = "quick", origWordIndex = 1,
             wordStartX = 90f, wordEndX = 200f,
-            lineY = tm + 0 * ls
+            origStrokeStartX = 90f, origStrokeEndX = 200f, origLineY = tm + 0 * ls
         )
 
         // Apply the edit
@@ -431,9 +431,9 @@ class ScratchAndReplaceTest {
         column.activeStrokes.add(repStroke)
 
         val edit = PendingWordEdit(
-            lineIndex = 0, oldWord = "quick", wordIndex = 1,
+            lineIndex = 0, oldWord = "quick", origWordIndex = 1,
             wordStartX = 90f, wordEndX = 200f,
-            lineY = tm + 0 * ls
+            origStrokeStartX = 90f, origStrokeEndX = 200f, origLineY = tm + 0 * ls
         )
         edit.replacementStrokeIds.add("rep1")
 

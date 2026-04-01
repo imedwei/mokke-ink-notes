@@ -259,22 +259,24 @@ class WritingCoordinator(
             // Apply pending word edit after user stops writing
             val edit = pendingWordEdit
             if (edit != null && edit.replacementStrokeIds.isNotEmpty()) {
-                Log.i(TAG, "EDIT: Idle fired with pending edit: oldWord='${edit.oldWord}' wordIdx=${edit.wordIndex} line=${edit.lineIndex} replacementStrokes=${edit.replacementStrokeIds.size}")
+                Log.i(TAG, "EDIT: Idle fired with pending edit: oldWord='${edit.oldWord}' wordIdx=${edit.origWordIndex} line=${edit.lineIndex} replacementStrokes=${edit.replacementStrokeIds.size}")
                 val replacementStrokes = columnModel.activeStrokes.filter {
                     it.strokeId in edit.replacementStrokeIds
                 }
                 Log.i(TAG, "EDIT: Found ${replacementStrokes.size} replacement strokes in activeStrokes (total=${columnModel.activeStrokes.size})")
                 if (replacementStrokes.isNotEmpty()) {
+                    // Relocate replacement strokes to the ORIGINAL stroke position
+                    // (not Hershey position) so they fit with the surrounding handwriting.
                     val repMinX = replacementStrokes.minOf { it.minX }
                     val repMaxX = replacementStrokes.maxOf { it.maxX }
                     val repMinY = replacementStrokes.minOf { it.minY }
                     val repWidth = (repMaxX - repMinX).coerceAtLeast(1f)
-                    val gapWidth = (edit.wordEndX - edit.wordStartX).coerceAtLeast(1f)
-                    val scaleX = gapWidth / repWidth
-                    val targetY = edit.lineY + HandwritingCanvasView.LINE_SPACING * 0.5f
-                    val dx = edit.wordStartX - repMinX * scaleX
+                    val origGapWidth = (edit.origStrokeEndX - edit.origStrokeStartX).coerceAtLeast(1f)
+                    val scaleX = origGapWidth / repWidth
+                    val targetY = edit.origLineY + HandwritingCanvasView.LINE_SPACING * 0.5f
+                    val dx = edit.origStrokeStartX - repMinX * scaleX
                     val dy = targetY - repMinY
-                    Log.i(TAG, "EDIT: Relocating strokes: gap=[${edit.wordStartX},${edit.wordEndX}] repX=[$repMinX,$repMaxX] scaleX=$scaleX dy=$dy")
+                    Log.i(TAG, "EDIT: Relocating to original stroke position: origX=[${edit.origStrokeStartX},${edit.origStrokeEndX}] repX=[$repMinX,$repMaxX] scaleX=$scaleX dy=$dy")
 
                     val relocatedStrokes = replacementStrokes.map { stroke ->
                         stroke.copy(points = stroke.points.map { pt ->
@@ -291,7 +293,7 @@ class WritingCoordinator(
                     val line = lineSegmenter.buildInkLine(fullLineStrokes, lineIdx)
 
                     val origText = lineTextCache[lineIdx] ?: ""
-                    val wordsBeforeGap = origText.split(" ").take(edit.wordIndex)
+                    val wordsBeforeGap = origText.split(" ").take(edit.origWordIndex)
                     val contextFromLine = wordsBeforeGap.joinToString(" ")
                     val contextFromAbove = buildPreContext(lineTextCache, lineIdx)
                     val preContext = if (contextFromAbove.isNotEmpty()) {
@@ -309,10 +311,10 @@ class WritingCoordinator(
                         if (fullText.isNotBlank() && fullText != "[?]") {
                             val origWords = origText.split(" ")
                             val newWords = fullText.split(" ")
-                            Log.i(TAG, "EDIT: origWords=$origWords newWords=$newWords editIdx=${edit.wordIndex}")
+                            Log.i(TAG, "EDIT: origWords=$origWords newWords=$newWords editIdx=${edit.origWordIndex}")
 
-                            val newWord = if (edit.wordIndex < newWords.size) {
-                                newWords[edit.wordIndex]
+                            val newWord = if (edit.origWordIndex < newWords.size) {
+                                newWords[edit.origWordIndex]
                             } else {
                                 newWords.firstOrNull { it !in origWords } ?: fullText
                             }
@@ -362,6 +364,37 @@ class WritingCoordinator(
         inkCanvas.onOverlayDoubleTap = null
     }
 
+    /**
+     * Find the original strokes for a word at [wordIndex] on [origLineIdx] by
+     * sorting strokes by X and detecting inter-word gaps.
+     */
+    private fun findStrokesForWord(origLineIdx: Int, wordIndex: Int): List<InkStroke> {
+        val lineStrokes = lineSegmenter.getStrokesForLine(columnModel.activeStrokes, origLineIdx)
+            .sortedBy { it.minX }
+        if (lineStrokes.isEmpty()) return emptyList()
+
+        // Group strokes into words by finding gaps in X positions.
+        // Inter-word gaps are larger than inter-letter gaps.
+        val wordGroups = mutableListOf<MutableList<InkStroke>>()
+        var currentGroup = mutableListOf<InkStroke>()
+        val gapThreshold = HandwritingCanvasView.LINE_SPACING * 0.15f  // ~15% of line spacing
+
+        for ((i, stroke) in lineStrokes.withIndex()) {
+            if (i > 0) {
+                val prevMaxX = lineStrokes[i - 1].maxX
+                val gap = stroke.minX - prevMaxX
+                if (gap > gapThreshold) {
+                    wordGroups.add(currentGroup)
+                    currentGroup = mutableListOf()
+                }
+            }
+            currentGroup.add(stroke)
+        }
+        if (currentGroup.isNotEmpty()) wordGroups.add(currentGroup)
+
+        return if (wordIndex in wordGroups.indices) wordGroups[wordIndex] else emptyList()
+    }
+
     /** Apply a pending word edit: replace the old word with the new one in lineTextCache. */
     private fun applyWordEdit(edit: PendingWordEdit, newWord: String, replacementLineIndex: Int) {
         Log.i(TAG, "EDIT APPLY: '${edit.oldWord}' → '$newWord' on line ${edit.lineIndex}, replacementLine=$replacementLineIndex")
@@ -372,7 +405,7 @@ class WritingCoordinator(
         val origText = lineTextCache[edit.lineIndex]
         if (origText != null) {
             val words = origText.split(" ").toMutableList()
-            val idx = edit.wordIndex.coerceAtMost(words.size - 1)
+            val idx = edit.origWordIndex.coerceAtMost(words.size - 1)
             if (idx >= 0 && idx < words.size && words[idx] == edit.oldWord) {
                 words[idx] = newWord
             } else {
@@ -553,31 +586,57 @@ class WritingCoordinator(
 
                     // Check if scratch-out overlaps this word
                     if (left <= wordEndX + radius && right >= wordX - radius) {
-                        Log.i(TAG, "Scratch-out on consolidated word '$word' at index $wordIdx on line $scratchLineIdx")
+                        Log.i(TAG, "SCRATCH: Hit consolidated word '$word' at hersheyIdx=$wordIdx on line $scratchLineIdx")
 
-                        // Find the original line in lineTextCache that contains this word
-                        // (reflow may have remapped line indices)
-                        var origLineIdx = scratchLineIdx
-                        for ((idx, cached) in lineTextCache) {
-                            if (cached.split(" ").any { it == word }) {
-                                origLineIdx = idx
-                                break
+                        // Find the original line and word index (reflow remaps lines).
+                        // Count words across original lines to find which one matches.
+                        var origLineIdx = -1
+                        var origWordIdx = -1
+                        var globalWordCount = 0
+                        for (entry in lineTextCache.entries.sortedBy { it.key }) {
+                            if (entry.key >= currentLineIndex) break
+                            val cachedWords = entry.value.split(" ")
+                            for ((cwi, cw) in cachedWords.withIndex()) {
+                                if (globalWordCount == wordIdx) {
+                                    // This is the reflowed word position → found original line + index
+                                    origLineIdx = entry.key
+                                    origWordIdx = cwi
+                                }
+                                globalWordCount++
                             }
+                            if (origLineIdx >= 0) break
                         }
+                        if (origLineIdx < 0) {
+                            Log.w(TAG, "SCRATCH: Could not find original line for word '$word' at hersheyIdx=$wordIdx")
+                            wordX = wordEndX + spaceWidth
+                            continue
+                        }
+                        Log.i(TAG, "SCRATCH: Mapped to original line $origLineIdx, wordIdx=$origWordIdx")
 
-                        // Don't remove original strokes — they're hidden by consolidation.
-                        // Just save an undo snapshot so the edit can be reverted.
+                        // Find the original strokes for this word using gap detection
+                        val origWordStrokes = findStrokesForWord(origLineIdx, origWordIdx)
+                        val origStrokeStartX = origWordStrokes.minOfOrNull { it.minX } ?: wordX
+                        val origStrokeEndX = origWordStrokes.maxOfOrNull { it.maxX } ?: wordEndX
+                        val origLineY = HandwritingCanvasView.TOP_MARGIN + origLineIdx * HandwritingCanvasView.LINE_SPACING
+                        Log.i(TAG, "SCRATCH: Found ${origWordStrokes.size} original strokes at X=[$origStrokeStartX,$origStrokeEndX] on lineY=$origLineY")
+
                         saveSnapshot(UndoCoalescer.ActionType.SCRATCH_OUT)
 
-                        // Store pending edit for the replacement
-                        val lineY = HandwritingCanvasView.TOP_MARGIN + scratchLineIdx * HandwritingCanvasView.LINE_SPACING
+                        // Remove the original strokes for this word
+                        val idsToRemove = origWordStrokes.map { it.strokeId }.toSet()
+                        columnModel.activeStrokes.removeAll { it.strokeId in idsToRemove }
+                        inkCanvas.removeStrokes(idsToRemove)
+                        Log.i(TAG, "SCRATCH: Removed ${idsToRemove.size} original strokes")
+
                         pendingWordEdit = PendingWordEdit(
                             lineIndex = origLineIdx,
                             oldWord = word,
-                            wordIndex = wordIdx,
+                            origWordIndex = origWordIdx,
                             wordStartX = wordX,
                             wordEndX = wordEndX,
-                            lineY = lineY
+                            origStrokeStartX = origStrokeStartX,
+                            origStrokeEndX = origStrokeEndX,
+                            origLineY = origLineY
                         )
 
                         // Rebuild overlays to show the gap
