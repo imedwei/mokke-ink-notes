@@ -154,9 +154,6 @@ class WritingCoordinator(
             override val lineRecognitionResults get() = recognitionManager.lineRecognitionResults
             override val pendingWordEdit get() = this@WritingCoordinator.pendingWordEdit
             override fun eagerRecognizeLine(lineIndex: Int) = recognitionManager.eagerRecognizeLine(lineIndex)
-            override fun markRecognizing(lineIndex: Int) { recognitionManager.markRecognizing(lineIndex) }
-            override suspend fun doRecognizeLine(lineIndex: Int): String? = recognitionManager.doRecognizeLine(lineIndex)
-            override fun isRecognizing(lineIndex: Int): Boolean = recognitionManager.isRecognizing(lineIndex)
         }
         displayManager = DisplayManager(inkCanvas, scope, lineSegmenter, paragraphBuilder, displayHost, hersheyFont)
         displayManager.onScrollAnimated = { onLinkedScroll?.invoke() }
@@ -885,6 +882,10 @@ class WritingCoordinator(
         scope.launch {
             var recognized = 0
             for (lineIndex in strokesByLine.keys.sorted()) {
+                // Skip the line the user is currently writing on — caching a
+                // partial result here races with onStrokeCompleted's cache clear
+                // and prevents the idle/line-change handlers from re-recognizing.
+                if (lineIndex == currentLineIndex) continue
                 val cached = lineTextCache[lineIndex]
                 if (cached != null && cached != "[?]") continue
                 if (recognitionManager.isRecognizing(lineIndex)) continue

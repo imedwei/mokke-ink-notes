@@ -31,6 +31,34 @@ interface RecognitionManagerHost {
     fun onRecognitionComplete(lineIndex: Int)
 }
 
+/**
+ * Manages text recognition for handwriting lines. All recognition flows pass through this class.
+ *
+ * ## Recognition triggers
+ *
+ * | Trigger              | Method                        | Event                                                    |
+ * |----------------------|-------------------------------|----------------------------------------------------------|
+ * | Idle timeout (2s)    | `eagerRecognizeLine`          | User stops writing → `DisplayManager.onIdle()`           |
+ * | Line change          | `eagerRecognizeLine`          | `onStrokeCompleted` detects stroke on a different line    |
+ * | Re-recognition       | `recognizeRenderedLine`       | Previous recognition completes with stale strokes         |
+ * | Document load / save | `recognizeAllLines`           | App init, reload, language change, auto-save              |
+ * | Replacement edit     | `recognizer.recognizeLine`    | Idle fires with active `pendingWordEdit`                  |
+ *
+ * ## Skip conditions
+ *
+ * - **Already cached** — `eagerRecognizeLine` returns if `lineTextCache` has an entry.
+ * - **Already recognizing** — queued to [pendingRerecognize] instead of starting duplicate work.
+ * - **Current writing line** — `recognizeAllLines()` skips [RecognitionManagerHost.currentLineIndex]
+ *   to avoid caching partial results while the user is still writing.
+ * - **Diagram line / no strokes** — [doRecognizeLine] returns null.
+ *
+ * ## Re-recognition
+ *
+ * When [eagerRecognizeLine] or [recognizeRenderedLine] is called for a line that is already
+ * in [recognizingLines], the line is added to [pendingRerecognize]. When the in-flight
+ * recognition completes, it checks this set and calls [recognizeRenderedLine] (which forces
+ * cache removal) to re-recognize with the current stroke set.
+ */
 class LineRecognitionManager(
     private val columnModel: ColumnModel,
     private val recognizer: TextRecognizer,
@@ -57,13 +85,24 @@ class LineRecognitionManager(
 
     fun eagerRecognizeLine(lineIndex: Int) {
         if (host.lineTextCache.containsKey(lineIndex)) return
-        if (recognizingLines.contains(lineIndex)) return
+        if (recognizingLines.contains(lineIndex)) {
+            // Recognition is in flight with potentially stale strokes —
+            // queue re-recognition so the completed handler picks it up.
+            pendingRerecognize.add(lineIndex)
+            return
+        }
         recognizingLines.add(lineIndex)
 
         scope.launch {
             val text = doRecognizeLine(lineIndex) ?: return@launch
             Log.d(TAG, "Eager recognized line $lineIndex: \"$text\"")
             host.onRecognitionComplete(lineIndex)
+            if (lineIndex in pendingRerecognize) {
+                pendingRerecognize.remove(lineIndex)
+                host.lineTextCache.remove(lineIndex)
+                Log.d(TAG, "Re-recognizing line $lineIndex (strokes changed during recognition)")
+                recognizeRenderedLine(lineIndex)
+            }
         }
     }
 

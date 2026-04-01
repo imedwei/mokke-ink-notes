@@ -24,10 +24,6 @@ interface DisplayManagerHost {
     /** Pending word edit from scratch-out on consolidated text (null if none). */
     val pendingWordEdit: PendingWordEdit?
     fun eagerRecognizeLine(lineIndex: Int)
-    /** Batch-recognize a line, adding/removing from recognizingLines internally. */
-    fun markRecognizing(lineIndex: Int)
-    suspend fun doRecognizeLine(lineIndex: Int): String?
-    fun isRecognizing(lineIndex: Int): Boolean
 }
 
 /** A segment of text within a paragraph, with its own dimming state. */
@@ -218,22 +214,13 @@ class DisplayManager(
     }
 
     fun displayHiddenLines() {
-        // Track which lines have scrolled off for eager recognition
+        // Track which lines have scrolled off (persisted for overlay state on reload)
         val scrollOff = inkCanvas.scrollOffsetY
         val ls = HandwritingCanvasView.LINE_SPACING
         val tm = HandwritingCanvasView.TOP_MARGIN
         for ((lineIdx, _) in host.lineTextCache) {
             val lineBottom = tm + (lineIdx + 1) * ls
             if (lineBottom <= scrollOff) everHiddenLines.add(lineIdx)
-        }
-
-        // Trigger recognition for hidden lines not yet cached
-        val uncached = everHiddenLines.filter { !host.lineTextCache.containsKey(it) && !host.isRecognizing(it) }
-        if (uncached.isNotEmpty()) {
-            for (lineIdx in uncached) host.markRecognizing(lineIdx)
-            scope.launch {
-                for (lineIdx in uncached) host.doRecognizeLine(lineIdx)
-            }
         }
 
         updateInlineOverlays(host.currentLineIndex)

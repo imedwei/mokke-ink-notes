@@ -187,8 +187,5 @@ class UnConsolidationTest {
         override val lineRecognitionResults: Map<Int, RecognitionResult> = emptyMap()
         override val pendingWordEdit: PendingWordEdit? = null
         override fun eagerRecognizeLine(lineIndex: Int) {}
-        override fun markRecognizing(lineIndex: Int) {}
-        override suspend fun doRecognizeLine(lineIndex: Int): String? = null
-        override fun isRecognizing(lineIndex: Int): Boolean = false
     }
 }
