@@ -255,7 +255,15 @@ class ScratchAndReplaceTest {
         // Group strokes into words by finding gaps in X positions
         val wordGroups = mutableListOf<MutableList<InkStroke>>()
         var currentGroup = mutableListOf<InkStroke>()
-        val GAP_THRESHOLD = 5f  // gap between words (10px) is larger than between letters (~2px)
+        // Adaptive threshold: compute median gap * 2
+        val gaps = mutableListOf<Float>()
+        for (i in 1 until origLineStrokes.size) {
+            val gap = origLineStrokes[i].minX - origLineStrokes[i - 1].maxX
+            if (gap > 0) gaps.add(gap)
+        }
+        gaps.sort()
+        val medianGap = gaps[gaps.size / 2]
+        val GAP_THRESHOLD = medianGap * 2f
 
         for ((i, stroke) in origLineStrokes.withIndex()) {
             if (i > 0) {

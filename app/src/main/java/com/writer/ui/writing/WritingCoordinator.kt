@@ -368,30 +368,47 @@ class WritingCoordinator(
      * Find the original strokes for a word at [wordIndex] on [origLineIdx] by
      * sorting strokes by X and detecting inter-word gaps.
      */
-    private fun findStrokesForWord(origLineIdx: Int, wordIndex: Int): List<InkStroke> {
+    /**
+     * Find the original strokes for a word at [wordIndex] on [origLineIdx] by
+     * sorting strokes by X and detecting inter-word gaps.
+     *
+     * Uses adaptive gap threshold: computes median inter-stroke gap and uses
+     * 2x median as the word boundary threshold. This works regardless of
+     * handwriting size or density.
+     */
+    internal fun findStrokesForWord(origLineIdx: Int, wordIndex: Int): List<InkStroke> {
         val lineStrokes = lineSegmenter.getStrokesForLine(columnModel.activeStrokes, origLineIdx)
             .sortedBy { it.minX }
-        if (lineStrokes.isEmpty()) return emptyList()
+        if (lineStrokes.size < 2) return lineStrokes
 
-        // Group strokes into words by finding gaps in X positions.
-        // Inter-word gaps are larger than inter-letter gaps.
+        // Compute all inter-stroke gaps
+        val gaps = mutableListOf<Float>()
+        for (i in 1 until lineStrokes.size) {
+            val gap = lineStrokes[i].minX - lineStrokes[i - 1].maxX
+            if (gap > 0) gaps.add(gap)
+        }
+        if (gaps.isEmpty()) return lineStrokes
+
+        // Adaptive threshold: use median gap * 2 as word boundary.
+        // Inter-letter gaps cluster small; inter-word gaps are notably larger.
+        gaps.sort()
+        val medianGap = gaps[gaps.size / 2]
+        val gapThreshold = medianGap * 2f
+
+        // Group strokes into words
         val wordGroups = mutableListOf<MutableList<InkStroke>>()
-        var currentGroup = mutableListOf<InkStroke>()
-        val gapThreshold = HandwritingCanvasView.LINE_SPACING * 0.15f  // ~15% of line spacing
-
-        for ((i, stroke) in lineStrokes.withIndex()) {
-            if (i > 0) {
-                val prevMaxX = lineStrokes[i - 1].maxX
-                val gap = stroke.minX - prevMaxX
-                if (gap > gapThreshold) {
-                    wordGroups.add(currentGroup)
-                    currentGroup = mutableListOf()
-                }
+        var currentGroup = mutableListOf(lineStrokes[0])
+        for (i in 1 until lineStrokes.size) {
+            val gap = lineStrokes[i].minX - lineStrokes[i - 1].maxX
+            if (gap > gapThreshold) {
+                wordGroups.add(currentGroup)
+                currentGroup = mutableListOf()
             }
-            currentGroup.add(stroke)
+            currentGroup.add(lineStrokes[i])
         }
         if (currentGroup.isNotEmpty()) wordGroups.add(currentGroup)
 
+        Log.d(TAG, "findStrokesForWord: line=$origLineIdx, ${lineStrokes.size} strokes → ${wordGroups.size} word groups (medianGap=${"%.1f".format(medianGap)} threshold=${"%.1f".format(gapThreshold)})")
         return if (wordIndex in wordGroups.indices) wordGroups[wordIndex] else emptyList()
     }
 
@@ -588,26 +605,22 @@ class WritingCoordinator(
                     if (left <= wordEndX + radius && right >= wordX - radius) {
                         Log.i(TAG, "SCRATCH: Hit consolidated word '$word' at hersheyIdx=$wordIdx on line $scratchLineIdx")
 
-                        // Find the original line and word index (reflow remaps lines).
-                        // Count words across original lines to find which one matches.
+                        // Find the original line that contains this word by searching
+                        // lineTextCache for entries that have this word.
                         var origLineIdx = -1
                         var origWordIdx = -1
-                        var globalWordCount = 0
-                        for (entry in lineTextCache.entries.sortedBy { it.key }) {
-                            if (entry.key >= currentLineIndex) break
-                            val cachedWords = entry.value.split(" ")
-                            for ((cwi, cw) in cachedWords.withIndex()) {
-                                if (globalWordCount == wordIdx) {
-                                    // This is the reflowed word position → found original line + index
-                                    origLineIdx = entry.key
-                                    origWordIdx = cwi
-                                }
-                                globalWordCount++
+                        for ((idx, cached) in lineTextCache.entries.sortedBy { it.key }) {
+                            if (idx >= currentLineIndex) continue
+                            val cachedWords = cached.split(" ")
+                            val foundIdx = cachedWords.indexOf(word)
+                            if (foundIdx >= 0) {
+                                origLineIdx = idx
+                                origWordIdx = foundIdx
+                                break
                             }
-                            if (origLineIdx >= 0) break
                         }
                         if (origLineIdx < 0) {
-                            Log.w(TAG, "SCRATCH: Could not find original line for word '$word' at hersheyIdx=$wordIdx")
+                            Log.w(TAG, "SCRATCH: Could not find original line for word '$word'")
                             wordX = wordEndX + spaceWidth
                             continue
                         }
