@@ -442,8 +442,73 @@ class WritingActivity : AppCompatActivity() {
             cueIndicatorStrip.scrollOffsetY = inkCanvas.scrollOffsetY
             repositionWordPopup()
         }
+        coordinator?.onAlternativesTap = { lineIndex, candidates, screenY ->
+            showAlternativesPopup(lineIndex, candidates, screenY)
+        }
         coordinator?.start()
 
+    }
+
+    private fun showAlternativesPopup(
+        lineIndex: Int,
+        candidates: List<com.writer.recognition.RecognitionCandidate>,
+        screenY: Float
+    ) {
+        inkCanvas.pauseRawDrawing()
+        inkCanvas.drawToSurface()
+
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundResource(R.drawable.word_popup_bg)
+            setPadding(
+                ScreenMetrics.dp(8f).toInt(), ScreenMetrics.dp(4f).toInt(),
+                ScreenMetrics.dp(8f).toInt(), ScreenMetrics.dp(4f).toInt()
+            )
+        }
+
+        for (candidate in candidates.take(5)) {
+            val row = TextView(this).apply {
+                text = candidate.text
+                textSize = 16f
+                setTextColor(android.graphics.Color.BLACK)
+                setPadding(
+                    ScreenMetrics.dp(8f).toInt(), ScreenMetrics.dp(6f).toInt(),
+                    ScreenMetrics.dp(8f).toInt(), ScreenMetrics.dp(6f).toInt()
+                )
+            }
+            layout.addView(row)
+        }
+
+        layout.measure(
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
+        )
+
+        val popup = PopupWindow(layout, layout.measuredWidth, layout.measuredHeight, true).apply {
+            elevation = 0f
+            setOnDismissListener { inkCanvas.resumeRawDrawing() }
+        }
+
+        for ((i, candidate) in candidates.take(5).withIndex()) {
+            layout.getChildAt(i).setOnClickListener {
+                // Update the text cache with the selected candidate
+                coordinator?.let { coord ->
+                    coord.lineTextCache[lineIndex] = candidate.text
+                    coord.displayManager.let { dm ->
+                        dm.lastOverlayHash = 0  // force rebuild
+                        dm.updateInlineOverlays(coord.currentLineIndex)
+                    }
+                }
+                popup.dismiss()
+            }
+        }
+
+        val canvasLoc = IntArray(2)
+        inkCanvas.getLocationOnScreen(canvasLoc)
+        val x = ScreenMetrics.dp(20f).toInt()
+        val y = (canvasLoc[1] + screenY - layout.measuredHeight - ScreenMetrics.dp(8f)).toInt()
+            .coerceAtLeast(0)
+        popup.showAtLocation(inkCanvas, Gravity.NO_GRAVITY, x, y)
     }
 
     private fun showWordPopup(word: String, docX: Float, docLineScreenY: Float) {

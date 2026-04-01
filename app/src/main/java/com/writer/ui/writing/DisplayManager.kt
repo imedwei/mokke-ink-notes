@@ -75,6 +75,9 @@ class DisplayManager(
     /** Called when a new recognized word should be shown in the popup. (word, screenX, screenY) */
     var onWordPopup: ((word: String, screenX: Float, screenY: Float) -> Unit)? = null
 
+    /** Lines that are temporarily un-consolidated (user double-tapped to see originals). */
+    private val unConsolidatedLines = mutableSetOf<Int>()
+
     /** Scroll animation state. */
     var scrollAnimating = false
         private set
@@ -310,6 +313,14 @@ class DisplayManager(
             )
         }
 
+        // Mark un-consolidated lines (user double-tapped to reveal originals)
+        for (lineIdx in unConsolidatedLines) {
+            val existing = overlays[lineIdx]
+            if (existing != null && existing.consolidated) {
+                overlays[lineIdx] = existing.copy(unConsolidated = true)
+            }
+        }
+
         val elapsed = android.os.SystemClock.elapsedRealtime() - t0
         if (elapsed > 10) Log.w(TAG, "buildInlineOverlays took ${elapsed}ms (${overlays.size} overlays, ${host.lineTextCache.size} cached lines)")
         return overlays
@@ -320,8 +331,8 @@ class DisplayManager(
     private var lastPopupLine = -1
 
     /** Cache key for last overlay build to skip redundant rebuilds. */
-    private var lastOverlayHash = 0
-    private var lastOverlayLine = -1
+    internal var lastOverlayHash = 0
+    internal var lastOverlayLine = -1
 
     fun updateInlineOverlays(currentLineIndex: Int) {
         inkCanvas.currentWritingLineIndex = currentLineIndex
@@ -357,6 +368,49 @@ class DisplayManager(
             }
         }
         } // isPenRecentlyActive guard
+    }
+
+    /** Toggle un-consolidation for the entire paragraph containing [lineIndex].
+     *  Finds all consecutive lines (consolidated or with text cache) around the
+     *  tapped line and un-consolidates them all, including any reflowed lines. */
+    fun toggleUnConsolidate(lineIndex: Int) {
+        // Find the contiguous range of lines around the tapped line
+        // that are part of the same paragraph (no gaps, no diagram lines)
+        var rangeStart = lineIndex
+        while (rangeStart > 0) {
+            val prev = rangeStart - 1
+            if (host.diagramManager.isDiagramLine(prev)) break
+            if (!host.lineTextCache.containsKey(prev) && prev !in inkCanvas.inlineTextOverlays) break
+            rangeStart = prev
+        }
+        var rangeEnd = lineIndex
+        while (rangeEnd < host.currentLineIndex - 1) {
+            val next = rangeEnd + 1
+            if (host.diagramManager.isDiagramLine(next)) break
+            if (!host.lineTextCache.containsKey(next) && next !in inkCanvas.inlineTextOverlays) break
+            rangeEnd = next
+        }
+
+        val paragraphLines = (rangeStart..rangeEnd).toSet()
+
+        if (paragraphLines.any { it in unConsolidatedLines }) {
+            unConsolidatedLines.removeAll(paragraphLines)
+        } else {
+            unConsolidatedLines.addAll(paragraphLines)
+        }
+        // Force overlay rebuild
+        lastOverlayHash = 0
+        updateInlineOverlays(host.currentLineIndex)
+        inkCanvas.drawToSurface()
+    }
+
+    /** Re-consolidate all un-consolidated lines (called when user moves to a different line). */
+    fun reConsolidateAll() {
+        if (unConsolidatedLines.isNotEmpty()) {
+            unConsolidatedLines.clear()
+            lastOverlayHash = 0
+            updateInlineOverlays(host.currentLineIndex)
+        }
     }
 
     fun stop() {

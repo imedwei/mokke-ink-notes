@@ -223,6 +223,21 @@ class HandwritingCanvasView @JvmOverloads constructor(
     private var fingerScrollActive = false
     private var fingerScrollLastY = 0f
 
+    // Finger tap/double-tap detection for overlay interaction
+    private var fingerDownX = 0f
+    private var fingerDownY = 0f
+    private var fingerDownTime = 0L
+    private var lastTapTime = 0L
+    private var lastTapLineIndex = -1
+    private val TAP_SLOP = ScreenMetrics.dp(20f)
+    private val TAP_TIMEOUT_MS = 300L
+    private val DOUBLE_TAP_TIMEOUT_MS = 400L
+
+    /** Callback: single tap on consolidated text (show alternatives popup). */
+    var onOverlayTap: ((lineIndex: Int) -> Unit)? = null
+    /** Callback: double tap on consolidated text (un-consolidate to show original strokes). */
+    var onOverlayDoubleTap: ((lineIndex: Int) -> Unit)? = null
+
     private val idleRunnable = Runnable { onIdleTimeout?.invoke() }
 
     /** Called when the stylus hovers over this canvas but it doesn't have the
@@ -515,6 +530,9 @@ class HandwritingCanvasView @JvmOverloads constructor(
                     fingerScrollActive = false
                     return false
                 }
+                fingerDownX = event.x
+                fingerDownY = event.y
+                fingerDownTime = event.eventTime
                 fingerScrollLastY = event.y
                 fingerScrollActive = true
                 pauseRawDrawing()
@@ -557,6 +575,43 @@ class HandwritingCanvasView @JvmOverloads constructor(
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 if (!fingerScrollActive) return false
                 fingerScrollActive = false
+
+                // Detect tap (no significant movement, short duration)
+                val dx = event.x - fingerDownX
+                val dy = event.y - fingerDownY
+                val dist = kotlin.math.sqrt(dx * dx + dy * dy)
+                val duration = event.eventTime - fingerDownTime
+                val isTap = event.action == MotionEvent.ACTION_UP && dist < TAP_SLOP && duration < TAP_TIMEOUT_MS
+
+                if (isTap) {
+                    // Convert to document-space line index
+                    val docY = event.y + scrollOffsetY
+                    val lineIndex = ((docY - TOP_MARGIN) / LINE_SPACING).toInt().coerceAtLeast(0)
+                    val now = event.eventTime
+
+                    val hasOverlay = lineIndex in consolidatedLineIndices ||
+                        inlineTextOverlays[lineIndex]?.let { it.consolidated || it.unConsolidated } == true
+                    if (hasOverlay) {
+                        // Check for double-tap
+                        if (lineIndex == lastTapLineIndex && now - lastTapTime < DOUBLE_TAP_TIMEOUT_MS) {
+                            onOverlayDoubleTap?.invoke(lineIndex)
+                            lastTapTime = 0L
+                            lastTapLineIndex = -1
+                        } else {
+                            // Single tap — defer to check for double
+                            lastTapTime = now
+                            lastTapLineIndex = lineIndex
+                            handler.postDelayed({
+                                if (lastTapLineIndex == lineIndex && lastTapTime == now) {
+                                    onOverlayTap?.invoke(lineIndex)
+                                    lastTapTime = 0L
+                                    lastTapLineIndex = -1
+                                }
+                            }, DOUBLE_TAP_TIMEOUT_MS)
+                        }
+                    }
+                }
+
                 if (textOverscroll == 0f) {
                     scrollOffsetY = snapToLine(scrollOffsetY)
                 }

@@ -58,11 +58,11 @@ class WritingCoordinator(
     // Eager recognition: cache of recognized text per line index.
     // All shared mutable state below is accessed only from Dispatchers.Main
     // (scope is lifecycleScope; only recognizer.recognizeLine runs on IO).
-    private val lineTextCache = mutableMapOf<Int, String>()
+    internal val lineTextCache = mutableMapOf<Int, String>()
     // Track the highest (bottommost) line the user has written on
     private var highestLineIndex = -1
     // Track which line the user is currently writing on
-    private var currentLineIndex = -1
+    internal var currentLineIndex = -1
     // Whether the user has manually renamed this document
     var userRenamed = false
     // Callback to notify activity when heading-based rename should happen
@@ -74,6 +74,8 @@ class WritingCoordinator(
     var onHeadingDetected: ((String) -> Unit)? = null
     /** Called when a new recognized word should be shown in a popup. (word, screenX, screenY) */
     var onWordPopup: ((word: String, screenX: Float, screenY: Float) -> Unit)? = null
+    /** Called when user taps consolidated text to see alternatives. (lineIndex, candidates, screenY) */
+    var onAlternativesTap: ((lineIndex: Int, candidates: List<com.writer.recognition.RecognitionCandidate>, screenY: Float) -> Unit)? = null
     // Callback to notify activity when undo/redo availability changes
     var onUndoRedoStateChanged: (() -> Unit)? = null
     // Callback for tutorial step completion (fires action IDs like "stroke_completed")
@@ -83,7 +85,7 @@ class WritingCoordinator(
     // Diagram lifecycle manager (created in start())
     private lateinit var diagramManager: DiagramManager
     // Display manager (created in start())
-    private lateinit var displayManager: DisplayManager
+    internal lateinit var displayManager: DisplayManager
     // Line recognition manager (created in start())
     private lateinit var recognitionManager: LineRecognitionManager
 
@@ -155,7 +157,22 @@ class WritingCoordinator(
         displayManager.onWordPopup = { word, x, y -> onWordPopup?.invoke(word, x, y) }
 
         inkCanvas.columnModel = columnModel
-        inkCanvas.onPenDown = { onTutorialAction?.invoke("pen_down") }
+        inkCanvas.onPenDown = {
+            onTutorialAction?.invoke("pen_down")
+            displayManager.reConsolidateAll()
+        }
+        inkCanvas.onOverlayDoubleTap = { lineIndex ->
+            displayManager.toggleUnConsolidate(lineIndex)
+        }
+        inkCanvas.onOverlayTap = { lineIndex ->
+            val result = recognitionManager.lineRecognitionResults[lineIndex]
+            val candidates = result?.candidates?.distinctBy { it.text } ?: emptyList()
+            if (candidates.size > 1) {
+                val lineTop = HandwritingCanvasView.TOP_MARGIN + lineIndex * HandwritingCanvasView.LINE_SPACING
+                val screenY = lineTop - inkCanvas.scrollOffsetY
+                onAlternativesTap?.invoke(lineIndex, candidates, screenY)
+            }
+        }
         inkCanvas.onRawStrokeCapture = { points ->
             lastStrokeIndex = eventLog.recordStroke(points)
         }
@@ -191,6 +208,8 @@ class WritingCoordinator(
         inkCanvas.onScratchOut = null
         inkCanvas.onStrokeReplaced = null
         inkCanvas.onPenDown = null
+        inkCanvas.onOverlayTap = null
+        inkCanvas.onOverlayDoubleTap = null
     }
 
     fun reset() {
