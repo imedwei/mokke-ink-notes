@@ -5,8 +5,19 @@ import com.writer.model.InkLine
 /** A single recognition candidate with optional confidence score. */
 data class RecognitionCandidate(val text: String, val score: Float?)
 
+/** Per-word confidence info for rendering low-confidence indicators. */
+data class WordConfidence(
+    val word: String,
+    val confidence: Float,  // 0.0 = very low, 1.0 = very high
+    val wordIndex: Int
+)
+
 /** Recognition result containing one or more ranked candidates. */
-data class RecognitionResult(val candidates: List<RecognitionCandidate>) {
+data class RecognitionResult(
+    val candidates: List<RecognitionCandidate>,
+    /** Per-word confidence computed from candidate agreement. */
+    val wordConfidences: List<WordConfidence> = emptyList()
+) {
     /** The top candidate's text, or empty string if no candidates. */
     val text: String get() = candidates.firstOrNull()?.text ?: ""
     /** The top candidate's score, or null if unavailable. */

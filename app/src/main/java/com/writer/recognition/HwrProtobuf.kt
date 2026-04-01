@@ -121,6 +121,27 @@ object HwrProtobuf {
         out.write(bytes)
     }
 
+    /** Simple Levenshtein edit distance for confidence scoring. */
+    private fun levenshtein(a: String, b: String): Int {
+        if (a == b) return 0
+        if (a.isEmpty()) return b.length
+        if (b.isEmpty()) return a.length
+        var prev = IntArray(b.length + 1) { it }
+        var curr = IntArray(b.length + 1)
+        for (i in 1..a.length) {
+            curr[0] = i
+            for (j in 1..b.length) {
+                curr[j] = minOf(
+                    prev[j] + 1,
+                    curr[j - 1] + 1,
+                    prev[j - 1] + if (a[i - 1] == b[j - 1]) 0 else 1
+                )
+            }
+            val tmp = prev; prev = curr; curr = tmp
+        }
+        return prev[b.length]
+    }
+
     // --- Result parsing ---
 
     /**
@@ -193,7 +214,31 @@ object HwrProtobuf {
                         }
                         if (candidates.size >= 8) break
                     }
-                    return RecognitionResult(candidates)
+                    // Compute per-word confidence from candidate agreement.
+                    // If top candidate is very similar to alternatives (just case),
+                    // confidence is high. If alternatives differ significantly, it's low.
+                    val wordConfidences = wordCandidates.mapIndexed { idx, cands ->
+                        val topWord = wordLabels[idx]
+                        val confidence = if (cands.size <= 1) {
+                            1.0f  // only one candidate = full confidence
+                        } else {
+                            // Count how many of the top candidates match (case-insensitive)
+                            val matching = cands.take(5).count { it.equals(topWord, ignoreCase = true) }
+                            val editDistToSecond = if (cands.size > 1) {
+                                levenshtein(topWord.lowercase(), cands[1].lowercase())
+                            } else 0
+                            when {
+                                matching >= 3 -> 0.95f       // most candidates agree
+                                matching >= 2 -> 0.85f       // some agreement
+                                editDistToSecond <= 1 -> 0.7f // close alternatives
+                                editDistToSecond <= 2 -> 0.5f // moderate difference
+                                else -> 0.3f                  // very different alternatives
+                            }
+                        }
+                        WordConfidence(topWord, confidence, idx)
+                    }
+
+                    return RecognitionResult(candidates, wordConfidences)
                 }
             }
 

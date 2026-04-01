@@ -80,6 +80,17 @@ class HandwritingCanvasView @JvmOverloads constructor(
         isAntiAlias = false
     }
 
+    /** Paint for wavy underline on low-confidence words. */
+    private val wavyUnderlinePaint = Paint().apply {
+        color = Color.parseColor("#999999")
+        style = Paint.Style.STROKE
+        strokeWidth = 1.5f
+        isAntiAlias = false
+    }
+
+    /** Confidence threshold below which wavy underline is shown. */
+    private val LOW_CONFIDENCE_THRESHOLD = 0.6f
+
     private val annotationPaint = Paint().apply {
         style = Paint.Style.STROKE
         isAntiAlias = false
@@ -1252,6 +1263,56 @@ class HandwritingCanvasView @JvmOverloads constructor(
                 path
             }
             canvas.drawPath(cachedPath, strokePaint)
+
+            // Draw wavy underline under low-confidence words
+            if (state.wordConfidences.isNotEmpty()) {
+                val hFont = columnModel?.let { null } // we need HersheyFont reference
+                val words = state.recognizedText.split(" ")
+                val margin = ScreenMetrics.dp(10f)
+                val scale = consolidatedPathCache.size.let {
+                    // Use same scale as DisplayManager Hershey rendering
+                    LINE_SPACING * 0.8f / 21f
+                }
+                val baselineGlyphY = 9f
+                val ruledLineY = TOP_MARGIN + (lineIndex + 1) * LINE_SPACING
+                val underlineY = ruledLineY + ScreenMetrics.dp(2f)  // just below baseline
+
+                // Approximate word X positions from equal character distribution
+                val totalChars = state.recognizedText.length
+                val lineWidth = canvasRight - margin * 2
+                var charX = margin
+
+                for ((wordIdx, wc) in state.wordConfidences.withIndex()) {
+                    if (wc.confidence >= LOW_CONFIDENCE_THRESHOLD) {
+                        if (wordIdx < words.size) {
+                            charX += (words[wordIdx].length + 1).toFloat() / totalChars * lineWidth
+                        }
+                        continue
+                    }
+                    if (wordIdx >= words.size) continue
+
+                    val word = words[wordIdx]
+                    val wordStartX = charX
+                    val wordWidth = word.length.toFloat() / totalChars * lineWidth
+                    charX += (word.length + 1).toFloat() / totalChars * lineWidth
+
+                    // Draw wavy line
+                    val wavePath = android.graphics.Path()
+                    val waveHeight = ScreenMetrics.dp(2f)
+                    val waveLength = ScreenMetrics.dp(4f)
+                    wavePath.moveTo(wordStartX, underlineY)
+                    var wx = wordStartX
+                    var up = true
+                    while (wx < wordStartX + wordWidth) {
+                        val nextX = minOf(wx + waveLength, wordStartX + wordWidth)
+                        val dy = if (up) -waveHeight else waveHeight
+                        wavePath.lineTo(nextX, underlineY + dy)
+                        wx = nextX
+                        up = !up
+                    }
+                    canvas.drawPath(wavePath, wavyUnderlinePaint)
+                }
+            }
         }
 
         // Word popup is now rendered as a separate Android View (wordPopup in activity_writing.xml)

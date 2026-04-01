@@ -281,6 +281,19 @@ class DisplayManager(
             }
             val startLineIdx = paragraph.first().key
 
+            // Collect word confidences from recognition results for this paragraph
+            val allWordConfidences = mutableListOf<com.writer.recognition.WordConfidence>()
+            var wordOffset = 0
+            for (entry in paragraph) {
+                val result = host.lineRecognitionResults[entry.key]
+                if (result != null) {
+                    for (wc in result.wordConfidences) {
+                        allWordConfidences.add(wc.copy(wordIndex = wc.wordIndex + wordOffset))
+                    }
+                }
+                wordOffset += entry.value.split(" ").size
+            }
+
             // Generate Hershey strokes only for visible wrapped lines
             for (i in wrappedLines.indices) {
                 val lineIdx = startLineIdx + i
@@ -289,11 +302,19 @@ class DisplayManager(
                 val syntheticStrokes = if (lineIdx in minVisibleLine..maxVisibleLine) {
                     getHersheyStrokes(lineIdx, wrappedText)
                 } else emptyList()
+                // Scope word confidences to this wrapped line
+                val lineStartWord = wrappedLines.take(i).sumOf { it.split(" ").size }
+                val lineWordCount = wrappedText.split(" ").size
+                val lineConfidences = allWordConfidences.filter { wc ->
+                    wc.wordIndex >= lineStartWord && wc.wordIndex < lineStartWord + lineWordCount
+                }.map { it.copy(wordIndex = it.wordIndex - lineStartWord) }
+
                 overlays[lineIdx] = InlineTextState(
                     lineIndex = lineIdx,
                     recognizedText = wrappedText,
                     consolidated = true,
-                    syntheticStrokes = syntheticStrokes
+                    syntheticStrokes = syntheticStrokes,
+                    wordConfidences = lineConfidences
                 )
             }
 

@@ -87,4 +87,6 @@ data class InlineTextState(
     val lowConfidence: Boolean = false,
     /** Per-word alternatives for inline display (only words that differ across candidates). */
     val wordAlternatives: List<WordAlternative> = emptyList(),
+    /** Per-word confidence scores for wavy underline rendering. */
+    val wordConfidences: List<com.writer.recognition.WordConfidence> = emptyList(),
 )
