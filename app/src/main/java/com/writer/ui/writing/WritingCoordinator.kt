@@ -321,11 +321,23 @@ class WritingCoordinator(
 
                             applyWordEdit(edit, newWord, lineIdx)
                         } else {
-                            Log.w(TAG, "EDIT: Recognition failed or empty, not applying edit")
+                            Log.w(TAG, "EDIT: Recognition failed or empty, cancelling edit")
+                            // Clear pending edit so subsequent strokes aren't hidden
+                            pendingWordEdit = null
+                            inkCanvas.hiddenStrokeIds = emptySet()
+                            // Un-hide the replacement strokes (they're the user's normal writing)
+                            inkCanvas.loadStrokes(columnModel.activeStrokes.toList())
+                            inkCanvas.post {
+                                inkCanvas.pauseRawDrawing()
+                                inkCanvas.drawToSurface()
+                                inkCanvas.resumeRawDrawing()
+                            }
                         }
                     }
                 } else {
-                    Log.w(TAG, "EDIT: No replacement strokes found in activeStrokes!")
+                    Log.w(TAG, "EDIT: No replacement strokes found, cancelling edit")
+                    pendingWordEdit = null
+                    inkCanvas.hiddenStrokeIds = emptySet()
                 }
             }
         }
