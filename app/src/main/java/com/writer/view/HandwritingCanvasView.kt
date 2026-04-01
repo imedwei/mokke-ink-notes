@@ -115,8 +115,10 @@ class HandwritingCanvasView @JvmOverloads constructor(
 
     /** Lines currently consolidated (derived from inlineTextOverlays for O(1) lookup). */
     private var consolidatedLineIndices: Set<Int> = emptySet()
+    /** Stroke IDs to hide during rendering (e.g. replacement strokes for pending word edit). */
+    var hiddenStrokeIds: Set<String> = emptySet()
     /** Cached combined Path per consolidated line — avoids rebuilding on every scroll frame. */
-    private val consolidatedPathCache = mutableMapOf<Int, android.graphics.Path>()
+    internal val consolidatedPathCache = mutableMapOf<Int, android.graphics.Path>()
 
     /** Column model reference for magnetic snap access. */
     var columnModel: ColumnModel? = null
@@ -1334,6 +1336,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
             // Skip strokes on consolidated lines (replaced by Hershey text)
             val strokeLineIndex = ((stroke.minY + stroke.maxY) / 2f - TOP_MARGIN) / LINE_SPACING
             if (strokeLineIndex.toInt() in consolidatedLineIndices) continue
+            if (stroke.strokeId in hiddenStrokeIds) continue
 
             val strokeCenterY = (stroke.minY + stroke.maxY) / 2f
             val shift = if (spaceInsertMode && spaceInsertDragActive && strokeCenterY >= anchorY) previewShiftPx else 0f

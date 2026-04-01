@@ -82,6 +82,8 @@ class WritingCoordinator(
     var onTutorialAction: ((String) -> Unit)? = null
     // Hershey font for inline text consolidation
     private var hersheyFont: HersheyFont? = null
+    /** Pending word edit from scratch-out on consolidated text. */
+    internal var pendingWordEdit: PendingWordEdit? = null
     // Diagram lifecycle manager (created in start())
     private lateinit var diagramManager: DiagramManager
     // Display manager (created in start())
@@ -124,6 +126,9 @@ class WritingCoordinator(
             override fun onHeadingDetected(heading: String) { this@WritingCoordinator.onHeadingDetected?.invoke(heading) }
             override fun isDiagramLine(lineIndex: Int): Boolean = diagramManager.isDiagramLine(lineIndex)
             override fun onRecognitionComplete(lineIndex: Int) {
+                // Don't apply pending word edits on recognition — wait for idle timeout
+                // so the user has time to finish writing the replacement word.
+
                 displayManager.displayHiddenLines()
                 displayManager.scheduleTextRefresh()
             }
@@ -147,6 +152,7 @@ class WritingCoordinator(
             override val highestLineIndex: Int get() = this@WritingCoordinator.highestLineIndex
             override val currentLineIndex: Int get() = this@WritingCoordinator.currentLineIndex
             override val lineRecognitionResults get() = recognitionManager.lineRecognitionResults
+            override val pendingWordEdit get() = this@WritingCoordinator.pendingWordEdit
             override fun eagerRecognizeLine(lineIndex: Int) = recognitionManager.eagerRecognizeLine(lineIndex)
             override fun markRecognizing(lineIndex: Int) { recognitionManager.markRecognizing(lineIndex) }
             override suspend fun doRecognizeLine(lineIndex: Int): String? = recognitionManager.doRecognizeLine(lineIndex)
@@ -248,7 +254,76 @@ class WritingCoordinator(
             lastStrokeIndex = eventLog.recordStroke(points)
         }
         inkCanvas.onStrokeCompleted = { stroke -> onStrokeCompleted(stroke) }
-        inkCanvas.onIdleTimeout = { displayManager.onIdle(currentLineIndex) }
+        inkCanvas.onIdleTimeout = {
+            displayManager.onIdle(currentLineIndex)
+            // Apply pending word edit after user stops writing
+            val edit = pendingWordEdit
+            if (edit != null && edit.replacementStrokeIds.isNotEmpty()) {
+                val replacementStrokes = columnModel.activeStrokes.filter {
+                    it.strokeId in edit.replacementStrokeIds
+                }
+                if (replacementStrokes.isNotEmpty()) {
+                    // Relocate replacement strokes to the gap position on the original line.
+                    // This puts them in context with surrounding words for better recognition.
+                    val repMinX = replacementStrokes.minOf { it.minX }
+                    val repMaxX = replacementStrokes.maxOf { it.maxX }
+                    val repMinY = replacementStrokes.minOf { it.minY }
+                    val repWidth = (repMaxX - repMinX).coerceAtLeast(1f)
+                    val gapWidth = (edit.wordEndX - edit.wordStartX).coerceAtLeast(1f)
+                    val scaleX = gapWidth / repWidth
+                    val targetY = edit.lineY + HandwritingCanvasView.LINE_SPACING * 0.5f
+                    val dx = edit.wordStartX - repMinX * scaleX
+                    val dy = targetY - repMinY
+
+                    val relocatedStrokes = replacementStrokes.map { stroke ->
+                        stroke.copy(points = stroke.points.map { pt ->
+                            pt.copy(x = pt.x * scaleX + dx, y = pt.y + dy)
+                        })
+                    }
+
+                    // Build full line: original strokes on the edit's line + relocated replacement
+                    val origLineStrokes = lineSegmenter.getStrokesForLine(columnModel.activeStrokes, edit.lineIndex)
+                        .filter { it.strokeId !in edit.replacementStrokeIds }
+                    val fullLineStrokes = origLineStrokes + relocatedStrokes
+                    val lineIdx = edit.lineIndex
+                    val line = lineSegmenter.buildInkLine(fullLineStrokes, lineIdx)
+
+                    // Build pre-context from consolidated text (better context than raw cache)
+                    val origText = lineTextCache[lineIdx] ?: ""
+                    val wordsBeforeGap = origText.split(" ").take(edit.wordIndex)
+                    val contextFromLine = wordsBeforeGap.joinToString(" ")
+                    val contextFromAbove = buildPreContext(lineTextCache, lineIdx)
+                    val preContext = if (contextFromAbove.isNotEmpty()) {
+                        "$contextFromAbove $contextFromLine"
+                    } else contextFromLine
+
+                    scope.launch {
+                        val fullText = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                            recognizer.recognizeLine(line, preContext)
+                        }.trim()
+
+                        if (fullText.isNotBlank() && fullText != "[?]") {
+                            // The full line was re-recognized with the replacement in context.
+                            // Extract the new word by comparing with the original text.
+                            val origText = lineTextCache[lineIdx] ?: ""
+                            val origWords = origText.split(" ")
+                            val newWords = fullText.split(" ")
+
+                            // Find the word at the edit position
+                            val newWord = if (edit.wordIndex < newWords.size) {
+                                newWords[edit.wordIndex]
+                            } else {
+                                // Fallback: find the word that differs
+                                newWords.firstOrNull { it !in origWords } ?: fullText
+                            }
+
+                            Log.i(TAG, "Word edit with context: '$origText' → '$fullText', extracted '$newWord' at index ${edit.wordIndex}")
+                            applyWordEdit(edit, newWord, lineIdx)
+                        }
+                    }
+                }
+            }
+        }
         inkCanvas.onManualScroll = {
             displayManager.displayHiddenLines()
             onTutorialAction?.invoke("manual_scroll")
@@ -283,6 +358,52 @@ class WritingCoordinator(
         inkCanvas.onOverlayDoubleTap = null
     }
 
+    /** Apply a pending word edit: replace the old word with the new one in lineTextCache. */
+    private fun applyWordEdit(edit: PendingWordEdit, newWord: String, replacementLineIndex: Int) {
+        Log.i(TAG, "Pending word edit resolved: '${edit.oldWord}' → '$newWord' on line ${edit.lineIndex}")
+
+        // Replace the old word at the original position
+        val origText = lineTextCache[edit.lineIndex]
+        if (origText != null) {
+            val words = origText.split(" ").toMutableList()
+            val idx = edit.wordIndex.coerceAtMost(words.size - 1)
+            if (idx >= 0 && idx < words.size && words[idx] == edit.oldWord) {
+                words[idx] = newWord
+            } else {
+                val fallbackIdx = words.indexOf(edit.oldWord)
+                if (fallbackIdx >= 0) words[fallbackIdx] = newWord
+                else words.add(idx.coerceAtMost(words.size), newWord)
+            }
+            lineTextCache[edit.lineIndex] = words.joinToString(" ")
+        } else {
+            lineTextCache[edit.lineIndex] = newWord
+        }
+
+        // Remove the replacement strokes — they were temporary input
+        val idsToRemove = edit.replacementStrokeIds
+        columnModel.activeStrokes.removeAll { it.strokeId in idsToRemove }
+        inkCanvas.removeStrokes(idsToRemove)
+        // Only remove temp line cache if it's a different line than the edit target
+        if (replacementLineIndex != edit.lineIndex) {
+            lineTextCache.remove(replacementLineIndex)
+        }
+
+        pendingWordEdit = null
+        inkCanvas.hiddenStrokeIds = emptySet()
+
+        // Force full overlay + path cache rebuild and e-ink refresh
+        displayManager.lastOverlayHash = 0
+        displayManager.hersheyStrokeCache.clear()
+        inkCanvas.consolidatedPathCache.clear()
+        displayManager.updateInlineOverlays(currentLineIndex)
+        // Pause/draw/resume to force e-ink refresh (shows consolidated Hershey text)
+        inkCanvas.post {
+            inkCanvas.pauseRawDrawing()
+            inkCanvas.drawToSurface()
+            inkCanvas.resumeRawDrawing()
+        }
+    }
+
     fun reset() {
         displayManager.reset()
         recognitionManager.reset()
@@ -310,6 +431,12 @@ class WritingCoordinator(
 
         saveSnapshot(UndoCoalescer.ActionType.STROKE_ADDED, lineSegmenter.getStrokeLineIndex(stroke))
         columnModel.activeStrokes.add(stroke)
+        // Track replacement strokes for pending word edit — hide from rendering
+        val edit = pendingWordEdit
+        if (edit != null) {
+            edit.replacementStrokeIds.add(stroke.strokeId)
+            inkCanvas.hiddenStrokeIds = edit.replacementStrokeIds.toSet()
+        }
         eventLog.recordEvent(lastStrokeIndex, StrokeEventLog.EventType.ADDED, "line=${lineSegmenter.getStrokeLineIndex(stroke)}", elapsedMs = elapsedMs)
         onTutorialAction?.invoke("stroke_completed")
         if (elapsedMs > PERF_BUDGET_MS) Log.w(TAG, "Slow stroke: ${elapsedMs}ms (added, line=${lineSegmenter.getStrokeLineIndex(stroke)})")
@@ -394,10 +521,68 @@ class WritingCoordinator(
     }
 
     private fun onScratchOut(scratchPoints: List<StrokePoint>, left: Float, top: Float, right: Float, bottom: Float) {
-        // Find strokes within the scratch-out region using bounding-box overlap.
-        // isFocusedScratchOut already verified this is a real scratch-out, so
-        // bbox proximity is sufficient — no expensive segment intersection needed.
         val radius = ScreenMetrics.dp(ScratchOutDetection.COVERAGE_RADIUS_DP)
+
+        // Check if scratch-out hits consolidated Hershey text first
+        val scratchCenterY = (top + bottom) / 2f
+        val scratchLineIdx = ((scratchCenterY - HandwritingCanvasView.TOP_MARGIN) / HandwritingCanvasView.LINE_SPACING).toInt()
+        val overlay = inkCanvas.inlineTextOverlays[scratchLineIdx]
+        if (overlay != null && overlay.consolidated && !overlay.unConsolidated && overlay.recognizedText.isNotBlank()) {
+            // Scratch-out on consolidated text — identify which word was hit
+            val words = overlay.recognizedText.split(" ")
+            if (words.isNotEmpty() && hersheyFont != null) {
+                val scale = displayManager.hScale
+                val margin = ScreenMetrics.dp(10f)
+                var wordX = margin
+                for ((wordIdx, word) in words.withIndex()) {
+                    val wordWidth = hersheyFont!!.measureWidth(word) * scale
+                    val spaceWidth = hersheyFont!!.measureWidth(" ") * scale
+                    val wordEndX = wordX + wordWidth
+
+                    // Check if scratch-out overlaps this word
+                    if (left <= wordEndX + radius && right >= wordX - radius) {
+                        Log.i(TAG, "Scratch-out on consolidated word '$word' at index $wordIdx on line $scratchLineIdx")
+
+                        // Find the original line in lineTextCache that contains this word
+                        // (reflow may have remapped line indices)
+                        var origLineIdx = scratchLineIdx
+                        for ((idx, cached) in lineTextCache) {
+                            if (cached.split(" ").any { it == word }) {
+                                origLineIdx = idx
+                                break
+                            }
+                        }
+
+                        // Don't remove original strokes — they're hidden by consolidation.
+                        // Just save an undo snapshot so the edit can be reverted.
+                        saveSnapshot(UndoCoalescer.ActionType.SCRATCH_OUT)
+
+                        // Store pending edit for the replacement
+                        val lineY = HandwritingCanvasView.TOP_MARGIN + scratchLineIdx * HandwritingCanvasView.LINE_SPACING
+                        pendingWordEdit = PendingWordEdit(
+                            lineIndex = origLineIdx,
+                            oldWord = word,
+                            wordIndex = wordIdx,
+                            wordStartX = wordX,
+                            wordEndX = wordEndX,
+                            lineY = lineY
+                        )
+
+                        // Rebuild overlays to show the gap
+                        displayManager.lastOverlayHash = 0
+                        displayManager.hersheyStrokeCache.clear()
+                        displayManager.updateInlineOverlays(currentLineIndex)
+                        inkCanvas.drawToSurface()
+
+                        onTutorialAction?.invoke("scratch_out")
+                        return
+                    }
+                    wordX = wordEndX + spaceWidth
+                }
+            }
+        }
+
+        // Normal scratch-out on handwritten strokes
         val overlapping = columnModel.activeStrokes.filter { stroke ->
             val sMinX = stroke.minX; val sMaxX = stroke.maxX
             val sMinY = stroke.minY; val sMaxY = stroke.maxY

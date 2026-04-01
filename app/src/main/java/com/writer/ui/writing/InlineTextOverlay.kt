@@ -90,3 +90,24 @@ data class InlineTextState(
     /** Per-word confidence scores for wavy underline rendering. */
     val wordConfidences: List<com.writer.recognition.WordConfidence> = emptyList(),
 )
+
+/**
+ * Tracks a pending word replacement in consolidated text.
+ * Created when the user scratches out a word in Hershey text.
+ * Cleared when the user writes a replacement word.
+ */
+data class PendingWordEdit(
+    /** The original line index in lineTextCache where the word was. */
+    val lineIndex: Int,
+    /** The word that was scratched out. */
+    val oldWord: String,
+    /** Index of the word within the line text (for position-based replacement). */
+    val wordIndex: Int,
+    /** X bounds of the erased word in document space (for positioning replacement). */
+    val wordStartX: Float,
+    val wordEndX: Float,
+    /** Y position (line top in document space). */
+    val lineY: Float,
+    /** Stroke IDs added after this edit was created (the replacement strokes). */
+    val replacementStrokeIds: MutableSet<String> = mutableSetOf()
+)

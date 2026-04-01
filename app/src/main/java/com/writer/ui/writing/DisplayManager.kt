@@ -21,6 +21,8 @@ interface DisplayManagerHost {
     val currentLineIndex: Int
     /** Full recognition results with candidates, keyed by line index. */
     val lineRecognitionResults: Map<Int, com.writer.recognition.RecognitionResult>
+    /** Pending word edit from scratch-out on consolidated text (null if none). */
+    val pendingWordEdit: PendingWordEdit?
     fun eagerRecognizeLine(lineIndex: Int)
     /** Batch-recognize a line, adding/removing from recognizingLines internally. */
     fun markRecognizing(lineIndex: Int)
@@ -114,13 +116,37 @@ class DisplayManager(
         if (w > 0f) hMaxWidthUnits = (w - hMargin * 2) / hScale
     }
 
-    private fun getHersheyStrokes(lineIdx: Int, text: String): List<InkStroke> {
+    private fun getHersheyStrokes(lineIdx: Int, text: String, skipWordIndex: Int = -1): List<InkStroke> {
         val font = hersheyFont ?: return emptyList()
-        return hersheyStrokeCache.getOrPut(lineIdx to text) {
+        val cacheKey = lineIdx to (text + ":skip$skipWordIndex")
+        return hersheyStrokeCache.getOrPut(cacheKey) {
             val ls = HandwritingCanvasView.LINE_SPACING
             val tm = HandwritingCanvasView.TOP_MARGIN
             val ruledY = tm + (lineIdx + 1) * ls
-            font.textToStrokes(text, hMargin, ruledY - hBaselineY * hScale, hScale, 0.5f)
+            val startY = ruledY - hBaselineY * hScale
+            if (skipWordIndex < 0) {
+                font.textToStrokes(text, hMargin, startY, hScale, 0.5f)
+            } else {
+                // Generate strokes word-by-word, skipping the word at skipWordIndex
+                val words = text.split(" ")
+                val result = mutableListOf<InkStroke>()
+                var cursorX = 0f
+                for ((i, word) in words.withIndex()) {
+                    val wordWidthUnits = font.measureWidth(word)
+                    val spaceWidthUnits = font.measureWidth(" ")
+                    if (i == skipWordIndex) {
+                        // Skip rendering but advance cursor to preserve gap
+                        cursorX += wordWidthUnits + spaceWidthUnits
+                        continue
+                    }
+                    val wordStrokes = font.textToStrokes(
+                        word, hMargin + cursorX * hScale, startY, hScale, 0.5f
+                    )
+                    result.addAll(wordStrokes)
+                    cursorX += wordWidthUnits + spaceWidthUnits
+                }
+                result
+            }
         }
     }
 
@@ -295,15 +321,38 @@ class DisplayManager(
             }
 
             // Generate Hershey strokes only for visible wrapped lines
+            val pendingEdit = host.pendingWordEdit
             for (i in wrappedLines.indices) {
                 val lineIdx = startLineIdx + i
                 val wrappedText = wrappedLines[i]
+                // Check if this wrapped line contains the pending edit word.
+                // Use the scratch-out X position to disambiguate duplicate words.
+                val lineStartWord = wrappedLines.take(i).sumOf { it.split(" ").size }
+                val skipIdx = if (pendingEdit != null && hersheyFont != null) {
+                    val words = wrappedText.split(" ")
+                    var bestIdx = -1
+                    var bestDist = Float.MAX_VALUE
+                    var wx = hMargin
+                    for ((wi, w) in words.withIndex()) {
+                        val ww = hersheyFont!!.measureWidth(w) * hScale
+                        val sw = hersheyFont!!.measureWidth(" ") * hScale
+                        val wordCenterX = wx + ww / 2f
+                        if (w == pendingEdit.oldWord) {
+                            val dist = kotlin.math.abs(wordCenterX - (pendingEdit.wordStartX + pendingEdit.wordEndX) / 2f)
+                            if (dist < bestDist) {
+                                bestDist = dist
+                                bestIdx = wi
+                            }
+                        }
+                        wx += ww + sw
+                    }
+                    bestIdx
+                } else -1
                 // Only generate strokes for lines near the viewport
                 val syntheticStrokes = if (lineIdx in minVisibleLine..maxVisibleLine) {
-                    getHersheyStrokes(lineIdx, wrappedText)
+                    getHersheyStrokes(lineIdx, wrappedText, skipIdx)
                 } else emptyList()
-                // Scope word confidences to this wrapped line
-                val lineStartWord = wrappedLines.take(i).sumOf { it.split(" ").size }
+                // Scope word confidences to this wrapped line (reuse lineStartWord from above)
                 val lineWordCount = wrappedText.split(" ").size
                 val lineConfidences = allWordConfidences.filter { wc ->
                     wc.wordIndex >= lineStartWord && wc.wordIndex < lineStartWord + lineWordCount
