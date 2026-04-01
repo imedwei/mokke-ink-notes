@@ -235,8 +235,8 @@ class HandwritingCanvasView @JvmOverloads constructor(
     private val TAP_TIMEOUT_MS = 300L
     private val DOUBLE_TAP_TIMEOUT_MS = 400L
 
-    /** Callback: single tap on consolidated text (show alternatives popup). */
-    var onOverlayTap: ((lineIndex: Int) -> Unit)? = null
+    /** Callback: single tap on consolidated text (show alternatives popup). (lineIndex, tapX in doc space) */
+    var onOverlayTap: ((lineIndex: Int, tapX: Float) -> Unit)? = null
     /** Callback: double tap on consolidated text (un-consolidate to show original strokes). */
     var onOverlayDoubleTap: ((lineIndex: Int) -> Unit)? = null
 
@@ -603,9 +603,10 @@ class HandwritingCanvasView @JvmOverloads constructor(
                             // Single tap — defer to check for double
                             lastTapTime = now
                             lastTapLineIndex = lineIndex
+                            val tapX = event.x  // store for deferred callback
                             handler.postDelayed({
                                 if (lastTapLineIndex == lineIndex && lastTapTime == now) {
-                                    onOverlayTap?.invoke(lineIndex)
+                                    onOverlayTap?.invoke(lineIndex, tapX)
                                     lastTapTime = 0L
                                     lastTapLineIndex = -1
                                 }

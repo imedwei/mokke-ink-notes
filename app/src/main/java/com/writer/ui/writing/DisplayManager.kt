@@ -100,7 +100,7 @@ class DisplayManager(
     }
 
     // Precomputed Hershey metrics (lazy-initialized once)
-    private var hScale = 0f
+    internal var hScale = 0f
     private var hBaselineY = 9f
     private var hMargin = 0f
     private var hMaxWidthUnits = Float.MAX_VALUE

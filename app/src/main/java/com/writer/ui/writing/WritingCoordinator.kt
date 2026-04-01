@@ -74,8 +74,8 @@ class WritingCoordinator(
     var onHeadingDetected: ((String) -> Unit)? = null
     /** Called when a new recognized word should be shown in a popup. (word, screenX, screenY) */
     var onWordPopup: ((word: String, screenX: Float, screenY: Float) -> Unit)? = null
-    /** Called when user taps consolidated text to see alternatives. (lineIndex, candidates, screenY) */
-    var onAlternativesTap: ((lineIndex: Int, candidates: List<com.writer.recognition.RecognitionCandidate>, screenY: Float) -> Unit)? = null
+    /** Called when user taps a word to see alternatives. (lineIndex, word, candidates, tapX, screenY) */
+    var onAlternativesTap: ((lineIndex: Int, word: String, candidates: List<com.writer.recognition.RecognitionCandidate>, tapX: Float, screenY: Float) -> Unit)? = null
     // Callback to notify activity when undo/redo availability changes
     var onUndoRedoStateChanged: (() -> Unit)? = null
     // Callback for tutorial step completion (fires action IDs like "stroke_completed")
@@ -164,14 +164,64 @@ class WritingCoordinator(
         inkCanvas.onOverlayDoubleTap = { lineIndex ->
             displayManager.toggleUnConsolidate(lineIndex)
         }
-        inkCanvas.onOverlayTap = { lineIndex ->
-            val result = recognitionManager.lineRecognitionResults[lineIndex]
-            val candidates = result?.candidates?.distinctBy { it.text } ?: emptyList()
-            if (candidates.size > 1) {
-                val lineTop = HandwritingCanvasView.TOP_MARGIN + lineIndex * HandwritingCanvasView.LINE_SPACING
-                val screenY = lineTop - inkCanvas.scrollOffsetY
-                onAlternativesTap?.invoke(lineIndex, candidates, screenY)
+        inkCanvas.onOverlayTap = overlayTap@{ lineIndex, tapX ->
+            val overlay = inkCanvas.inlineTextOverlays[lineIndex] ?: return@overlayTap
+            val text = overlay.recognizedText
+            if (text.isBlank()) return@overlayTap
+
+            // Figure out which word was tapped based on X position.
+            // Use HersheyFont to measure word positions, or approximate with even spacing.
+            val words = text.split(" ")
+            if (words.isEmpty()) return@overlayTap
+
+            val tappedWordIndex = if (hersheyFont != null && words.size > 1) {
+                // Measure cumulative width of each word to find which one the tap hit
+                val margin = com.writer.view.ScreenMetrics.dp(10f)
+                val scale = displayManager.hScale
+                var x = margin
+                var found = 0
+                for ((i, word) in words.withIndex()) {
+                    val wordWidth = hersheyFont!!.measureWidth(word) * scale
+                    val spaceWidth = hersheyFont!!.measureWidth(" ") * scale
+                    if (tapX < x + wordWidth + spaceWidth / 2) { found = i; break }
+                    x += wordWidth + spaceWidth
+                    found = i
+                }
+                found
+            } else 0
+
+            val tappedWord = words[tappedWordIndex]
+
+            // Find word-level candidates from recognition results for this word
+            val wordCandidates = mutableListOf(
+                com.writer.recognition.RecognitionCandidate(tappedWord, null)
+            )
+
+            // Search ALL recognition results for word alternatives at this word position.
+            // After reflow, the tapped word might come from any original line.
+            for ((_, result) in recognitionManager.lineRecognitionResults) {
+                for (candidate in result.candidates) {
+                    val candidateWords = candidate.text.split(" ")
+                    // Check if this candidate has a word at the same position that differs
+                    for (word in candidateWords) {
+                        if (word != tappedWord && word.isNotBlank()
+                            && wordCandidates.none { it.text == word }
+                            // Only include words that look similar (share first letter or close length)
+                            && (word.first().equals(tappedWord.first(), ignoreCase = true)
+                                || kotlin.math.abs(word.length - tappedWord.length) <= 2)
+                        ) {
+                            wordCandidates.add(com.writer.recognition.RecognitionCandidate(word, candidate.score))
+                            if (wordCandidates.size >= 5) break
+                        }
+                    }
+                }
+                if (wordCandidates.size >= 5) break
             }
+
+            val lineTop = HandwritingCanvasView.TOP_MARGIN + lineIndex * HandwritingCanvasView.LINE_SPACING
+            val screenY = lineTop - inkCanvas.scrollOffsetY
+            onAlternativesTap?.invoke(lineIndex, tappedWord, wordCandidates, tapX, screenY)
+            Log.d(TAG, "Overlay tap: line=$lineIndex word=$tappedWordIndex '$tappedWord' candidates=${wordCandidates.size}")
         }
         inkCanvas.onRawStrokeCapture = { points ->
             lastStrokeIndex = eventLog.recordStroke(points)

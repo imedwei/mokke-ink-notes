@@ -79,6 +79,8 @@ class WritingActivity : AppCompatActivity() {
 
     // Word recognition popup (uses PopupWindow for its own window layer above Onyx SDK)
     private var wordPopupWindow: PopupWindow? = null
+    // Alternatives popup (shown on single tap of consolidated text)
+    private var alternativesPopup: PopupWindow? = null
     private var wordPopupText: TextView? = null
     // Document-space coordinates for popup positioning (survives scroll)
     private var popupDocX = 0f
@@ -442,8 +444,8 @@ class WritingActivity : AppCompatActivity() {
             cueIndicatorStrip.scrollOffsetY = inkCanvas.scrollOffsetY
             repositionWordPopup()
         }
-        coordinator?.onAlternativesTap = { lineIndex, candidates, screenY ->
-            showAlternativesPopup(lineIndex, candidates, screenY)
+        coordinator?.onAlternativesTap = { lineIndex, word, candidates, tapX, screenY ->
+            showAlternativesPopup(lineIndex, word, candidates, tapX, screenY)
         }
         coordinator?.start()
 
@@ -451,9 +453,19 @@ class WritingActivity : AppCompatActivity() {
 
     private fun showAlternativesPopup(
         lineIndex: Int,
+        currentWord: String,
         candidates: List<com.writer.recognition.RecognitionCandidate>,
+        tapX: Float,
         screenY: Float
     ) {
+        if (candidates.isEmpty()) return
+
+        // Dismiss existing popups
+        wordPopupWindow?.dismiss()
+        wordPopupWindow = null
+        alternativesPopup?.dismiss()
+        alternativesPopup = null
+
         inkCanvas.pauseRawDrawing()
         inkCanvas.drawToSurface()
 
@@ -469,11 +481,14 @@ class WritingActivity : AppCompatActivity() {
         for (candidate in candidates.take(5)) {
             val row = TextView(this).apply {
                 text = candidate.text
-                textSize = 16f
+                textSize = 18f
                 setTextColor(android.graphics.Color.BLACK)
+                if (candidate.text == currentWord) {
+                    setTypeface(null, android.graphics.Typeface.BOLD)
+                }
                 setPadding(
-                    ScreenMetrics.dp(8f).toInt(), ScreenMetrics.dp(6f).toInt(),
-                    ScreenMetrics.dp(8f).toInt(), ScreenMetrics.dp(6f).toInt()
+                    ScreenMetrics.dp(12f).toInt(), ScreenMetrics.dp(8f).toInt(),
+                    ScreenMetrics.dp(12f).toInt(), ScreenMetrics.dp(8f).toInt()
                 )
             }
             layout.addView(row)
@@ -484,18 +499,26 @@ class WritingActivity : AppCompatActivity() {
             View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
         )
 
-        val popup = PopupWindow(layout, layout.measuredWidth, layout.measuredHeight, true).apply {
+        val popup = PopupWindow(layout, layout.measuredWidth, layout.measuredHeight, false).apply {
             elevation = 0f
+            isTouchable = true
+            isOutsideTouchable = true
+            setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
             setOnDismissListener { inkCanvas.resumeRawDrawing() }
         }
+        alternativesPopup = popup
 
         for ((i, candidate) in candidates.take(5).withIndex()) {
             layout.getChildAt(i).setOnClickListener {
-                // Update the text cache with the selected candidate
                 coordinator?.let { coord ->
-                    coord.lineTextCache[lineIndex] = candidate.text
+                    // Replace the tapped word in all original line cache entries
+                    for ((idx, cached) in coord.lineTextCache.toMap()) {
+                        if (cached.contains(currentWord)) {
+                            coord.lineTextCache[idx] = cached.replace(currentWord, candidate.text)
+                        }
+                    }
                     coord.displayManager.let { dm ->
-                        dm.lastOverlayHash = 0  // force rebuild
+                        dm.lastOverlayHash = 0
                         dm.updateInlineOverlays(coord.currentLineIndex)
                     }
                 }
@@ -503,11 +526,13 @@ class WritingActivity : AppCompatActivity() {
             }
         }
 
+        // Position popup above the tapped word
         val canvasLoc = IntArray(2)
         inkCanvas.getLocationOnScreen(canvasLoc)
-        val x = ScreenMetrics.dp(20f).toInt()
-        val y = (canvasLoc[1] + screenY - layout.measuredHeight - ScreenMetrics.dp(8f)).toInt()
-            .coerceAtLeast(0)
+        val x = (canvasLoc[0] + tapX - layout.measuredWidth / 2f)
+            .coerceIn(8f, (window.decorView.width - layout.measuredWidth - 8).toFloat()).toInt()
+        val y = (canvasLoc[1] + screenY - layout.measuredHeight - ScreenMetrics.dp(8f))
+            .coerceAtLeast(0f).toInt()
         popup.showAtLocation(inkCanvas, Gravity.NO_GRAVITY, x, y)
     }
 
