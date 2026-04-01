@@ -56,6 +56,12 @@ class NewDocumentTest {
         }
     }
 
+    @org.junit.After
+    fun tearDown() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        DocumentStorage.delete(context, "new-doc-test")
+    }
+
     @Test
     fun newDocument_clearsConsolidatedOverlays() {
         activityRule.launchActivity(null)

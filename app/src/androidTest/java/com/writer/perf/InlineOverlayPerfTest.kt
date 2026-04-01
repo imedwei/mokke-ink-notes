@@ -129,6 +129,13 @@ class InlineOverlayPerfTest {
         }
     }
 
+    @org.junit.After
+    fun tearDown() {
+        // Clean up test documents so they don't pollute the dev app
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        DocumentStorage.delete(context, "perf-test-large")
+    }
+
     @Test
     fun startup_withLargeDocument_isResponsiveWithinBudget() {
         val t0 = SystemClock.elapsedRealtime()
