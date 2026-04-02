@@ -203,7 +203,8 @@ class LineRecognitionRaceTest {
         // Start first recognition (blocks at gate)
         manager.eagerRecognizeLine(0)
 
-        // Queue multiple re-recognitions (user writing rapidly)
+        // User writes more strokes (changing stroke count) and queues re-recognitions
+        columnModel.activeStrokes.add(stroke(0, 110f, 200f, "s2"))
         lineTextCache.remove(0)
         manager.eagerRecognizeLine(0)
         lineTextCache.remove(0)

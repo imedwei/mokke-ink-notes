@@ -82,6 +82,8 @@ class LineRecognitionManager(
     fun markRecognizing(lineIndex: Int) { recognizingLines.add(lineIndex) }
     /** Lines that need re-recognition after current recognition finishes. */
     val pendingRerecognize = mutableSetOf<Int>()
+    /** Stroke count when recognition last started, per line. Used to skip redundant re-recognition. */
+    private val lastRecognizedStrokeCount = mutableMapOf<Int, Int>()
 
     fun eagerRecognizeLine(lineIndex: Int) {
         if (host.lineTextCache.containsKey(lineIndex)) return
@@ -99,9 +101,13 @@ class LineRecognitionManager(
             host.onRecognitionComplete(lineIndex)
             if (lineIndex in pendingRerecognize) {
                 pendingRerecognize.remove(lineIndex)
-                host.lineTextCache.remove(lineIndex)
-                Log.d(TAG, "Re-recognizing line $lineIndex (strokes changed during recognition)")
-                recognizeRenderedLine(lineIndex)
+                // Skip re-recognition if stroke count hasn't changed
+                val currentCount = lineSegmenter.getStrokesForLine(columnModel.activeStrokes, lineIndex).size
+                if (currentCount != lastRecognizedStrokeCount[lineIndex]) {
+                    host.lineTextCache.remove(lineIndex)
+                    Log.d(TAG, "Re-recognizing line $lineIndex (strokes changed: ${lastRecognizedStrokeCount[lineIndex]} → $currentCount)")
+                    recognizeRenderedLine(lineIndex)
+                }
             }
         }
     }
@@ -120,7 +126,10 @@ class LineRecognitionManager(
             host.onRecognitionComplete(lineIndex)
             if (lineIndex in pendingRerecognize) {
                 pendingRerecognize.remove(lineIndex)
-                recognizeRenderedLine(lineIndex)
+                val currentCount = lineSegmenter.getStrokesForLine(columnModel.activeStrokes, lineIndex).size
+                if (currentCount != lastRecognizedStrokeCount[lineIndex]) {
+                    recognizeRenderedLine(lineIndex)
+                }
             }
         }
     }
@@ -154,6 +163,7 @@ class LineRecognitionManager(
 
             val line = lineSegmenter.buildInkLine(strokes, lineIndex)
             val preContext = buildPreContext(lineIndex)
+            lastRecognizedStrokeCount[lineIndex] = strokes.size
             val result = withContext(Dispatchers.IO) {
                 recognizer.recognizeLineWithCandidates(line, preContext)
             }

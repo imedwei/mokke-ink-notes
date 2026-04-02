@@ -4,6 +4,7 @@ import android.util.Log
 import com.writer.model.ColumnModel
 import com.writer.model.InkStroke
 import com.writer.model.maxX
+import com.writer.model.minX
 import com.writer.view.HandwritingCanvasView
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -442,17 +443,30 @@ class DisplayManager(
             if (lastWord != null && (currentText != lastPopupText || currentLineIndex != lastPopupLine)) {
                 lastPopupText = currentText
                 lastPopupLine = currentLineIndex
-                // Use rightmost stroke X for popup position
-                var rightX = inkCanvas.width / 2f
-                for (stroke in host.columnModel.activeStrokes) {
+                // Find the left edge of the last word's strokes using N-1 largest
+                // gaps (same algorithm as findStrokesForWord). The word count from
+                // recognized text tells us how many gaps to find.
+                val wordCount = currentText.trim().split(" ").size
+                val lineStrokes = host.columnModel.activeStrokes.filter { stroke ->
                     val y = stroke.points[stroke.points.size / 2].y
-                    if (lineSegmenter.getLineIndex(y) == currentLineIndex) {
-                        if (stroke.maxX > rightX) rightX = stroke.maxX
-                    }
+                    lineSegmenter.getLineIndex(y) == currentLineIndex
+                }.sortedBy { it.minX }
+                var popupX = inkCanvas.width / 2f
+                if (lineStrokes.size >= 2 && wordCount >= 2) {
+                    // Collect all inter-stroke gaps, find N-1 largest
+                    val gaps = (1 until lineStrokes.size).map { i ->
+                        i to (lineStrokes[i].minX - lineStrokes[i - 1].maxX)
+                    }.sortedByDescending { it.second }
+                    val boundaryIndices = gaps.take(wordCount - 1).map { it.first }.sorted()
+                    // Last word starts after the last boundary
+                    val lastWordStart = boundaryIndices.lastOrNull() ?: 0
+                    popupX = lineStrokes[lastWordStart].minX
+                } else if (lineStrokes.isNotEmpty()) {
+                    popupX = lineStrokes[0].minX
                 }
                 val lineTop = HandwritingCanvasView.TOP_MARGIN + currentLineIndex * HandwritingCanvasView.LINE_SPACING
                 val screenY = lineTop - inkCanvas.scrollOffsetY
-                onWordPopup?.invoke(lastWord, rightX, screenY)
+                onWordPopup?.invoke(lastWord, popupX, screenY)
             }
         }
         } // isPenRecentlyActive guard

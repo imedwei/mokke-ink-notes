@@ -582,8 +582,8 @@ class WritingActivity : AppCompatActivity() {
         inkCanvas.pauseRawDrawing()
         inkCanvas.drawToSurface()
         pw.showAtLocation(inkCanvas, Gravity.NO_GRAVITY, x, y)
-        // Post resume to next frame so the PopupWindow has time to render
-        inkCanvas.post { inkCanvas.resumeRawDrawing() }
+        // Delay resume so the PopupWindow has time to layout and render on e-ink
+        inkCanvas.postDelayed({ inkCanvas.resumeRawDrawing() }, 100)
     }
 
     private fun hideWordPopup() {
@@ -604,7 +604,7 @@ class WritingActivity : AppCompatActivity() {
         val canvasLoc = IntArray(2)
         inkCanvas.getLocationOnScreen(canvasLoc)
         val screenY = popupDocY - inkCanvas.scrollOffsetY
-        val x = (canvasLoc[0] + popupDocX - popupWidth / 2f)
+        val x = (canvasLoc[0] + popupDocX)
             .coerceIn(8f, (window.decorView.width - popupWidth - 8).toFloat()).toInt()
         val y = (canvasLoc[1] + screenY - popupHeight - 8f).coerceAtLeast(0f).toInt()
         return x to y
