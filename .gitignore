@@ -36,3 +36,6 @@ local.properties
 
 # Temporary debugging artifacts (screenshots, bug reports)
 /tmp/
+
+# Raw corpus data (download via curl, compile via ./gradlew compileBigrams)
+tools/corpus/*.txt

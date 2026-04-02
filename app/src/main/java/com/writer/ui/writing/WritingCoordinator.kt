@@ -19,6 +19,7 @@ import com.writer.recognition.LineSegmenter
 import com.writer.recognition.StrokeClassifier
 import com.writer.model.DocumentData
 import com.writer.storage.SvgExporter
+import com.writer.recognition.BigramPredictor
 import com.writer.view.HandwritingCanvasView
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -97,11 +98,100 @@ class WritingCoordinator(
      *  Safe as a single field because stylus input is single-touch on the main thread. */
     private var lastStrokeIndex = -1
 
+    // Bigram predictor for typeahead ghost suggestions
+    private var bigramPredictor: BigramPredictor? = null
+    /** The text that last triggered a prediction (to avoid re-predicting the same text). */
+    private var lastPredictionText = ""
+    /** The word currently shown as ghost prediction (used by acceptPrediction). */
+    private var currentGhostWord = ""
+
     override fun onDiagramAreasChanged() = displayManager.displayHiddenLines()
     override fun getLineTextCache() = lineTextCache
 
+    /** Accept the ghost prediction: add Hershey strokes as raw ink and update text cache. */
+    private fun acceptPrediction() {
+        val ghostStrokes = inkCanvas.ghostStrokes
+        if (ghostStrokes.isEmpty() || currentGhostWord.isEmpty()) return
+        val lineIdx = currentLineIndex
+        if (lineIdx < 0) return
+
+        val currentText = lineTextCache[lineIdx] ?: return
+        val predictedWord = currentGhostWord
+
+        saveSnapshot(UndoCoalescer.ActionType.STROKE_ADDED)
+
+        // Add the ghost strokes as permanent ink strokes with new IDs
+        val newStrokes = ghostStrokes.map {
+            it.copy(strokeId = java.util.UUID.randomUUID().toString())
+        }
+        columnModel.activeStrokes.addAll(newStrokes)
+
+        // Update text cache with the accepted word
+        lineTextCache[lineIdx] = "$currentText $predictedWord"
+        lastPredictionText = lineTextCache[lineIdx]!!
+
+        // Clear ghosts and refresh
+        inkCanvas.ghostStrokes = emptyList()
+        inkCanvas.loadStrokes(columnModel.activeStrokes.toList())
+        displayManager.lastOverlayHash = 0
+        displayManager.displayHiddenLines()
+
+        Log.i(TAG, "Accepted prediction: '$predictedWord' on line $lineIdx")
+
+        // Trigger new prediction based on the accepted word
+        showPredictionGhost(lineIdx)
+    }
+
+    /** Show ghost Hershey strokes predicting the next word after recognition. */
+    private fun showPredictionGhost(lineIndex: Int) {
+        val font = hersheyFont ?: return
+        val predictor = bigramPredictor ?: return
+        val currentText = lineTextCache[lineIndex] ?: return
+        if (currentText == lastPredictionText) return
+        lastPredictionText = currentText
+
+        val lastWord = currentText.trim().split(" ").lastOrNull() ?: return
+        val predictions = predictor.predict(lastWord)
+        if (predictions.isEmpty()) {
+            if (inkCanvas.ghostStrokes.isNotEmpty()) {
+                inkCanvas.ghostStrokes = emptyList()
+            }
+            return
+        }
+
+        // Generate ghost Hershey strokes for the top prediction after the last stroke
+        val ls = HandwritingCanvasView.LINE_SPACING
+        val tm = HandwritingCanvasView.TOP_MARGIN
+        val scale = ls * 0.8f / 21f
+        val baselineGlyphY = 9f
+        val ruledY = tm + (lineIndex + 1) * ls
+        val startY = ruledY - baselineGlyphY * scale
+
+        val lineStrokes = columnModel.activeStrokes.filter { s ->
+            val y = s.points[s.points.size / 2].y
+            lineSegmenter.getLineIndex(y) == lineIndex
+        }
+        val afterX = if (lineStrokes.isNotEmpty()) {
+            lineStrokes.maxOf { it.maxX } + ScreenMetrics.dp(8f)
+        } else ScreenMetrics.dp(10f)
+
+        currentGhostWord = predictions.first()
+        inkCanvas.ghostStrokes = font.textToStrokes(currentGhostWord, afterX, startY, scale, 0f)
+        Log.d(TAG, "Prediction ghost: '$currentGhostWord' (from '$lastWord') for line $lineIndex")
+        inkCanvas.post {
+            inkCanvas.pauseRawDrawing()
+            inkCanvas.drawToSurface()
+            inkCanvas.resumeRawDrawing()
+        }
+    }
+
     fun start() {
         Log.i(TAG, "Coordinator started")
+
+        // Load bigram predictor for typeahead ghost suggestions
+        if (bigramPredictor == null) {
+            bigramPredictor = BigramPredictor.load(inkCanvas.context)
+        }
 
         val canvasAdapter = object : DiagramCanvas {
             override var diagramAreas
@@ -128,6 +218,11 @@ class WritingCoordinator(
             override fun onRecognitionComplete(lineIndex: Int) {
                 displayManager.displayHiddenLines()
                 displayManager.scheduleTextRefresh()
+
+                // Show predicted next word as ghost Hershey strokes
+                if (lineIndex == currentLineIndex) {
+                    showPredictionGhost(lineIndex)
+                }
             }
         }
         recognitionManager = LineRecognitionManager(
@@ -159,7 +254,15 @@ class WritingCoordinator(
         inkCanvas.columnModel = columnModel
         inkCanvas.onPenDown = {
             onTutorialAction?.invoke("pen_down")
+            // Dismiss ghost predictions — user is writing, not accepting
+            if (inkCanvas.ghostStrokes.isNotEmpty()) {
+                inkCanvas.ghostStrokes = emptyList()
+                currentGhostWord = ""
+            }
             displayManager.reConsolidateAll()
+        }
+        inkCanvas.onGhostTap = {
+            acceptPrediction()
         }
         inkCanvas.onOverlayDoubleTap = { lineIndex ->
             displayManager.toggleUnConsolidate(lineIndex)
@@ -396,6 +499,7 @@ class WritingCoordinator(
         inkCanvas.onPenDown = null
         inkCanvas.onOverlayTap = null
         inkCanvas.onOverlayDoubleTap = null
+        inkCanvas.onGhostTap = null
     }
 
     /**

@@ -252,6 +252,8 @@ class HandwritingCanvasView @JvmOverloads constructor(
 
     /** Callback: single tap on consolidated text (show alternatives popup). (lineIndex, tapX in doc space) */
     var onOverlayTap: ((lineIndex: Int, tapX: Float) -> Unit)? = null
+    /** Callback when user taps on ghost prediction strokes. */
+    var onGhostTap: (() -> Unit)? = null
     /** Callback: double tap on consolidated text (un-consolidate to show original strokes). */
     var onOverlayDoubleTap: ((lineIndex: Int) -> Unit)? = null
 
@@ -601,6 +603,21 @@ class HandwritingCanvasView @JvmOverloads constructor(
                 val isTap = event.action == MotionEvent.ACTION_UP && dist < TAP_SLOP && duration < TAP_TIMEOUT_MS
 
                 if (isTap) {
+                    // Check if tap hits ghost prediction strokes
+                    if (ghostStrokes.isNotEmpty()) {
+                        val docX = event.x
+                        val docY = event.y + scrollOffsetY
+                        val ghostMinX = ghostStrokes.minOf { it.minX }
+                        val ghostMaxX = ghostStrokes.maxOf { it.maxX }
+                        val ghostMinY = ghostStrokes.minOf { it.minY }
+                        val ghostMaxY = ghostStrokes.maxOf { it.maxY }
+                        val pad = ScreenMetrics.dp(15f)
+                        if (docX in (ghostMinX - pad)..(ghostMaxX + pad) &&
+                            docY in (ghostMinY - pad)..(ghostMaxY + pad)) {
+                            onGhostTap?.invoke()
+                        }
+                    }
+
                     // Convert to document-space line index
                     val docY = event.y + scrollOffsetY
                     val lineIndex = ((docY - TOP_MARGIN) / LINE_SPACING).toInt().coerceAtLeast(0)

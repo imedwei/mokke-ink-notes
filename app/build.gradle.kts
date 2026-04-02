@@ -230,6 +230,9 @@ tasks.withType<Test> {
     })
 }
 
+// Bigram compiler: ./gradlew compileBigrams
+apply(from = rootProject.file("tools/corpus/bigrams.gradle.kts"))
+
 tasks.register("allTests") {
     description = "Runs all tests: unit tests and instrumented tests on connected device"
     group = "verification"
