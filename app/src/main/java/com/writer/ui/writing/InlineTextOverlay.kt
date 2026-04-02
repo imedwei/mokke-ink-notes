@@ -89,6 +89,12 @@ data class InlineTextState(
     val wordAlternatives: List<WordAlternative> = emptyList(),
     /** Per-word confidence scores for wavy underline rendering. */
     val wordConfidences: List<com.writer.recognition.WordConfidence> = emptyList(),
+    /** Original lineTextCache line indices for the full paragraph (same for all wrapped lines in a paragraph). */
+    val sourceLineIndices: List<Int> = emptyList(),
+    /** Word counts per source line, parallel to [sourceLineIndices]. */
+    val sourceWordCounts: List<Int> = emptyList(),
+    /** Number of words in the full paragraph before this wrapped line. */
+    val paragraphWordOffset: Int = 0,
 )
 
 /**

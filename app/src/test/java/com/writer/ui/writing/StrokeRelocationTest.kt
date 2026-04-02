@@ -59,7 +59,7 @@ class StrokeRelocationTest {
         val srcMinY = strokes.minOf { it.minY }
         val srcWidth = (srcMaxX - srcMinX).coerceAtLeast(1f)
         val gapWidth = (gapEndX - gapStartX).coerceAtLeast(1f)
-        val scaleX = (gapWidth / srcWidth).coerceAtMost(1.5f)  // don't stretch more than 1.5x
+        val scaleX = (gapWidth / srcWidth).coerceIn(0.5f, 1.5f)  // don't shrink below 0.5x or stretch above 1.5x
         val dx = gapStartX - srcMinX * scaleX
         val dy = targetLineY - srcMinY
         return strokes.map { s ->
@@ -175,6 +175,19 @@ class StrokeRelocationTest {
         val relocWidth = relocated.maxOf { it.maxX } - relocated.minOf { it.minX }
         assertTrue("Should not stretch more than 1.5x original (75): $relocWidth",
             relocWidth <= 80f)  // 50 * 1.5 = 75
+    }
+
+    @Test
+    fun `replacement wider than gap is not over-compressed`() {
+        // Gap: width=35 (like 'a'). Replacement: width=200 (like 'with').
+        // Without min scale, scaleX = 35/200 = 0.175 — illegible.
+        // With min scale 0.5, scaleX = 0.5 — still readable.
+        val replacement = listOf(stroke(5, 100f, 300f, "r1"))
+        val relocated = relocateToGap(replacement, 400f, 435f, tm + ls * 0.5f)
+
+        val relocWidth = relocated.maxOf { it.maxX } - relocated.minOf { it.minX }
+        assertTrue("Should not shrink below 0.5x original (100): $relocWidth",
+            relocWidth >= 95f)  // 200 * 0.5 = 100
     }
 
     @Test

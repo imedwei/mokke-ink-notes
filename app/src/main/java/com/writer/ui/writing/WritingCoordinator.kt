@@ -129,6 +129,13 @@ class WritingCoordinator(
                 // Don't apply pending word edits on recognition — wait for idle timeout
                 // so the user has time to finish writing the replacement word.
 
+                // If the recognized line is the current writing line and recognition
+                // succeeded (text cached), advance past it so it consolidates.
+                // The user stopped writing (idle fired), so it's safe to consolidate.
+                if (lineIndex == currentLineIndex && lineTextCache.containsKey(lineIndex)) {
+                    currentLineIndex = highestLineIndex + 1
+                }
+
                 displayManager.displayHiddenLines()
                 displayManager.scheduleTextRefresh()
             }
@@ -297,7 +304,7 @@ class WritingCoordinator(
                                 allYs[(allYs.size * 0.75f).toInt().coerceAtMost(allYs.size - 1)]
                             } else null
 
-                            val relocated = relocateToGap(
+                            var relocated = relocateToGap(
                                 replacementStrokes, edit.origStrokeStartX, edit.origStrokeEndX,
                                 targetCenterY, targetBaselineY
                             )
@@ -318,6 +325,20 @@ class WritingCoordinator(
                                 columnModel.activeStrokes.addAll(stay)
                                 columnModel.activeStrokes.addAll(shifted)
                                 Log.i(TAG, "EDIT: Split line $lineIdx: ${stay.size} stay + ${shifted.size} shifted to next line")
+
+                                // Re-relocate into the expanded gap — words after the gap
+                                // moved to the next line, so the gap now extends to the
+                                // end of the line (or to a reasonable max width).
+                                val lineEndX = inkCanvas.width.toFloat() - ScreenMetrics.dp(10f)
+                                val expandedGapEnd = if (stay.isNotEmpty()) {
+                                    // Gap extends from original start to the line's right margin
+                                    lineEndX
+                                } else edit.origStrokeEndX
+                                relocated = relocateToGap(
+                                    replacementStrokes, edit.origStrokeStartX, expandedGapEnd,
+                                    targetCenterY, targetBaselineY
+                                )
+                                Log.i(TAG, "EDIT: Re-relocated to expanded gap [${edit.origStrokeStartX},$expandedGapEnd]")
                             }
 
                             // Replace the temporary strokes with relocated ones.
@@ -455,7 +476,7 @@ class WritingCoordinator(
         val srcMaxX = strokes.maxOf { it.maxX }
         val srcWidth = (srcMaxX - srcMinX).coerceAtLeast(1f)
         val gapWidth = (gapEndX - gapStartX).coerceAtLeast(1f)
-        val scaleX = (gapWidth / srcWidth).coerceAtMost(1.5f)
+        val scaleX = (gapWidth / srcWidth).coerceIn(0.5f, 1.5f)
         val dx = gapStartX - srcMinX * scaleX
 
         // Compute baseline alignment:
@@ -712,19 +733,40 @@ class WritingCoordinator(
                     if (left <= wordEndX + radius && right >= wordX - radius) {
                         Log.i(TAG, "SCRATCH: Hit consolidated word '$word' at hersheyIdx=$wordIdx on line $scratchLineIdx")
 
-                        // Find the original line that contains this word by searching
-                        // lineTextCache for entries that have this word.
+                        // Map from the word's position in the wrapped line to the
+                        // original source line using paragraph word-offset mapping.
+                        val globalWordIdx = overlay.paragraphWordOffset + wordIdx
                         var origLineIdx = -1
                         var origWordIdx = -1
-                        Log.i(TAG, "SCRATCH: Looking for word '$word' in lineTextCache (${lineTextCache.size} entries):")
-                        for ((idx, cached) in lineTextCache.entries.sortedBy { it.key }) {
-                            Log.i(TAG, "SCRATCH:   line $idx: '$cached'")
-                            val cachedWords = cached.split(" ")
-                            val foundIdx = cachedWords.indexOf(word)
-                            if (foundIdx >= 0) {
-                                origLineIdx = idx
-                                origWordIdx = foundIdx
-                                break
+
+                        // Walk through source lines' word counts to find which
+                        // source line owns word at globalWordIdx.
+                        if (overlay.sourceLineIndices.isNotEmpty() && overlay.sourceWordCounts.isNotEmpty()) {
+                            var cumWords = 0
+                            for (si in overlay.sourceWordCounts.indices) {
+                                val srcLine = if (si < overlay.sourceLineIndices.size) overlay.sourceLineIndices[si]
+                                    else overlay.sourceLineIndices.last()
+                                val wc = overlay.sourceWordCounts[si]
+                                if (globalWordIdx < cumWords + wc) {
+                                    origLineIdx = srcLine
+                                    origWordIdx = globalWordIdx - cumWords
+                                    break
+                                }
+                                cumWords += wc
+                            }
+                        }
+
+                        // Fallback: search lineTextCache entries for the word text
+                        if (origLineIdx < 0) {
+                            Log.i(TAG, "SCRATCH: Fallback search for word '$word' (global=$globalWordIdx):")
+                            for ((idx, cached) in lineTextCache.entries.sortedBy { it.key }) {
+                                val cachedWords = cached.split(" ")
+                                val foundIdx = cachedWords.indexOf(word)
+                                if (foundIdx >= 0) {
+                                    origLineIdx = idx
+                                    origWordIdx = foundIdx
+                                    break
+                                }
                             }
                         }
                         if (origLineIdx < 0) {
@@ -800,6 +842,13 @@ class WritingCoordinator(
         val idsToRemove = expanded.map { it.strokeId }.toSet()
         columnModel.activeStrokes.removeAll { it.strokeId in idsToRemove }
         for (id in idsToRemove) { columnModel.diagram.nodes.remove(id) }
+
+        // Invalidate text cache for affected lines so stale consolidated text is removed
+        val affectedLines = expanded.map { lineSegmenter.getStrokeLineIndex(it) }.toSet()
+        for (lineIdx in affectedLines) {
+            lineTextCache.remove(lineIdx)
+        }
+        displayManager.lastOverlayHash = 0
 
         inkCanvas.removeStrokes(idsToRemove)
 

@@ -1,6 +1,7 @@
 package com.writer.ui.writing
 
 import com.writer.model.ColumnModel
+import com.writer.model.DocumentModel
 import com.writer.model.DiagramArea
 import com.writer.model.InkStroke
 import com.writer.model.StrokePoint
@@ -495,12 +496,11 @@ class ScratchAndReplaceTest {
 
     @Test
     fun `currentLineIndex must advance past edit line for re-consolidation`() {
-        // This test verifies the bug fix: if currentLineIndex == edit.lineIndex,
-        // the line is NOT consolidated because buildInlineOverlays only consolidates
-        // lines where lineIdx < currentLineIndex.
+        // The current writing line is NOT consolidated — it stays unconsolidated
+        // so the user can see their strokes. Only lines strictly before
+        // currentLineIndex are consolidated.
         val host = dm.host as TestHost
 
-        // Set currentLineIndex to the edit line (same line)
         host.currentLine = 0
         dm.lastOverlayHash = 0
         val overlaysSame = dm.buildInlineOverlays(0)
@@ -706,6 +706,107 @@ class ScratchAndReplaceTest {
         }
         assertTrue("Line 0 should contain 'fast'",
             after.values.any { it.recognizedText.contains("fast") })
+    }
+
+    // ── Scratch-out on raw strokes clears consolidated text ────────────
+
+    @Test
+    fun `scratch-out on raw strokes clears lineTextCache for affected lines`() {
+        // Set up a WritingCoordinator so we have the full scratch-out pipeline
+        val documentModel = DocumentModel()
+        val canvas = HandwritingCanvasView(RuntimeEnvironment.getApplication())
+        val recognizer = object : com.writer.recognition.TextRecognizer {
+            override suspend fun initialize(languageTag: String) {}
+            override suspend fun recognizeLine(line: com.writer.model.InkLine, preContext: String) = ""
+            override fun close() {}
+        }
+        val coordinator = WritingCoordinator(
+            documentModel, documentModel.main, recognizer, canvas,
+            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Unconfined),
+            onStatusUpdate = {}
+        )
+        coordinator.start()
+
+        // Add strokes for "hello" on line 1 at X=[100,300]
+        val y1 = tm + 1 * ls + ls * 0.5f
+        val strokes = listOf(
+            InkStroke("h1", listOf(
+                StrokePoint(100f, y1 - 5f, 0.5f, 1000L),
+                StrokePoint(150f, y1 + 5f, 0.5f, 1050L)
+            )),
+            InkStroke("h2", listOf(
+                StrokePoint(160f, y1 - 5f, 0.5f, 1100L),
+                StrokePoint(200f, y1 + 5f, 0.5f, 1150L)
+            )),
+            InkStroke("h3", listOf(
+                StrokePoint(210f, y1 - 5f, 0.5f, 1200L),
+                StrokePoint(300f, y1 + 5f, 0.5f, 1250L)
+            ))
+        )
+        documentModel.main.activeStrokes.addAll(strokes)
+        canvas.loadStrokes(documentModel.main.activeStrokes.toList())
+
+        // Simulate recognition: cache "hello" for line 1
+        coordinator.lineTextCache[1] = "hello"
+
+        assertTrue("lineTextCache should have line 1 before scratch",
+            coordinator.lineTextCache.containsKey(1))
+
+        // Trigger scratch-out covering the strokes on line 1
+        val scratchPoints = listOf(
+            StrokePoint(90f, y1, 0.5f, 2000L),
+            StrokePoint(310f, y1, 0.5f, 2100L)
+        )
+        canvas.onScratchOut?.invoke(scratchPoints, 90f, y1 - 10f, 310f, y1 + 10f)
+
+        // After scratch-out, lineTextCache for line 1 should be cleared
+        assertFalse("lineTextCache should NOT have line 1 after scratch-out erased its strokes",
+            coordinator.lineTextCache.containsKey(1))
+    }
+
+    @Test
+    fun `scratch-out only clears cache for affected lines not other lines`() {
+        val documentModel = DocumentModel()
+        val canvas = HandwritingCanvasView(RuntimeEnvironment.getApplication())
+        val recognizer = object : com.writer.recognition.TextRecognizer {
+            override suspend fun initialize(languageTag: String) {}
+            override suspend fun recognizeLine(line: com.writer.model.InkLine, preContext: String) = ""
+            override fun close() {}
+        }
+        val coordinator = WritingCoordinator(
+            documentModel, documentModel.main, recognizer, canvas,
+            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Unconfined),
+            onStatusUpdate = {}
+        )
+        coordinator.start()
+
+        val y0 = tm + 0 * ls + ls * 0.5f
+        val y1 = tm + 1 * ls + ls * 0.5f
+
+        // Strokes on line 0
+        documentModel.main.activeStrokes.add(
+            InkStroke("s0", listOf(StrokePoint(10f, y0 - 5f, 0.5f, 100L), StrokePoint(80f, y0 + 5f, 0.5f, 150L)))
+        )
+        // Strokes on line 1
+        documentModel.main.activeStrokes.add(
+            InkStroke("s1", listOf(StrokePoint(10f, y1 - 5f, 0.5f, 200L), StrokePoint(80f, y1 + 5f, 0.5f, 250L)))
+        )
+        canvas.loadStrokes(documentModel.main.activeStrokes.toList())
+
+        coordinator.lineTextCache[0] = "world"
+        coordinator.lineTextCache[1] = "hello"
+
+        // Scratch-out only line 1's strokes
+        val scratchPoints = listOf(
+            StrokePoint(5f, y1, 0.5f, 300L),
+            StrokePoint(90f, y1, 0.5f, 400L)
+        )
+        canvas.onScratchOut?.invoke(scratchPoints, 5f, y1 - 10f, 90f, y1 + 10f)
+
+        assertTrue("Line 0 cache should be preserved",
+            coordinator.lineTextCache.containsKey(0))
+        assertFalse("Line 1 cache should be cleared",
+            coordinator.lineTextCache.containsKey(1))
     }
 
     // ── Test host ────────────────────────────────────────────────────────

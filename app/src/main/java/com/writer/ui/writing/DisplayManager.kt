@@ -244,7 +244,8 @@ class DisplayManager(
         // When canvas height is 0 (tests, pre-layout), process all lines
         val maxVisibleLine = if (inkCanvas.height > 0) ((viewBottom - tm) / ls + bufferLines).toInt() else Int.MAX_VALUE
 
-        // Collect lines to consolidate — only within visible range
+        // Collect lines to consolidate — only lines strictly before currentLineIndex.
+        // The current writing line stays unconsolidated so the user can see their strokes.
         val consolidateLines = ArrayList<Map.Entry<Int, String>>()
         if (font != null) ensureHersheyMetrics()
         run {
@@ -294,20 +295,26 @@ class DisplayManager(
             }
             val startLineIdx = paragraph.first().key
 
-            // Collect word confidences from recognition results for this paragraph
+            // Build a map from global word index → (source line index, word count)
+            val wordToSourceLine = mutableListOf<Int>()
+            val paragraphSourceLines = mutableListOf<Int>()
+            val paragraphSourceWordCounts = mutableListOf<Int>()
             val allWordConfidences = mutableListOf<com.writer.recognition.WordConfidence>()
             var wordOffset = 0
             for (entry in paragraph) {
+                val entryWordCount = entry.value.split(" ").size
+                paragraphSourceLines.add(entry.key)
+                paragraphSourceWordCounts.add(entryWordCount)
+                repeat(entryWordCount) { wordToSourceLine.add(entry.key) }
                 val result = host.lineRecognitionResults[entry.key]
                 if (result != null) {
                     for (wc in result.wordConfidences) {
                         allWordConfidences.add(wc.copy(wordIndex = wc.wordIndex + wordOffset))
                     }
                 }
-                wordOffset += entry.value.split(" ").size
+                wordOffset += entryWordCount
             }
 
-            // Generate Hershey strokes only for visible wrapped lines
             val pendingEdit = host.pendingWordEdit
             for (i in wrappedLines.indices) {
                 val lineIdx = startLineIdx + i
@@ -350,7 +357,10 @@ class DisplayManager(
                     recognizedText = wrappedText,
                     consolidated = true,
                     syntheticStrokes = syntheticStrokes,
-                    wordConfidences = lineConfidences
+                    wordConfidences = lineConfidences,
+                    sourceLineIndices = paragraphSourceLines,
+                    sourceWordCounts = paragraphSourceWordCounts,
+                    paragraphWordOffset = lineStartWord
                 )
             }
 
@@ -410,6 +420,16 @@ class DisplayManager(
 
         val overlays = buildInlineOverlays(currentLineIndex)
         inkCanvas.updateInlineOverlays(overlays)
+
+        // Compute overflow shift: if consolidated text extends into the current
+        // writing line, shift non-consolidated strokes down to avoid overlap.
+        val maxConsolidatedLine = overlays.entries
+            .filter { it.value.consolidated && !it.value.unConsolidated }
+            .maxOfOrNull { it.key } ?: -1
+        inkCanvas.consolidationOverflowShiftPx = if (currentLineIndex >= 0 && maxConsolidatedLine >= currentLineIndex) {
+            (maxConsolidatedLine - currentLineIndex + 2) * HandwritingCanvasView.LINE_SPACING
+        } else 0f
+
         lastOverlayHash = hash
         lastOverlayLine = currentLineIndex
 
@@ -468,7 +488,12 @@ class DisplayManager(
         // Force overlay rebuild
         lastOverlayHash = 0
         updateInlineOverlays(host.currentLineIndex)
-        inkCanvas.drawToSurface()
+        // Pause/draw/resume to force e-ink refresh (Onyx SDK suppresses View rendering)
+        inkCanvas.post {
+            inkCanvas.pauseRawDrawing()
+            inkCanvas.drawToSurface()
+            inkCanvas.resumeRawDrawing()
+        }
     }
 
     /** Re-consolidate all un-consolidated lines (called when user moves to a different line). */

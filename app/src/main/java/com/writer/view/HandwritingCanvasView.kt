@@ -112,9 +112,11 @@ class HandwritingCanvasView @JvmOverloads constructor(
     /** The line the user is currently writing on. Overlay label only shows for this line. */
     var currentWritingLineIndex: Int = -1
 
+    /** Pixels to shift non-consolidated strokes down when consolidated text overflows. */
+    var consolidationOverflowShiftPx: Float = 0f
 
     /** Lines currently consolidated (derived from inlineTextOverlays for O(1) lookup). */
-    private var consolidatedLineIndices: Set<Int> = emptySet()
+    internal var consolidatedLineIndices: Set<Int> = emptySet()
     /** Stroke IDs to hide during rendering (e.g. replacement strokes for pending word edit). */
     var hiddenStrokeIds: Set<String> = emptySet()
     /** Cached combined Path per consolidated line — avoids rebuilding on every scroll frame. */
@@ -1339,7 +1341,12 @@ class HandwritingCanvasView @JvmOverloads constructor(
             if (stroke.strokeId in hiddenStrokeIds) continue
 
             val strokeCenterY = (stroke.minY + stroke.maxY) / 2f
-            val shift = if (spaceInsertMode && spaceInsertDragActive && strokeCenterY >= anchorY) previewShiftPx else 0f
+            var shift = if (spaceInsertMode && spaceInsertDragActive && strokeCenterY >= anchorY) previewShiftPx else 0f
+            // Shift strokes at/past the writing line down when consolidated text overflows
+            if (consolidationOverflowShiftPx > 0f && currentWritingLineIndex >= 0
+                && strokeLineIndex.toInt() >= currentWritingLineIndex) {
+                shift += consolidationOverflowShiftPx
+            }
             if (stroke.maxY + shift >= viewTop && stroke.minY + shift <= viewBottom) {
                 if (shift != 0f) {
                     canvas.save()
@@ -1462,7 +1469,14 @@ class HandwritingCanvasView @JvmOverloads constructor(
 
     fun updateInlineOverlays(overlays: Map<Int, InlineTextState>) {
         inlineTextOverlays = overlays
-        consolidatedLineIndices = overlays.filter { it.value.consolidated && !it.value.unConsolidated }.keys
+        // Only hide raw strokes for lines strictly before the writing line.
+        // Word-wrap overflow may create consolidated overlays at/past currentWritingLineIndex
+        // — those render Hershey text but must NOT hide the raw strokes (which get shifted down).
+        consolidatedLineIndices = if (currentWritingLineIndex >= 0) {
+            overlays.filter { it.value.consolidated && !it.value.unConsolidated && it.key < currentWritingLineIndex }.keys
+        } else {
+            overlays.filter { it.value.consolidated && !it.value.unConsolidated }.keys
+        }
         consolidatedPathCache.clear()  // rebuild paths for new overlays
     }
 
