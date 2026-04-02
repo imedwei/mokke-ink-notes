@@ -433,8 +433,9 @@ class DisplayManager(
         lastOverlayHash = hash
         lastOverlayLine = currentLineIndex
 
-        // Update the popup card — skip during scroll (pen not active = user is scrolling)
-        if (inkCanvas.isPenRecentlyActive()) {
+        // Update the popup card — skip during scroll (pen not active = user is scrolling).
+        // Window covers idle timeout (100ms) + recognition latency (~500ms).
+        if (inkCanvas.isPenRecentlyActive(windowMs = 1000L)) {
         val currentText = host.lineTextCache[currentLineIndex]
         if (currentText != null && currentText.isNotBlank() && currentText != "[?]") {
             val lastWord = currentText.trim().split(" ").lastOrNull()

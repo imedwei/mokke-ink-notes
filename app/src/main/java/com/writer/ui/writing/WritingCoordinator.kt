@@ -126,16 +126,6 @@ class WritingCoordinator(
             override fun onHeadingDetected(heading: String) { this@WritingCoordinator.onHeadingDetected?.invoke(heading) }
             override fun isDiagramLine(lineIndex: Int): Boolean = diagramManager.isDiagramLine(lineIndex)
             override fun onRecognitionComplete(lineIndex: Int) {
-                // Don't apply pending word edits on recognition — wait for idle timeout
-                // so the user has time to finish writing the replacement word.
-
-                // If the recognized line is the current writing line and recognition
-                // succeeded (text cached), advance past it so it consolidates.
-                // The user stopped writing (idle fired), so it's safe to consolidate.
-                if (lineIndex == currentLineIndex && lineTextCache.containsKey(lineIndex)) {
-                    currentLineIndex = highestLineIndex + 1
-                }
-
                 displayManager.displayHiddenLines()
                 displayManager.scheduleTextRefresh()
             }

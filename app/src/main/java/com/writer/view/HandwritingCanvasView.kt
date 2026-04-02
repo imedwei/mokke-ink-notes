@@ -52,8 +52,8 @@ class HandwritingCanvasView @JvmOverloads constructor(
         private const val TAG = "HandwritingCanvas"
         // Line spacing and top margin are DPI-scaled via ScreenMetrics.
         val LINE_SPACING get() = ScreenMetrics.lineSpacing
-        // Idle timeout before checking scroll condition (ms)
-        private const val IDLE_TIMEOUT_MS = 2000L
+        // Idle timeout before triggering recognition + popup feedback (ms)
+        private const val IDLE_TIMEOUT_MS = 100L
         // Top margin before the first line
         val TOP_MARGIN get() = ScreenMetrics.topMargin
         // Arrow dwell detection: radius and time for start/end dwell
