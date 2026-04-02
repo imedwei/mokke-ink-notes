@@ -317,8 +317,18 @@ class DisplayManager(
             }
 
             val pendingEdit = host.pendingWordEdit
+            // Build a list of target line indices, skipping diagram lines.
+            // When word-wrap produces more lines than the source paragraph,
+            // overflow lines must not collide with diagram areas.
+            val targetLineIndices = mutableListOf<Int>()
+            var nextLine = startLineIdx
             for (i in wrappedLines.indices) {
-                val lineIdx = startLineIdx + i
+                while (host.diagramManager.isDiagramLine(nextLine)) nextLine++
+                targetLineIndices.add(nextLine)
+                nextLine++
+            }
+            for (i in wrappedLines.indices) {
+                val lineIdx = targetLineIndices[i]
                 val wrappedText = wrappedLines[i]
                 // Check if this wrapped line contains the pending edit word.
                 // Use the scratch-out X position to disambiguate duplicate words.
@@ -427,9 +437,19 @@ class DisplayManager(
         val maxConsolidatedLine = overlays.entries
             .filter { it.value.consolidated && !it.value.unConsolidated }
             .maxOfOrNull { it.key } ?: -1
-        inkCanvas.consolidationOverflowShiftPx = if (currentLineIndex >= 0 && maxConsolidatedLine >= currentLineIndex) {
+        val prevShift = inkCanvas.consolidationOverflowShiftPx
+        val newShift = if (currentLineIndex >= 0 && maxConsolidatedLine >= currentLineIndex) {
             (maxConsolidatedLine - currentLineIndex + 2) * HandwritingCanvasView.LINE_SPACING
         } else 0f
+        inkCanvas.consolidationOverflowShiftPx = newShift
+        // Compensate scroll so the current writing line stays at the same
+        // screen position.  Screen Y = docY + overflowShift - scrollOffset,
+        // so when overflowShift changes by delta, scrollOffset must change
+        // by the same delta to keep screen Y constant.
+        val shiftDelta = newShift - prevShift
+        if (shiftDelta != 0f) {
+            inkCanvas.scrollOffsetY = (inkCanvas.scrollOffsetY + shiftDelta).coerceAtLeast(0f)
+        }
 
         lastOverlayHash = hash
         lastOverlayLine = currentLineIndex
