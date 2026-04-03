@@ -91,6 +91,13 @@ class WritingCoordinator(
     // Line recognition manager (created in start())
     private lateinit var recognitionManager: LineRecognitionManager
 
+    /** Inject a recognition result for testing (bypasses actual recognition). */
+    internal fun setTestRecognitionResult(lineIndex: Int, result: com.writer.recognition.RecognitionResult) {
+        if (::recognitionManager.isInitialized) {
+            recognitionManager.lineRecognitionResults[lineIndex] = result
+        }
+    }
+
     /** Always-on ring buffer for bug report capture. */
     val eventLog = StrokeEventLog()
     /** Index of the most recent raw stroke in the event log.
