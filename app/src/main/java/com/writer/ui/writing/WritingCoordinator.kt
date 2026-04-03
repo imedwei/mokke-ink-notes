@@ -1153,6 +1153,14 @@ class WritingCoordinator(
         inkCanvas.drawToSurface()
         lineTextCache.clear()
         lineTextCache.putAll(snapshot.lineTextCache)
+        // Re-recognize to rebuild bounding-box word→stroke mappings.
+        // Stroke IDs changed after undo, so the old mappings are stale.
+        if (::recognitionManager.isInitialized) {
+            recognitionManager.lineRecognitionResults.clear()
+            for ((lineIdx, _) in snapshot.lineTextCache) {
+                recognitionManager.recognizeRenderedLine(lineIdx)
+            }
+        }
         displayManager.clearEverHiddenLines()
         displayManager.displayHiddenLines()
     }
