@@ -1079,8 +1079,14 @@ class HandwritingCanvasView @JvmOverloads constructor(
     private fun checkPostStrokeScratchOut(): Boolean {
         val t0 = android.os.SystemClock.elapsedRealtime()
         // Include Hershey synthetic strokes so scratch-out detection works
-        // on consolidated text (the raw strokes may be at different Y positions
-        // due to word-wrap reflow, but the Hershey strokes are what's visible).
+        // on consolidated text. Hershey strokes are in raw document space but
+        // currentStrokePoints have overflow shift subtracted (via toDocStrokePoint).
+        // Adjust scratch points to raw document space for the overlap check.
+        val adjustedPoints = if (consolidationOverflowShiftPx > 0f) {
+            currentStrokePoints.map { StrokePoint(it.x, it.y + consolidationOverflowShiftPx, it.pressure, it.timestamp) }
+        } else {
+            currentStrokePoints.toList()
+        }
         val allStrokes = buildList {
             addAll(completedStrokes)
             for ((_, state) in inlineTextOverlays) {
@@ -1089,7 +1095,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
                 }
             }
         }
-        val isScratch = ScratchOutDetection.isScratchOut(currentStrokePoints, allStrokes, LINE_SPACING)
+        val isScratch = ScratchOutDetection.isScratchOut(adjustedPoints, allStrokes, LINE_SPACING)
         val elapsed = android.os.SystemClock.elapsedRealtime() - t0
         if (elapsed > 10) Log.w(TAG, "isScratchOut took ${elapsed}ms (${currentStrokePoints.size} pts, ${completedStrokes.size} strokes)")
         if (!isScratch) return false
