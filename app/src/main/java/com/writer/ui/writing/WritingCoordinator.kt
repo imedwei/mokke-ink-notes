@@ -412,15 +412,29 @@ class WritingCoordinator(
      * and between words.
      */
     internal fun findStrokesForWord(origLineIdx: Int, wordIndex: Int): List<InkStroke> {
+        // Try the per-word stroke mapping from recognition bounding boxes
+        val recognitionResult = if (::recognitionManager.isInitialized)
+            recognitionManager.lineRecognitionResults[origLineIdx] else null
+        val strokeIds = recognitionResult?.wordStrokeMapping?.get(wordIndex)
+        if (strokeIds != null && strokeIds.isNotEmpty()) {
+            val lineStrokes = lineSegmenter.getStrokesForLine(columnModel.activeStrokes, origLineIdx)
+            val mapped = lineStrokes.filter { it.strokeId in strokeIds }
+            if (mapped.isNotEmpty()) {
+                Log.d(TAG, "findStrokesForWord: line=$origLineIdx word=$wordIndex → ${mapped.size} strokes via bounding-box mapping")
+                return mapped
+            }
+            // Stroke IDs in mapping but none found in activeStrokes — stale, fall through
+            Log.w(TAG, "findStrokesForWord: bounding-box mapping stale for line=$origLineIdx word=$wordIndex, falling back to gap detection")
+        }
+
+        // Fallback: N-1 largest gaps heuristic (for ML Kit, stale results, etc.)
         val lineStrokes = lineSegmenter.getStrokesForLine(columnModel.activeStrokes, origLineIdx)
             .sortedBy { it.minX }
-        // How many words are on this line?
         val lineText = lineTextCache[origLineIdx] ?: return lineStrokes
         val expectedWords = lineText.split(" ").size
         if (wordIndex >= expectedWords) return emptyList()
         if (lineStrokes.size < 2 || expectedWords <= 1) return lineStrokes
 
-        // Compute all inter-stroke gaps with their positions
         data class Gap(val index: Int, val size: Float)
         val gaps = mutableListOf<Gap>()
         for (i in 1 until lineStrokes.size) {
@@ -428,13 +442,11 @@ class WritingCoordinator(
             gaps.add(Gap(i, gap))
         }
 
-        // Find the N-1 largest gaps — these are the word boundaries
         val wordBoundaries = gaps.sortedByDescending { it.size }
             .take(expectedWords - 1)
             .map { it.index }
             .sorted()
 
-        // Split strokes at the word boundaries
         val wordGroups = mutableListOf<List<InkStroke>>()
         var start = 0
         for (boundary in wordBoundaries) {
@@ -443,10 +455,7 @@ class WritingCoordinator(
         }
         wordGroups.add(lineStrokes.subList(start, lineStrokes.size))
 
-        val gapDetails = gaps.sortedByDescending { it.size }.take(5).joinToString { "idx=${it.index}:${it.size.toInt()}px" }
-        val groupDetails = wordGroups.mapIndexed { i, g -> "[$i]:${g.size}strokes X=[${g.minOfOrNull { it.minX }?.toInt()},${g.maxOfOrNull { it.maxX }?.toInt()}]" }.joinToString(" ")
-        Log.d(TAG, "findStrokesForWord: line=$origLineIdx, ${lineStrokes.size} strokes → ${wordGroups.size} word groups (expected=$expectedWords, text='$lineText')")
-        Log.d(TAG, "  gaps: $gapDetails | boundaries=$wordBoundaries | groups: $groupDetails")
+        Log.d(TAG, "findStrokesForWord: line=$origLineIdx, ${lineStrokes.size} strokes → ${wordGroups.size} word groups (expected=$expectedWords, text='$lineText') [gap fallback]")
         return if (wordIndex in wordGroups.indices) wordGroups[wordIndex] else emptyList()
     }
 

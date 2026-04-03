@@ -164,8 +164,15 @@ class LineRecognitionManager(
             val line = lineSegmenter.buildInkLine(strokes, lineIndex)
             val preContext = buildPreContext(lineIndex)
             lastRecognizedStrokeCount[lineIndex] = strokes.size
-            val result = withContext(Dispatchers.IO) {
+            var result = withContext(Dispatchers.IO) {
                 recognizer.recognizeLineWithCandidates(line, preContext)
+            }
+            // Build per-word stroke mapping from recognizer bounding boxes
+            val mapping = com.writer.recognition.StrokeMatcher.buildWordStrokeMapping(
+                result.wordConfidences, line.strokes
+            )
+            if (mapping.isNotEmpty()) {
+                result = result.copy(wordStrokeMapping = mapping)
             }
             val text = result.text
 
