@@ -573,6 +573,165 @@ class InlineOverlayScenarioTest {
         assertTrue("Overlay should be consolidated", overlay!!.consolidated)
     }
 
+    // ── Scenario 11: All words present after overflow consolidation ────
+
+    @Test
+    fun `all words present in consolidated text after overflow word-wrap`() {
+        // Reproduce Palma scenario: 3 source lines form a paragraph that
+        // word-wraps to more Hershey lines than the source. All words must
+        // appear in the consolidated overlays — none should be culled or lost.
+        textCache[0] = "Combinatrine"
+        textCache[1] = "Exuberance"
+        textCache[2] = "in the closet of the"
+        column.activeStrokes.add(stroke(0, 10f, 700f, "s0"))
+        column.activeStrokes.add(stroke(1, 10f, 700f, "s1"))
+        column.activeStrokes.add(stroke(2, 10f, 700f, "s2"))
+        // User is writing on line 3 (strokes on line 3 were scratched, cache removed)
+        column.activeStrokes.add(stroke(3, 10f, 200f, "s3_writing"))
+
+        val host = TestHost(column, textCache, currentLine = 3)
+        // Use narrow width to force word-wrap (Palma-like: 408px)
+        val dm = createDm(host, width = 408, height = 1648)
+        dm.updateInlineOverlays(3)
+
+        // Collect ALL consolidated text across all overlays
+        val allConsolidatedText = canvas.inlineTextOverlays.entries
+            .filter { it.value.consolidated && it.value.recognizedText.isNotBlank() }
+            .sortedBy { it.key }
+            .joinToString(" ") { it.value.recognizedText }
+
+        val expectedFullText = "Combinatrine Exuberance in the closet of the"
+
+        // Log detailed overlay state for diagnostics
+        val overlayDetails = canvas.inlineTextOverlays.entries
+            .sortedBy { it.key }
+            .joinToString("\n") { "  line ${it.key}: consolidated=${it.value.consolidated} unConsol=${it.value.unConsolidated} text='${it.value.recognizedText}' strokes=${it.value.syntheticStrokes.size}" }
+        println("Overlay state (width=408):\n$overlayDetails")
+        println("Consolidated text: '$allConsolidatedText'")
+        println("Overflow shift: ${canvas.consolidationOverflowShiftPx}, scroll: ${canvas.scrollOffsetY}")
+
+        assertEquals("All words must appear in consolidated text",
+            expectedFullText, allConsolidatedText)
+
+        val consolidatedCount = canvas.inlineTextOverlays.count {
+            it.value.consolidated && it.value.recognizedText.isNotBlank()
+        }
+        assertTrue("Should have multiple consolidated lines on narrow screen:\n$overlayDetails",
+            consolidatedCount >= 2)
+    }
+
+    @Test
+    fun `all words visible after un-consolidate and re-consolidate cycle`() {
+        // After toggling un-consolidation on and off, all words must still appear.
+        textCache[0] = "Combinatrine"
+        textCache[1] = "Exuberance"
+        textCache[2] = "in the closet of the"
+        column.activeStrokes.add(stroke(0, 10f, 700f, "s0"))
+        column.activeStrokes.add(stroke(1, 10f, 700f, "s1"))
+        column.activeStrokes.add(stroke(2, 10f, 700f, "s2"))
+        column.activeStrokes.add(stroke(3, 10f, 200f, "s3_writing"))
+
+        val host = TestHost(column, textCache, currentLine = 3)
+        val dm = createDm(host, width = 408, height = 1648)
+        dm.updateInlineOverlays(3)
+
+        val textBefore = canvas.inlineTextOverlays.entries
+            .filter { it.value.consolidated && it.value.recognizedText.isNotBlank() }
+            .sortedBy { it.key }
+            .joinToString(" ") { it.value.recognizedText }
+
+        // Un-consolidate by tapping line 1 (within the paragraph)
+        dm.toggleUnConsolidate(1)
+        dm.lastOverlayHash = 0
+        dm.updateInlineOverlays(3)
+
+        // During un-consolidation: check that un-consolidated lines show originals
+        val unconsolCount = canvas.inlineTextOverlays.count { it.value.unConsolidated }
+        assertTrue("Some lines should be un-consolidated", unconsolCount > 0)
+
+        // Re-consolidate (toggle again on same line)
+        dm.toggleUnConsolidate(1)
+        dm.lastOverlayHash = 0
+        dm.updateInlineOverlays(3)
+
+        val textAfter = canvas.inlineTextOverlays.entries
+            .filter { it.value.consolidated && !it.value.unConsolidated && it.value.recognizedText.isNotBlank() }
+            .sortedBy { it.key }
+            .joinToString(" ") { it.value.recognizedText }
+
+        val expectedFullText = "Combinatrine Exuberance in the closet of the"
+        assertEquals("All words present before toggle", expectedFullText, textBefore)
+        assertEquals("All words present after toggle cycle", expectedFullText, textAfter)
+    }
+
+    @Test
+    fun `un-consolidate range includes overflow lines from word-wrap`() {
+        // When word-wrap causes overflow, the un-consolidation toggle must
+        // include the overflow lines, not just lines < currentLineIndex - 1.
+        // Otherwise, toggling leaves some Hershey lines consolidated while
+        // their source paragraph is un-consolidated, creating a mixed state.
+        textCache[0] = "Combinatrine"
+        textCache[1] = "Exuberance"
+        textCache[2] = "in the closet of the"
+        column.activeStrokes.add(stroke(0, 10f, 700f, "s0"))
+        column.activeStrokes.add(stroke(1, 10f, 700f, "s1"))
+        column.activeStrokes.add(stroke(2, 10f, 700f, "s2"))
+        column.activeStrokes.add(stroke(3, 10f, 200f, "s3_writing"))
+
+        val host = TestHost(column, textCache, currentLine = 3)
+        val dm = createDm(host, width = 408, height = 1648)
+        dm.updateInlineOverlays(3)
+
+        // Verify we have overflow lines
+        val maxConsolidatedLine = canvas.inlineTextOverlays.entries
+            .filter { it.value.consolidated && it.value.recognizedText.isNotBlank() }
+            .maxOfOrNull { it.key } ?: -1
+        assertTrue("Should have overflow lines past source lines",
+            maxConsolidatedLine >= 3)
+
+        // Un-consolidate
+        dm.toggleUnConsolidate(1)
+        dm.lastOverlayHash = 0
+        dm.updateInlineOverlays(3)
+
+        // ALL consolidated lines in the paragraph must be un-consolidated,
+        // including overflow lines. No line should remain consolidated while
+        // its paragraph siblings are un-consolidated.
+        val consolidated = canvas.inlineTextOverlays.entries
+            .filter { it.value.consolidated && !it.value.unConsolidated && it.value.recognizedText.isNotBlank() }
+        assertTrue("No lines should remain consolidated when paragraph is un-consolidated.\n" +
+            "Still consolidated: ${consolidated.map { "${it.key}:'${it.value.recognizedText}'" }}",
+            consolidated.isEmpty())
+    }
+
+    @Test
+    fun `overflow Hershey lines have synthetic strokes generated`() {
+        // When word-wrap overflows, ALL Hershey lines must have synthetic strokes,
+        // not just the lines within the viewport. This catches viewport culling bugs
+        // where scroll compensation shifts the viewport past some Hershey lines.
+        textCache[0] = "Combinatrine"
+        textCache[1] = "Exuberance"
+        textCache[2] = "in the closet of the"
+        column.activeStrokes.add(stroke(0, 10f, 700f, "s0"))
+        column.activeStrokes.add(stroke(1, 10f, 700f, "s1"))
+        column.activeStrokes.add(stroke(2, 10f, 700f, "s2"))
+        column.activeStrokes.add(stroke(3, 10f, 200f, "s3_writing"))
+
+        val host = TestHost(column, textCache, currentLine = 3)
+        val dm = createDm(host, width = 408, height = 1648)
+        dm.updateInlineOverlays(3)
+
+        // Every consolidated overlay with text must have synthetic strokes
+        for ((lineIdx, state) in canvas.inlineTextOverlays) {
+            if (state.consolidated && state.recognizedText.isNotBlank()) {
+                assertTrue(
+                    "Line $lineIdx ('${state.recognizedText}') must have synthetic strokes",
+                    state.syntheticStrokes.isNotEmpty()
+                )
+            }
+        }
+    }
+
     // ── Test host ───────────────────────────────────────────────────────
 
     private class TestHost(

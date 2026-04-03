@@ -508,7 +508,10 @@ class DisplayManager(
             rangeStart = prev
         }
         var rangeEnd = lineIndex
-        while (rangeEnd < host.currentLineIndex - 1) {
+        // Extend past currentLineIndex to include word-wrap overflow lines
+        // that are part of this paragraph's consolidated overlays.
+        val maxOverlayLine = inkCanvas.inlineTextOverlays.keys.maxOrNull() ?: (host.currentLineIndex - 1)
+        while (rangeEnd < maxOverlayLine) {
             val next = rangeEnd + 1
             if (host.diagramManager.isDiagramLine(next)) break
             if (!host.lineTextCache.containsKey(next) && next !in inkCanvas.inlineTextOverlays) break
