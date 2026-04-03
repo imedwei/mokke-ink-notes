@@ -443,7 +443,10 @@ class WritingCoordinator(
         }
         wordGroups.add(lineStrokes.subList(start, lineStrokes.size))
 
-        Log.d(TAG, "findStrokesForWord: line=$origLineIdx, ${lineStrokes.size} strokes → ${wordGroups.size} word groups (expected=$expectedWords, boundaries=$wordBoundaries)")
+        val gapDetails = gaps.sortedByDescending { it.size }.take(5).joinToString { "idx=${it.index}:${it.size.toInt()}px" }
+        val groupDetails = wordGroups.mapIndexed { i, g -> "[$i]:${g.size}strokes X=[${g.minOfOrNull { it.minX }?.toInt()},${g.maxOfOrNull { it.maxX }?.toInt()}]" }.joinToString(" ")
+        Log.d(TAG, "findStrokesForWord: line=$origLineIdx, ${lineStrokes.size} strokes → ${wordGroups.size} word groups (expected=$expectedWords, text='$lineText')")
+        Log.d(TAG, "  gaps: $gapDetails | boundaries=$wordBoundaries | groups: $groupDetails")
         return if (wordIndex in wordGroups.indices) wordGroups[wordIndex] else emptyList()
     }
 
@@ -820,12 +823,15 @@ class WritingCoordinator(
             return
         }
 
-        // Normal scratch-out on handwritten strokes
+        // Normal scratch-out on handwritten strokes.
+        // Use X bounding box overlap but constrain Y to same line as the scratch
+        // center. This prevents tall ascenders/descenders or slightly slanted
+        // writing from pulling in strokes from adjacent lines.
+        val scratchLine = lineSegmenter.getLineIndex(scratchCenterY)
         val overlapping = columnModel.activeStrokes.filter { stroke ->
             val sMinX = stroke.minX; val sMaxX = stroke.maxX
-            val sMinY = stroke.minY; val sMaxY = stroke.maxY
             sMaxX >= left - radius && sMinX <= right + radius &&
-                sMaxY >= top - radius && sMinY <= bottom + radius
+                lineSegmenter.getStrokeLineIndex(stroke) == scratchLine
         }
         if (overlapping.isEmpty()) return
 
