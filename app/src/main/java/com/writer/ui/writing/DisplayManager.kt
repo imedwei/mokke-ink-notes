@@ -446,6 +446,8 @@ class DisplayManager(
         // screen position.  Screen Y = docY + overflowShift - scrollOffset,
         // so when overflowShift changes by delta, scrollOffset must change
         // by the same delta to keep screen Y constant.
+        // The scroll change takes effect on the next drawToSurface() pass
+        // (triggered by scheduleTextRefresh), avoiding a jarring mid-stroke jump.
         val shiftDelta = newShift - prevShift
         if (shiftDelta != 0f) {
             inkCanvas.scrollOffsetY = (inkCanvas.scrollOffsetY + shiftDelta).coerceAtLeast(0f)
@@ -485,7 +487,7 @@ class DisplayManager(
                     popupX = lineStrokes[0].minX
                 }
                 val lineTop = HandwritingCanvasView.TOP_MARGIN + currentLineIndex * HandwritingCanvasView.LINE_SPACING
-                val screenY = lineTop - inkCanvas.scrollOffsetY
+                val screenY = lineTop + inkCanvas.consolidationOverflowShiftPx - inkCanvas.scrollOffsetY
                 onWordPopup?.invoke(lastWord, popupX, screenY)
             }
         }

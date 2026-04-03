@@ -449,6 +449,60 @@ class InlineOverlayScenarioTest {
         )
     }
 
+    // ── Scenario 9: Stroke capture accounts for overflow shift ────────
+
+    @Test
+    fun `stroke on shifted writing line lands on correct document line`() {
+        // Overflow shifts the writing line down on screen. A stroke captured
+        // at the shifted screen position must map to the expected document line,
+        // not a higher line (which would cause premature consolidation).
+        val veryLong = "The quick brown fox jumped over the lazy dog and then ran across the field " +
+            "to find the hidden treasure buried beneath the ancient oak tree near the river bank"
+        textCache[0] = veryLong
+        column.activeStrokes.add(stroke(0, 10f, 700f, "s0"))
+        column.activeStrokes.add(stroke(1, 10f, 200f, "s1_writing"))
+
+        val host = TestHost(column, textCache, currentLine = 1)
+        val dm = createDm(host)
+        dm.updateInlineOverlays(1)
+
+        assertTrue("Overflow shift should be positive", canvas.consolidationOverflowShiftPx > 0f)
+
+        // Simulate the user writing on the next visual line (one LINE_SPACING below
+        // the shifted writing line). The screen Y of the writing line is:
+        //   docY + overflowShift - scrollOffsetY
+        // One line below that in screen space:
+        val writingScreenY = writingLineScreenY(1) + ls + ls * 0.5f
+        // Convert screen Y to document Y the same way toDocStrokePoint does:
+        val docY = writingScreenY + canvas.scrollOffsetY - canvas.consolidationOverflowShiftPx
+        val lineIdx = lineSegmenter.getLineIndex(docY)
+
+        assertEquals("Stroke on next visual line should land on document line 2",
+            2, lineIdx)
+    }
+
+    @Test
+    fun `stroke capture with no overflow is unchanged`() {
+        // When there's no overflow, subtracting 0 from Y has no effect.
+        textCache[0] = "Hello"
+        column.activeStrokes.add(stroke(0, 10f, 100f, "s0"))
+        column.activeStrokes.add(stroke(1, 10f, 100f, "s1_writing"))
+
+        val host = TestHost(column, textCache, currentLine = 1)
+        val dm = createDm(host)
+        dm.updateInlineOverlays(1)
+
+        assertEquals("No overflow shift", 0f, canvas.consolidationOverflowShiftPx, 0.01f)
+
+        // Screen Y for writing on line 1
+        val screenY = tm + 1 * ls + ls * 0.5f
+        // Document Y = screenY + scrollOffsetY - overflowShift = screenY + 0 - 0
+        val docY = screenY + canvas.scrollOffsetY - canvas.consolidationOverflowShiftPx
+        val lineIdx = lineSegmenter.getLineIndex(docY)
+
+        assertEquals("Stroke lands on document line 1", 1, lineIdx)
+    }
+
     // ── Test host ───────────────────────────────────────────────────────
 
     private class TestHost(

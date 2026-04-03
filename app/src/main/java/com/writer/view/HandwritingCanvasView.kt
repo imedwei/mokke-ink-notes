@@ -345,11 +345,14 @@ class HandwritingCanvasView @JvmOverloads constructor(
         override fun onRawErasingTouchPointListReceived(tpl: TouchPointList) {}
     }
 
-    /** Convert SDK TouchPoint to document-space StrokePoint. */
+    /** Convert SDK TouchPoint to document-space StrokePoint.
+     *  When consolidation overflow shifts the writing area down on screen,
+     *  scrollOffsetY includes the overflow compensation. Subtract the
+     *  overflow shift so strokes land on the correct document line. */
     private fun TouchPoint.toDocStrokePoint(): StrokePoint {
         return StrokePoint(
             x = this.x,
-            y = this.y + scrollOffsetY,
+            y = this.y + scrollOffsetY - consolidationOverflowShiftPx,
             pressure = this.pressure,
             timestamp = this.timestamp
         )
