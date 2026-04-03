@@ -729,10 +729,17 @@ class WritingCoordinator(
         // the shifted raw strokes. Detect this by checking if the scratch's
         // document line is at/past the writing line: if so, the user is
         // scratching raw handwriting, not consolidated Hershey text.
-        val scratchCenterY = (top + bottom) / 2f
+        // Scratch bounds are in document space with overflow shift subtracted
+        // (via toDocStrokePoint). Add the shift back to get the "raw document"
+        // Y that matches Hershey overlay line positions.
+        val overflowShift = inkCanvas.consolidationOverflowShiftPx
+        val scratchCenterY = (top + bottom) / 2f + overflowShift
         val scratchLineIdx = ((scratchCenterY - HandwritingCanvasView.TOP_MARGIN) / HandwritingCanvasView.LINE_SPACING).toInt()
         val hitsShiftedRawStrokes = inkCanvas.consolidationOverflowShiftPx > 0f
             && currentLineIndex >= 0 && scratchLineIdx >= currentLineIndex
+        // Look up the overlay at the scratch line. If the overlay is not
+        // consolidated (e.g. it's the active writing line), also check if
+        // a consolidated word-wrap overflow placed Hershey text at this line.
         val overlay = if (!hitsShiftedRawStrokes) inkCanvas.inlineTextOverlays[scratchLineIdx] else null
         Log.d(TAG, "SCRATCH: lineIdx=$scratchLineIdx overlay=${overlay != null} consolidated=${overlay?.consolidated} hitsShifted=$hitsShiftedRawStrokes text='${overlay?.recognizedText?.take(30)}'")
         if (overlay != null && overlay.consolidated && !overlay.unConsolidated && overlay.recognizedText.isNotBlank()) {

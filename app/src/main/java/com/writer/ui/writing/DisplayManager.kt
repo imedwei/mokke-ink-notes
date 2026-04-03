@@ -363,6 +363,7 @@ class DisplayManager(
                     wc.wordIndex >= lineStartWord && wc.wordIndex < lineStartWord + lineWordCount
                 }.map { it.copy(wordIndex = it.wordIndex - lineStartWord) }
 
+                Log.d(TAG, "buildOverlays: consolidated line $lineIdx text='${wrappedText.take(30)}' (wrapped from paragraph starting at ${paragraph.first().key})")
                 overlays[lineIdx] = InlineTextState(
                     lineIndex = lineIdx,
                     recognizedText = wrappedText,
@@ -390,7 +391,10 @@ class DisplayManager(
 
         // Non-consolidated overlays for current writing line and other non-consolidated lines
         for ((lineIdx, text) in host.lineTextCache) {
-            if (lineIdx in overlays) continue
+            if (lineIdx in overlays) {
+                Log.d(TAG, "buildOverlays: skip non-consolidated at line $lineIdx (already has ${overlays[lineIdx]?.let { "consolidated=${it.consolidated} text='${it.recognizedText.take(20)}'" }})")
+                continue
+            }
             if (text.isBlank() || text == "[?]") continue
             if (host.diagramManager.isDiagramLine(lineIdx)) continue
 
