@@ -168,9 +168,24 @@ class LineRecognitionManager(
                 recognizer.recognizeLineWithCandidates(line, preContext)
             }
             // Build per-word stroke mapping from recognizer bounding boxes
+            // Diagnostic: log both coordinate spaces to verify alignment
+            val bb = line.boundingBox
+            Log.d(TAG, "STROKE-MAP: line=$lineIndex inkLineBB=[${bb.left.toInt()},${bb.top.toInt()},${bb.right.toInt()},${bb.bottom.toInt()}] (${bb.width().toInt()}x${bb.height().toInt()})")
+            for (wc in result.wordConfidences) {
+                val wcBB = wc.boundingBox
+                if (wcBB != null) {
+                    Log.d(TAG, "STROKE-MAP:   word='${wc.word}' hwrBB=[x=${wcBB.x}, y=${wcBB.y}, w=${wcBB.width}, h=${wcBB.height}]")
+                }
+            }
+            for (s in line.strokes) {
+                val sMinX = s.points.minOf { it.x }
+                val sMaxX = s.points.maxOf { it.x }
+                Log.d(TAG, "STROKE-MAP:   stroke='${s.strokeId.take(8)}' pixelX=[${sMinX.toInt()},${sMaxX.toInt()}]")
+            }
             val mapping = com.writer.recognition.StrokeMatcher.buildWordStrokeMapping(
-                result.wordConfidences, line.strokes
+                result.wordConfidences, line.strokes, line.boundingBox
             )
+            Log.d(TAG, "STROKE-MAP: mapping=${if (mapping.isEmpty()) "EMPTY (fallback to gaps)" else mapping.entries.joinToString { "${it.key}→${it.value.size}strokes" }}")
             if (mapping.isNotEmpty()) {
                 result = result.copy(wordStrokeMapping = mapping)
             }
