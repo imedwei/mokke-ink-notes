@@ -520,18 +520,6 @@ class DisplayManager(
 
         val paragraphLines = (rangeStart..rangeEnd).toSet()
 
-        // Count source lines (in lineTextCache) vs total overlay lines.
-        // When word-wrap causes overflow (more Hershey lines than source lines),
-        // un-consolidation would show raw strokes at positions that don't match
-        // the word-wrapped text, causing the user to scratch the wrong words.
-        // Skip un-consolidation in this case.
-        val sourceLineCount = paragraphLines.count { it in host.lineTextCache }
-        val overlayLineCount = paragraphLines.count { it in inkCanvas.inlineTextOverlays }
-        if (overlayLineCount > sourceLineCount && paragraphLines.none { it in unConsolidatedLines }) {
-            // Overflow — don't un-consolidate
-            return
-        }
-
         if (paragraphLines.any { it in unConsolidatedLines }) {
             unConsolidatedLines.removeAll(paragraphLines)
         } else {

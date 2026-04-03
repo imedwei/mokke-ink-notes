@@ -665,11 +665,9 @@ class InlineOverlayScenarioTest {
     }
 
     @Test
-    fun `un-consolidation blocked when word-wrap causes overflow`() {
-        // When word-wrap causes overflow (more Hershey lines than source lines),
-        // un-consolidation is blocked because raw strokes would show at positions
-        // that don't match the word-wrapped text, causing the user to scratch
-        // the wrong words.
+    fun `un-consolidate range includes overflow lines from word-wrap`() {
+        // When word-wrap causes overflow, the un-consolidation toggle must
+        // include the overflow lines so the entire paragraph toggles together.
         textCache[0] = "Combinatrine"
         textCache[1] = "Exuberance"
         textCache[2] = "in the closet of the"
@@ -689,37 +687,16 @@ class InlineOverlayScenarioTest {
         assertTrue("Should have overflow lines past source lines",
             maxConsolidatedLine >= 3)
 
-        // Attempt to un-consolidate — should be blocked due to overflow
+        // Un-consolidate — all lines including overflow should toggle
         dm.toggleUnConsolidate(1)
         dm.lastOverlayHash = 0
         dm.updateInlineOverlays(3)
 
-        // All lines should remain consolidated (toggle was blocked)
-        val unconsolidated = canvas.inlineTextOverlays.count { it.value.unConsolidated }
-        assertEquals("Un-consolidation should be blocked when overflow is active", 0, unconsolidated)
-    }
-
-    @Test
-    fun `un-consolidation allowed when no overflow`() {
-        // When text fits without overflow, un-consolidation works normally.
-        textCache[0] = "Hello"
-        textCache[1] = "World"
-        column.activeStrokes.add(stroke(0, 10f, 100f, "s0"))
-        column.activeStrokes.add(stroke(1, 10f, 100f, "s1"))
-        column.activeStrokes.add(stroke(2, 10f, 100f, "s2_writing"))
-
-        val host = TestHost(column, textCache, currentLine = 2)
-        val dm = createDm(host, width = 408, height = 1648)
-        dm.updateInlineOverlays(2)
-
-        assertEquals("No overflow", 0f, canvas.consolidationOverflowShiftPx, 0.01f)
-
-        dm.toggleUnConsolidate(0)
-        dm.lastOverlayHash = 0
-        dm.updateInlineOverlays(2)
-
-        val unconsolidated = canvas.inlineTextOverlays.count { it.value.unConsolidated }
-        assertTrue("Un-consolidation should work without overflow", unconsolidated > 0)
+        val consolidated = canvas.inlineTextOverlays.entries
+            .filter { it.value.consolidated && !it.value.unConsolidated && it.value.recognizedText.isNotBlank() }
+        assertTrue("No lines should remain consolidated when paragraph is un-consolidated.\n" +
+            "Still consolidated: ${consolidated.map { "${it.key}:'${it.value.recognizedText}'" }}",
+            consolidated.isEmpty())
     }
 
     @Test
