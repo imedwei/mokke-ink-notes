@@ -871,20 +871,10 @@ class WritingCoordinator(
         columnModel.activeStrokes.removeAll { it.strokeId in idsToRemove }
         for (id in idsToRemove) { columnModel.diagram.nodes.remove(id) }
 
-        // Invalidate text cache for affected lines and re-recognize so the
-        // consolidated paragraph text updates correctly. Simply removing the
-        // cache entry would break the paragraph grouping (creating a gap),
-        // causing word-wrap to lose words from adjacent lines.
+        // Invalidate text cache for affected lines so stale consolidated text is removed
         val affectedLines = expanded.map { lineSegmenter.getStrokeLineIndex(it) }.toSet()
         for (lineIdx in affectedLines) {
             lineTextCache.remove(lineIdx)
-            // Re-recognize if strokes remain on this line
-            val remainingStrokes = columnModel.activeStrokes.any { stroke ->
-                lineSegmenter.getStrokeLineIndex(stroke) == lineIdx
-            }
-            if (remainingStrokes) {
-                recognitionManager.eagerRecognizeLine(lineIdx)
-            }
         }
         displayManager.lastOverlayHash = 0
 
