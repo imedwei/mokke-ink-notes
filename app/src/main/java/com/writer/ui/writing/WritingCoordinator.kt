@@ -84,6 +84,8 @@ class WritingCoordinator(
     private var hersheyFont: HersheyFont? = null
     /** Pending word edit from scratch-out on consolidated text. */
     internal var pendingWordEdit: PendingWordEdit? = null
+    /** Job for the delayed pending word edit application (cancelled on new stroke). */
+    private var pendingEditJob: kotlinx.coroutines.Job? = null
     // Diagram lifecycle manager (created in start())
     private lateinit var diagramManager: DiagramManager
     // Display manager (created in start())
@@ -166,6 +168,9 @@ class WritingCoordinator(
         inkCanvas.columnModel = columnModel
         inkCanvas.onPenDown = {
             onTutorialAction?.invoke("pen_down")
+            // Cancel pending edit timer — user is still writing
+            pendingEditJob?.cancel()
+            pendingEditJob = null
             displayManager.reConsolidateAll()
         }
         inkCanvas.onOverlayDoubleTap = { lineIndex ->
@@ -255,121 +260,22 @@ class WritingCoordinator(
             lastStrokeIndex = eventLog.recordStroke(points)
         }
         inkCanvas.onStrokeCompleted = { stroke -> onStrokeCompleted(stroke) }
-        inkCanvas.onIdleTimeout = {
-            displayManager.onIdle(currentLineIndex)
-            // Apply pending word edit after user stops writing
+        inkCanvas.onIdleTimeout = idle@{
+            // Skip recognition and consolidation while a pending word edit
+            // is active — the user may still be crossing t's or dotting i's.
             val edit = pendingWordEdit
             if (edit != null && edit.replacementStrokeIds.isNotEmpty()) {
-                Log.i(TAG, "EDIT: Idle fired with pending edit: oldWord='${edit.oldWord}' wordIdx=${edit.origWordIndex} line=${edit.lineIndex} replacementStrokes=${edit.replacementStrokeIds.size}")
-                val replacementStrokes = columnModel.activeStrokes.filter {
-                    it.strokeId in edit.replacementStrokeIds
+                val editSnapshot = edit
+                pendingEditJob?.cancel()
+                pendingEditJob = scope.launch {
+                    kotlinx.coroutines.delay(1900L)  // 1900 + 100ms idle ≈ 2s total
+                    // Re-check: user may have started writing again (idle re-fires)
+                    if (pendingWordEdit != editSnapshot) return@launch
+                    applyPendingWordEditAsync(editSnapshot)
                 }
-                Log.i(TAG, "EDIT: Found ${replacementStrokes.size} replacement strokes in activeStrokes (total=${columnModel.activeStrokes.size})")
-                if (replacementStrokes.isNotEmpty()) {
-                    // Recognize just the replacement strokes with pre-context
-                    // from the surrounding consolidated text. Don't relocate or
-                    // merge with original strokes — that causes the recognizer
-                    // to split/merge words unpredictably.
-                    val lineIdx = edit.lineIndex
-                    val line = lineSegmenter.buildInkLine(replacementStrokes, lineIdx)
-
-                    // Build pre-context: text from lines above + words before the gap
-                    val origText = lineTextCache[lineIdx] ?: ""
-                    val wordsBeforeGap = origText.split(" ").take(edit.origWordIndex)
-                    val contextFromLine = wordsBeforeGap.joinToString(" ")
-                    val contextFromAbove = buildPreContext(lineTextCache, lineIdx)
-                    val preContext = if (contextFromAbove.isNotEmpty()) {
-                        "$contextFromAbove $contextFromLine"
-                    } else contextFromLine
-                    Log.i(TAG, "EDIT: Recognizing ${replacementStrokes.size} replacement strokes with preContext='$preContext'")
-
-                    scope.launch {
-                        val newWord = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                            recognizer.recognizeLine(line, preContext)
-                        }.trim()
-                        Log.i(TAG, "EDIT: Recognition result: '$newWord'")
-
-                        if (newWord.isNotBlank() && newWord != "[?]") {
-                            // Compute baseline from surrounding strokes on the original line
-                            val origLineStrokes = lineSegmenter.getStrokesForLine(
-                                columnModel.activeStrokes, lineIdx
-                            ).filter { it.strokeId !in edit.replacementStrokeIds }
-                            val targetCenterY = edit.origLineY + HandwritingCanvasView.LINE_SPACING * 0.5f
-                            val targetBaselineY = if (origLineStrokes.isNotEmpty()) {
-                                // 75th percentile Y of surrounding strokes = baseline
-                                val allYs = origLineStrokes.flatMap { s -> s.points.map { it.y } }.sorted()
-                                allYs[(allYs.size * 0.75f).toInt().coerceAtMost(allYs.size - 1)]
-                            } else null
-
-                            var relocated = relocateToGap(
-                                replacementStrokes, edit.origStrokeStartX, edit.origStrokeEndX,
-                                targetCenterY, targetBaselineY
-                            )
-
-                            if (!fitsInGap(relocated, edit.origStrokeStartX, edit.origStrokeEndX)) {
-                                // Overflow: split the line — shift words after gap down
-                                val overflowLineStrokes = lineSegmenter.getStrokesForLine(
-                                    columnModel.activeStrokes, lineIdx
-                                ).filter { it.strokeId !in edit.replacementStrokeIds }
-                                val origText = lineTextCache[lineIdx] ?: ""
-                                val expectedWords = origText.split(" ").size
-                                val (stay, shifted) = splitLineForOverflow(
-                                    overflowLineStrokes, edit.origWordIndex, expectedWords
-                                )
-                                // Remove original strokes and re-add split versions
-                                val origIds = overflowLineStrokes.map { it.strokeId }.toSet()
-                                columnModel.activeStrokes.removeAll { it.strokeId in origIds }
-                                columnModel.activeStrokes.addAll(stay)
-                                columnModel.activeStrokes.addAll(shifted)
-                                Log.i(TAG, "EDIT: Split line $lineIdx: ${stay.size} stay + ${shifted.size} shifted to next line")
-
-                                // Re-relocate into the expanded gap — words after the gap
-                                // moved to the next line, so the gap now extends to the
-                                // end of the line (or to a reasonable max width).
-                                val lineEndX = inkCanvas.width.toFloat() - ScreenMetrics.dp(10f)
-                                val expandedGapEnd = if (stay.isNotEmpty()) {
-                                    // Gap extends from original start to the line's right margin
-                                    lineEndX
-                                } else edit.origStrokeEndX
-                                relocated = relocateToGap(
-                                    replacementStrokes, edit.origStrokeStartX, expandedGapEnd,
-                                    targetCenterY, targetBaselineY
-                                )
-                                Log.i(TAG, "EDIT: Re-relocated to expanded gap [${edit.origStrokeStartX},$expandedGapEnd]")
-                            }
-
-                            // Replace the temporary strokes with relocated ones.
-                            // Give relocated strokes NEW IDs so applyWordEdit's cleanup
-                            // (which removes replacementStrokeIds) doesn't remove them.
-                            columnModel.activeStrokes.removeAll { it.strokeId in edit.replacementStrokeIds }
-                            val relocatedWithNewIds = relocated.map {
-                                it.copy(strokeId = java.util.UUID.randomUUID().toString())
-                            }
-                            columnModel.activeStrokes.addAll(relocatedWithNewIds)
-                            inkCanvas.loadStrokes(columnModel.activeStrokes.toList())
-                            Log.i(TAG, "EDIT: Relocated ${relocatedWithNewIds.size} strokes to gap [${edit.origStrokeStartX},${edit.origStrokeEndX}]")
-
-                            applyWordEdit(edit, newWord, lineIdx)
-                        } else {
-                            Log.w(TAG, "EDIT: Recognition failed or empty, cancelling edit")
-                            // Clear pending edit so subsequent strokes aren't hidden
-                            pendingWordEdit = null
-                            inkCanvas.hiddenStrokeIds = emptySet()
-                            // Un-hide the replacement strokes (they're the user's normal writing)
-                            inkCanvas.loadStrokes(columnModel.activeStrokes.toList())
-                            inkCanvas.post {
-                                inkCanvas.pauseRawDrawing()
-                                inkCanvas.drawToSurface()
-                                inkCanvas.resumeRawDrawing()
-                            }
-                        }
-                    }
-                } else {
-                    Log.w(TAG, "EDIT: No replacement strokes found, cancelling edit")
-                    pendingWordEdit = null
-                    inkCanvas.hiddenStrokeIds = emptySet()
-                }
+                return@idle
             }
+            displayManager.onIdle(currentLineIndex)
         }
         inkCanvas.onManualScroll = {
             displayManager.displayHiddenLines()
@@ -419,7 +325,9 @@ class WritingCoordinator(
      * and between words.
      */
     internal fun findStrokesForWord(origLineIdx: Int, wordIndex: Int): List<InkStroke> {
-        // Try the per-word stroke mapping from recognition bounding boxes
+        // Use the per-word stroke mapping from recognition bounding boxes.
+        // This is the only reliable way to match words to strokes — the old
+        // gap-based heuristic was the source of most scratch-out bugs.
         val recognitionResult = if (::recognitionManager.isInitialized)
             recognitionManager.lineRecognitionResults[origLineIdx] else null
         val strokeIds = recognitionResult?.wordStrokeMapping?.get(wordIndex)
@@ -430,40 +338,16 @@ class WritingCoordinator(
                 Log.d(TAG, "findStrokesForWord: line=$origLineIdx word=$wordIndex → ${mapped.size} strokes via bounding-box mapping")
                 return mapped
             }
-            // Stroke IDs in mapping but none found in activeStrokes — stale, fall through
-            Log.w(TAG, "findStrokesForWord: bounding-box mapping stale for line=$origLineIdx word=$wordIndex, falling back to gap detection")
+            Log.w(TAG, "findStrokesForWord: bounding-box mapping stale for line=$origLineIdx word=$wordIndex (strokes removed?)")
+        } else {
+            Log.w(TAG, "findStrokesForWord: no bounding-box mapping for line=$origLineIdx word=$wordIndex (mapping=${recognitionResult?.wordStrokeMapping?.keys})")
         }
 
-        // Fallback: N-1 largest gaps heuristic (for ML Kit, stale results, etc.)
+        // No reliable mapping available — return all strokes on the line.
+        // This is safer than the gap heuristic which often returned the wrong strokes.
         val lineStrokes = lineSegmenter.getStrokesForLine(columnModel.activeStrokes, origLineIdx)
-            .sortedBy { it.minX }
-        val lineText = lineTextCache[origLineIdx] ?: return lineStrokes
-        val expectedWords = lineText.split(" ").size
-        if (wordIndex >= expectedWords) return emptyList()
-        if (lineStrokes.size < 2 || expectedWords <= 1) return lineStrokes
-
-        data class Gap(val index: Int, val size: Float)
-        val gaps = mutableListOf<Gap>()
-        for (i in 1 until lineStrokes.size) {
-            val gap = lineStrokes[i].minX - lineStrokes[i - 1].maxX
-            gaps.add(Gap(i, gap))
-        }
-
-        val wordBoundaries = gaps.sortedByDescending { it.size }
-            .take(expectedWords - 1)
-            .map { it.index }
-            .sorted()
-
-        val wordGroups = mutableListOf<List<InkStroke>>()
-        var start = 0
-        for (boundary in wordBoundaries) {
-            wordGroups.add(lineStrokes.subList(start, boundary))
-            start = boundary
-        }
-        wordGroups.add(lineStrokes.subList(start, lineStrokes.size))
-
-        Log.d(TAG, "findStrokesForWord: line=$origLineIdx, ${lineStrokes.size} strokes → ${wordGroups.size} word groups (expected=$expectedWords, text='$lineText') [gap fallback]")
-        return if (wordIndex in wordGroups.indices) wordGroups[wordIndex] else emptyList()
+        Log.w(TAG, "findStrokesForWord: returning all ${lineStrokes.size} strokes on line $origLineIdx (no mapping)")
+        return lineStrokes
     }
 
     /** Relocate strokes to fit within a gap, preserving relative positions.
@@ -540,6 +424,79 @@ class WritingCoordinator(
             })
         }
         return before to after
+    }
+
+    /** Recognize replacement strokes, relocate to gap, and apply the word edit.
+     *  Called from the idle timeout after a 2s delay for crossing t's / dotting i's. */
+    private fun applyPendingWordEditAsync(edit: PendingWordEdit) {
+        Log.i(TAG, "EDIT: Idle fired with pending edit: oldWord='${edit.oldWord}' wordIdx=${edit.origWordIndex} line=${edit.lineIndex} replacementStrokes=${edit.replacementStrokeIds.size}")
+        val replacementStrokes = columnModel.activeStrokes.filter {
+            it.strokeId in edit.replacementStrokeIds
+        }
+        Log.i(TAG, "EDIT: Found ${replacementStrokes.size} replacement strokes in activeStrokes (total=${columnModel.activeStrokes.size})")
+        if (replacementStrokes.isEmpty()) {
+            Log.w(TAG, "EDIT: No replacement strokes found, cancelling edit")
+            pendingWordEdit = null
+            inkCanvas.hiddenStrokeIds = emptySet()
+            return
+        }
+        val lineIdx = edit.lineIndex
+        val line = lineSegmenter.buildInkLine(replacementStrokes, lineIdx)
+        val origText = lineTextCache[lineIdx] ?: ""
+        val wordsBeforeGap = origText.split(" ").take(edit.origWordIndex)
+        val contextFromLine = wordsBeforeGap.joinToString(" ")
+        val contextFromAbove = buildPreContext(lineTextCache, lineIdx)
+        val preContext = if (contextFromAbove.isNotEmpty()) "$contextFromAbove $contextFromLine" else contextFromLine
+        Log.i(TAG, "EDIT: Recognizing ${replacementStrokes.size} replacement strokes with preContext='$preContext'")
+
+        scope.launch {
+            val newWord = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                recognizer.recognizeLine(line, preContext)
+            }.trim()
+            Log.i(TAG, "EDIT: Recognition result: '$newWord'")
+            if (newWord.isNotBlank() && newWord != "[?]") {
+                val origLineStrokes = lineSegmenter.getStrokesForLine(
+                    columnModel.activeStrokes, lineIdx
+                ).filter { it.strokeId !in edit.replacementStrokeIds }
+                val targetCenterY = edit.origLineY + HandwritingCanvasView.LINE_SPACING * 0.5f
+                val targetBaselineY = if (origLineStrokes.isNotEmpty()) {
+                    val allYs = origLineStrokes.flatMap { s -> s.points.map { it.y } }.sorted()
+                    allYs[(allYs.size * 0.75f).toInt().coerceAtMost(allYs.size - 1)]
+                } else null
+
+                var relocated = relocateToGap(
+                    replacementStrokes, edit.origStrokeStartX, edit.origStrokeEndX,
+                    targetCenterY, targetBaselineY
+                )
+                if (!fitsInGap(relocated, edit.origStrokeStartX, edit.origStrokeEndX)) {
+                    val overflowLineStrokes = lineSegmenter.getStrokesForLine(
+                        columnModel.activeStrokes, lineIdx
+                    ).filter { it.strokeId !in edit.replacementStrokeIds }
+                    val expectedWords = origText.split(" ").size
+                    val (stay, shifted) = splitLineForOverflow(overflowLineStrokes, edit.origWordIndex, expectedWords)
+                    val origIds = overflowLineStrokes.map { it.strokeId }.toSet()
+                    columnModel.activeStrokes.removeAll { it.strokeId in origIds }
+                    columnModel.activeStrokes.addAll(stay)
+                    columnModel.activeStrokes.addAll(shifted)
+                    Log.i(TAG, "EDIT: Split line $lineIdx: ${stay.size} stay + ${shifted.size} shifted")
+                    val lineEndX = inkCanvas.width.toFloat() - ScreenMetrics.dp(10f)
+                    val expandedGapEnd = if (stay.isNotEmpty()) lineEndX else edit.origStrokeEndX
+                    relocated = relocateToGap(replacementStrokes, edit.origStrokeStartX, expandedGapEnd, targetCenterY, targetBaselineY)
+                }
+                columnModel.activeStrokes.removeAll { it.strokeId in edit.replacementStrokeIds }
+                val relocatedWithNewIds = relocated.map { it.copy(strokeId = java.util.UUID.randomUUID().toString()) }
+                columnModel.activeStrokes.addAll(relocatedWithNewIds)
+                inkCanvas.loadStrokes(columnModel.activeStrokes.toList())
+                Log.i(TAG, "EDIT: Relocated ${relocatedWithNewIds.size} strokes to gap")
+                applyWordEdit(edit, newWord, lineIdx)
+            } else {
+                Log.w(TAG, "EDIT: Recognition failed or empty, cancelling edit")
+                pendingWordEdit = null
+                inkCanvas.hiddenStrokeIds = emptySet()
+                inkCanvas.loadStrokes(columnModel.activeStrokes.toList())
+                inkCanvas.post { inkCanvas.pauseRawDrawing(); inkCanvas.drawToSurface(); inkCanvas.resumeRawDrawing() }
+            }
+        }
     }
 
     /** Apply a pending word edit: replace the old word with the new one in lineTextCache. */
@@ -735,12 +692,15 @@ class WritingCoordinator(
         val overflowShift = inkCanvas.consolidationOverflowShiftPx
         val scratchCenterY = (top + bottom) / 2f + overflowShift
         val scratchLineIdx = ((scratchCenterY - HandwritingCanvasView.TOP_MARGIN) / HandwritingCanvasView.LINE_SPACING).toInt()
-        val hitsShiftedRawStrokes = inkCanvas.consolidationOverflowShiftPx > 0f
+        // Always check for a consolidated overlay first — word-wrap overflow
+        // can place Hershey text at/past the current writing line.
+        val overlay = inkCanvas.inlineTextOverlays[scratchLineIdx]
+        // Only treat as hitting shifted raw strokes if there's NO consolidated
+        // overlay at this line (the user is targeting raw handwriting that's
+        // been shifted down by the overflow).
+        val hitsShiftedRawStrokes = overlay?.consolidated != true
+            && inkCanvas.consolidationOverflowShiftPx > 0f
             && currentLineIndex >= 0 && scratchLineIdx >= currentLineIndex
-        // Look up the overlay at the scratch line. If the overlay is not
-        // consolidated (e.g. it's the active writing line), also check if
-        // a consolidated word-wrap overflow placed Hershey text at this line.
-        val overlay = if (!hitsShiftedRawStrokes) inkCanvas.inlineTextOverlays[scratchLineIdx] else null
         Log.d(TAG, "SCRATCH: lineIdx=$scratchLineIdx overlay=${overlay != null} consolidated=${overlay?.consolidated} hitsShifted=$hitsShiftedRawStrokes text='${overlay?.recognizedText?.take(30)}'")
         if (overlay != null && overlay.consolidated && !overlay.unConsolidated && overlay.recognizedText.isNotBlank()) {
             // Scratch-out on consolidated text — identify which word was hit
