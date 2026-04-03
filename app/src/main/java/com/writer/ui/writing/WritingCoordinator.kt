@@ -878,7 +878,11 @@ class WritingCoordinator(
      * Expand a set of directly-overlapping strokes to include the full connected word
      * within the scratch-out region. A stroke is included if it's on the same line,
      * overlaps or is near the scratch-out bounding box, and was written close in time.
-     * This catches fragments like the crossbar of 't' without jumping to adjacent words.
+     * This catches fragments like the crossbar of 't' or dot on 'i' without jumping
+     * to adjacent words.
+     *
+     * Conservative: uses a small X margin (just enough for disconnected letter parts)
+     * and a short temporal window to avoid expanding across word boundaries.
      */
     private fun expandToConnectedWord(
         directHits: List<InkStroke>,
@@ -887,19 +891,22 @@ class WritingCoordinator(
     ): List<InkStroke> {
         if (directHits.isEmpty()) return directHits
 
-        val ls = ScreenMetrics.lineSpacing
-        val margin = ls * 0.5f  // small margin around scratch-out box for nearby fragments
-        val maxTimeGap = 2000L
+        // Ultra-conservative: only include strokes whose center falls inside or
+        // just outside the scratch bounding box. 4dp margin catches a dot on 'i'
+        // that drifted slightly; nothing more.
+        val margin = ScreenMetrics.dp(4f)
+        // Temporal window: 300ms — only strokes from the same letter.
+        val maxTimeGap = 300L
 
         val hitLines = directHits.map { lineSegmenter.getStrokeLineIndex(it) }.toSet()
 
-        // Candidates: same line, within or near the scratch-out bounding box
+        // Candidates: same line, center within or just outside the scratch bounding box
         val candidates = allStrokes.filter { stroke ->
+            val cx = (stroke.minX + stroke.maxX) / 2f
+            val cy = (stroke.minY + stroke.maxY) / 2f
             lineSegmenter.getStrokeLineIndex(stroke) in hitLines &&
-                stroke.maxX >= scratchLeft - margin &&
-                stroke.minX <= scratchRight + margin &&
-                stroke.maxY >= scratchTop - margin &&
-                stroke.minY <= scratchBottom + margin
+                cx >= scratchLeft - margin && cx <= scratchRight + margin &&
+                cy >= scratchTop - margin && cy <= scratchBottom + margin
         }
 
         // Include candidates that are temporally connected to the direct hits
