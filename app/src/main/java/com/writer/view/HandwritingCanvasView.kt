@@ -1078,7 +1078,18 @@ class HandwritingCanvasView @JvmOverloads constructor(
     /** Check if the completed stroke is a scratch-out erase gesture. */
     private fun checkPostStrokeScratchOut(): Boolean {
         val t0 = android.os.SystemClock.elapsedRealtime()
-        val isScratch = ScratchOutDetection.isScratchOut(currentStrokePoints, completedStrokes, LINE_SPACING)
+        // Include Hershey synthetic strokes so scratch-out detection works
+        // on consolidated text (the raw strokes may be at different Y positions
+        // due to word-wrap reflow, but the Hershey strokes are what's visible).
+        val allStrokes = buildList {
+            addAll(completedStrokes)
+            for ((_, state) in inlineTextOverlays) {
+                if (state.consolidated && !state.unConsolidated) {
+                    addAll(state.syntheticStrokes)
+                }
+            }
+        }
+        val isScratch = ScratchOutDetection.isScratchOut(currentStrokePoints, allStrokes, LINE_SPACING)
         val elapsed = android.os.SystemClock.elapsedRealtime() - t0
         if (elapsed > 10) Log.w(TAG, "isScratchOut took ${elapsed}ms (${currentStrokePoints.size} pts, ${completedStrokes.size} strokes)")
         if (!isScratch) return false
