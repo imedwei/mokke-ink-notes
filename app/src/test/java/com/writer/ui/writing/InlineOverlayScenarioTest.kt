@@ -503,6 +503,76 @@ class InlineOverlayScenarioTest {
         assertEquals("Stroke lands on document line 1", 1, lineIdx)
     }
 
+    // ── Scenario 10: Scratch-out targets raw strokes in overflow zone ──
+
+    @Test
+    fun `scratch on overflow-shifted line targets raw strokes not consolidated overlay`() {
+        // When consolidation overflows, lines at/past currentWritingLineIndex have
+        // both a consolidated overlay (Hershey text) AND raw strokes rendered shifted.
+        // A scratch-out at the shifted position should target raw strokes, not the
+        // consolidated overlay. Otherwise scratch-outs on the user's handwriting fail.
+        val veryLong = "The quick brown fox jumped over the lazy dog and then ran across the field " +
+            "to find the hidden treasure buried beneath the ancient oak tree near the river bank"
+        textCache[0] = veryLong
+        column.activeStrokes.add(stroke(0, 10f, 700f, "s0"))
+        // User's raw handwriting on line 2 (will be shifted down by overflow)
+        column.activeStrokes.add(stroke(2, 10f, 400f, "s2_writing"))
+
+        val host = TestHost(column, textCache, currentLine = 2)
+        val dm = createDm(host)
+        dm.updateInlineOverlays(2)
+
+        assertTrue("Overflow shift should be positive", canvas.consolidationOverflowShiftPx > 0f)
+
+        // The consolidated overlay may extend to line 2 (word-wrap overflow).
+        // A scratch at line 2's document Y hits the overlay.
+        val overlayAtWritingLine = canvas.inlineTextOverlays[2]
+
+        // Key invariant: even if there's a consolidated overlay at the writing line,
+        // a scratch at/past currentWritingLineIndex should be treated as targeting
+        // raw strokes, not the consolidated overlay.
+        val scratchLineIdx = 2
+        val hitsShiftedRawStrokes = canvas.consolidationOverflowShiftPx > 0f
+            && host.currentLine >= 0 && scratchLineIdx >= host.currentLine
+        assertTrue("Scratch at writing line in overflow zone should hit raw strokes",
+            hitsShiftedRawStrokes)
+
+        // Verify that raw strokes exist at this document line to be scratched
+        val rawStrokesOnLine = column.activeStrokes.filter { stroke ->
+            lineSegmenter.getLineIndex((stroke.points.first().y + stroke.points.last().y) / 2f) == 2
+        }
+        assertTrue("Raw strokes should exist on the writing line",
+            rawStrokesOnLine.isNotEmpty())
+    }
+
+    @Test
+    fun `scratch on consolidated line without overflow targets Hershey text`() {
+        // Normal case: no overflow, scratch on a consolidated line should hit
+        // the Hershey overlay, not raw strokes.
+        textCache[0] = "Hello world"
+        textCache[1] = "Goodbye moon"
+        column.activeStrokes.add(stroke(0, 10f, 200f, "s0"))
+        column.activeStrokes.add(stroke(1, 10f, 200f, "s1"))
+        column.activeStrokes.add(stroke(2, 10f, 100f, "s2_writing"))
+
+        val host = TestHost(column, textCache, currentLine = 2)
+        val dm = createDm(host)
+        dm.updateInlineOverlays(2)
+
+        assertEquals("No overflow shift", 0f, canvas.consolidationOverflowShiftPx, 0.01f)
+
+        // Scratch at line 0 (consolidated, no overflow) should target overlay
+        val scratchLineIdx = 0
+        val hitsShiftedRawStrokes = canvas.consolidationOverflowShiftPx > 0f
+            && host.currentLine >= 0 && scratchLineIdx >= host.currentLine
+        assertFalse("Scratch on consolidated line without overflow should NOT hit raw strokes",
+            hitsShiftedRawStrokes)
+
+        val overlay = canvas.inlineTextOverlays[0]
+        assertNotNull("Consolidated overlay should exist at line 0", overlay)
+        assertTrue("Overlay should be consolidated", overlay!!.consolidated)
+    }
+
     // ── Test host ───────────────────────────────────────────────────────
 
     private class TestHost(

@@ -702,11 +702,20 @@ class WritingCoordinator(
     private fun onScratchOut(scratchPoints: List<StrokePoint>, left: Float, top: Float, right: Float, bottom: Float) {
         val radius = ScreenMetrics.dp(ScratchOutDetection.COVERAGE_RADIUS_DP)
 
-        // Check if scratch-out hits consolidated Hershey text first
+        // Check if scratch-out hits consolidated Hershey text first.
+        // When overflow shift is active, raw strokes at/past the writing line
+        // are rendered shifted down. The scratch coordinates are in document
+        // space (toDocStrokePoint subtracts overflow shift), so they map to the
+        // consolidated overlay's line index — but the user was visually targeting
+        // the shifted raw strokes. Detect this by checking if the scratch's
+        // document line is at/past the writing line: if so, the user is
+        // scratching raw handwriting, not consolidated Hershey text.
         val scratchCenterY = (top + bottom) / 2f
         val scratchLineIdx = ((scratchCenterY - HandwritingCanvasView.TOP_MARGIN) / HandwritingCanvasView.LINE_SPACING).toInt()
-        val overlay = inkCanvas.inlineTextOverlays[scratchLineIdx]
-        Log.d(TAG, "SCRATCH: lineIdx=$scratchLineIdx overlay=${overlay != null} consolidated=${overlay?.consolidated} text='${overlay?.recognizedText?.take(30)}'")
+        val hitsShiftedRawStrokes = inkCanvas.consolidationOverflowShiftPx > 0f
+            && currentLineIndex >= 0 && scratchLineIdx >= currentLineIndex
+        val overlay = if (!hitsShiftedRawStrokes) inkCanvas.inlineTextOverlays[scratchLineIdx] else null
+        Log.d(TAG, "SCRATCH: lineIdx=$scratchLineIdx overlay=${overlay != null} consolidated=${overlay?.consolidated} hitsShifted=$hitsShiftedRawStrokes text='${overlay?.recognizedText?.take(30)}'")
         if (overlay != null && overlay.consolidated && !overlay.unConsolidated && overlay.recognizedText.isNotBlank()) {
             // Scratch-out on consolidated text — identify which word was hit
             val words = overlay.recognizedText.split(" ")
