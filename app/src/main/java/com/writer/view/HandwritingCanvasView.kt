@@ -1257,11 +1257,8 @@ class HandwritingCanvasView @JvmOverloads constructor(
         } else Float.MAX_VALUE
 
         // Draw consolidated Hershey text — use cached combined Path per line.
-        // Skip the current writing line to avoid visual overlap with raw strokes
-        // (word-wrap overflow can place Hershey text at the writing line position).
         for ((lineIndex, state) in inlineTextOverlays) {
             if (!state.consolidated || state.unConsolidated || state.syntheticStrokes.isEmpty()) continue
-            if (lineIndex == currentWritingLineIndex) continue
             val lineTop = TOP_MARGIN + lineIndex * LINE_SPACING
             val lineBottom = lineTop + LINE_SPACING * 1.5f  // include descenders
             if (lineBottom < viewTop || lineTop > viewBottom) continue
