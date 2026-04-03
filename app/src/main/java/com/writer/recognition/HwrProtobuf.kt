@@ -177,11 +177,12 @@ object HwrProtobuf {
             val label = result?.optString("label", "") ?: obj.optString("label", "")
             if (label.isEmpty()) return RecognitionResult(emptyList())
 
-            // Extract per-word candidates from MyScript words array
+            // Extract per-word candidates and bounding boxes from MyScript words array
             val wordsArray = result?.optJSONArray("words")
             if (wordsArray != null && wordsArray.length() > 0) {
                 val wordLabels = mutableListOf<String>()
                 val wordCandidates = mutableListOf<List<String>>()
+                val wordBoundingBoxes = mutableListOf<WordBoundingBox?>()
 
                 for (i in 0 until wordsArray.length()) {
                     val wordObj = wordsArray.getJSONObject(i)
@@ -195,6 +196,16 @@ object HwrProtobuf {
                             .filter { it.isNotEmpty() }
                     } else listOf(wordLabel)
                     wordCandidates.add(cands)
+
+                    val bbObj = wordObj.optJSONObject("bounding-box")
+                    wordBoundingBoxes.add(if (bbObj != null) {
+                        WordBoundingBox(
+                            x = bbObj.optDouble("x", 0.0).toFloat(),
+                            y = bbObj.optDouble("y", 0.0).toFloat(),
+                            width = bbObj.optDouble("width", 0.0).toFloat(),
+                            height = bbObj.optDouble("height", 0.0).toFloat()
+                        )
+                    } else null)
                 }
 
                 if (wordLabels.isNotEmpty()) {
@@ -235,7 +246,7 @@ object HwrProtobuf {
                                 else -> 0.3f                  // very different alternatives
                             }
                         }
-                        WordConfidence(topWord, confidence, idx)
+                        WordConfidence(topWord, confidence, idx, wordBoundingBoxes.getOrNull(idx))
                     }
 
                     return RecognitionResult(candidates, wordConfidences)

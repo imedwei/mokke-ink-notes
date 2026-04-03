@@ -5,18 +5,32 @@ import com.writer.model.InkLine
 /** A single recognition candidate with optional confidence score. */
 data class RecognitionCandidate(val text: String, val score: Float?)
 
+/** Bounding box for a recognized word, in document coordinate space. */
+data class WordBoundingBox(
+    val x: Float,
+    val y: Float,
+    val width: Float,
+    val height: Float
+)
+
 /** Per-word confidence info for rendering low-confidence indicators. */
 data class WordConfidence(
     val word: String,
     val confidence: Float,  // 0.0 = very low, 1.0 = very high
-    val wordIndex: Int
+    val wordIndex: Int,
+    /** Bounding box from recognizer (MyScript only, null for ML Kit). */
+    val boundingBox: WordBoundingBox? = null
 )
 
 /** Recognition result containing one or more ranked candidates. */
 data class RecognitionResult(
     val candidates: List<RecognitionCandidate>,
     /** Per-word confidence computed from candidate agreement. */
-    val wordConfidences: List<WordConfidence> = emptyList()
+    val wordConfidences: List<WordConfidence> = emptyList(),
+    /** Direct mapping from word index to stroke IDs, built post-recognition
+     *  by matching recognizer bounding boxes against input strokes.
+     *  Empty when bounding boxes are unavailable (ML Kit, stale results). */
+    val wordStrokeMapping: Map<Int, Set<String>> = emptyMap()
 ) {
     /** The top candidate's text, or empty string if no candidates. */
     val text: String get() = candidates.firstOrNull()?.text ?: ""
