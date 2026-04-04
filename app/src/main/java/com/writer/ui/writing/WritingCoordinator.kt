@@ -18,7 +18,6 @@ import com.writer.recognition.TextRecognizer
 import com.writer.recognition.LineSegmenter
 import com.writer.recognition.StrokeClassifier
 import com.writer.model.DocumentData
-import com.writer.storage.SvgExporter
 import com.writer.view.HandwritingCanvasView
 import com.writer.view.RecognizedTextView
 import kotlinx.coroutines.CoroutineScope
@@ -439,86 +438,16 @@ class WritingCoordinator(
      */
     data class MdBlock(val startLine: Int, val endLine: Int, val text: String)
 
-    fun getMarkdownBlocks(): List<MdBlock> {
-        if (lineTextCache.isEmpty() && columnModel.diagramAreas.isEmpty()) return emptyList()
+    fun getMarkdownBlocks(): List<MdBlock> = MarkdownExporter.buildBlocks(
+        lineTextCache, columnModel.activeStrokes, columnModel.diagramAreas,
+        inkCanvas.width.toFloat(), paragraphBuilder, lineSegmenter,
+        isDiagramLine = { diagramManager.isDiagramLine(it) }
+    )
 
-        val strokesByLine = lineSegmenter.groupByLine(columnModel.activeStrokes)
-        val writingWidth = inkCanvas.width.toFloat()
+    fun getMarkdownText(): String = getMarkdownText(cueBlocks = emptyList())
 
-        val classifiedLines = lineTextCache.keys.sorted().filter { !diagramManager.isDiagramLine(it) }.mapNotNull { lineIdx ->
-            paragraphBuilder.classifyLine(lineIdx, lineTextCache[lineIdx], strokesByLine[lineIdx], writingWidth, strokesByLine[lineIdx + 1])
-        }
-
-        val grouped = paragraphBuilder.groupIntoParagraphs(classifiedLines, strokesByLine, writingWidth, columnModel.diagramAreas)
-
-        val blocks = mutableListOf<MdBlock>()
-
-        for (group in grouped) {
-            val joined = group.joinToString(" ") { it.text }
-            val first = group.first()
-            val last = group.last()
-            val prefix = if (first.isHeading) "## " else if (first.isList) "- " else ""
-            blocks.add(MdBlock(first.lineIndex, last.lineIndex, "$prefix$joined"))
-        }
-
-        // Insert diagram SVGs at correct positions
-        for (area in columnModel.diagramAreas.sortedBy { it.startLineIndex }) {
-            val diagramStrokes = columnModel.activeStrokes.filter { stroke ->
-                val strokeLine = lineSegmenter.getStrokeLineIndex(stroke)
-                area.containsLine(strokeLine)
-            }
-            if (diagramStrokes.isEmpty()) continue
-
-            val areaTop = lineSegmenter.getLineY(area.startLineIndex)
-            val areaHeight = area.heightInLines * HandwritingCanvasView.LINE_SPACING
-            val svg = SvgExporter.strokesToSvg(
-                diagramStrokes, writingWidth, areaHeight,
-                offsetX = 0f, offsetY = areaTop
-            )
-            val dataUri = SvgExporter.toBase64DataUri(svg)
-            blocks.add(MdBlock(area.startLineIndex, area.endLineIndex, "![diagram]($dataUri)"))
-        }
-
-        return blocks.sortedBy { it.startLine }
-    }
-
-    fun getMarkdownText(): String {
-        return getMarkdownText(cueBlocks = emptyList())
-    }
-
-    /**
-     * Generate markdown with interleaved cue blockquotes.
-     * Cue blocks from the cue column are appended after each main content paragraph
-     * that overlaps their line range.
-     */
-    fun getMarkdownText(cueBlocks: List<MdBlock>): String {
-        val mainBlocks = getMarkdownBlocks()
-        if (mainBlocks.isEmpty()) return ""
-
-        val result = StringBuilder()
-        for (block in mainBlocks) {
-            if (result.isNotEmpty()) result.append("\n\n")
-            result.append(block.text)
-
-            // Find cue blocks that overlap this main block's line range
-            val overlapping = cueBlocks.filter { cue ->
-                cue.startLine <= block.endLine && cue.endLine >= block.startLine
-            }
-            if (overlapping.isNotEmpty()) {
-                result.append("\n\n")
-                if (overlapping.size == 1) {
-                    result.append("> **Cue:** ${overlapping[0].text}")
-                } else {
-                    result.append("> **Cue:**")
-                    for (cue in overlapping) {
-                        result.append("\n> ${cue.text}")
-                    }
-                }
-            }
-        }
-
-        return result.toString()
-    }
+    fun getMarkdownText(cueBlocks: List<MdBlock>): String =
+        MarkdownExporter.buildText(getMarkdownBlocks(), cueBlocks)
 
     // --- Diagram node rebuild ---
 

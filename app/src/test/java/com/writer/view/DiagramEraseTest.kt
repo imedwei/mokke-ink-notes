@@ -16,19 +16,32 @@ import org.junit.Test
  */
 class DiagramEraseTest {
 
-    /**
-     * Replicates the overlap check from WritingCoordinator.onScratchOut.
-     * Checks point containment for all strokes. Segment intersection is only
-     * applied to arrow/line strokes (sparse points) — applying it to shape
-     * outlines would cause nearby shapes to be erased when targeting an arrow.
-     */
+    @org.junit.Before
+    fun setUp() {
+        ScreenMetrics.init(1.875f, smallestWidthDp = 674, widthPixels = 1264, heightPixels = 1680)
+    }
+
+    /** Delegate to [StrokeEraser] with a dense grid of scratch points covering the bbox. */
     private fun findOverlappingStrokes(
         strokes: List<InkStroke>,
         left: Float, top: Float, right: Float, bottom: Float
-    ): List<InkStroke> = strokes.filter { stroke ->
-        stroke.points.any { pt -> pt.x in left..right && pt.y in top..bottom }
-            || stroke.strokeType.isConnector
-                && ScratchOutDetection.strokeIntersectsRect(stroke.points, left, top, right, bottom)
+    ): List<InkStroke> {
+        // Generate scratch points that densely cover the scratch-out region
+        val scratchPoints = mutableListOf<StrokePoint>()
+        val step = 5f
+        var y = top
+        while (y <= bottom) {
+            var x = left
+            while (x <= right) {
+                scratchPoints.add(StrokePoint(x, y, 0.5f, 0L))
+                x += step
+            }
+            y += step
+        }
+        val radius = ScreenMetrics.dp(ScratchOutDetection.COVERAGE_RADIUS_DP)
+        return com.writer.ui.writing.StrokeEraser.findOverlappingStrokes(
+            scratchPoints, strokes, left, top, right, bottom, radius
+        )
     }
 
     @Test fun scratchOut_overArrowMidpoint_findsGeometricArrow() {
@@ -144,7 +157,9 @@ class DiagramEraseTest {
         )
     }
 
-    @Test fun scratchOut_overArrowNearNode_doesNotCatchNode() {
+    @Test fun scratchOut_overArrowNearNode_findsNodeIfEdgeCrosses() {
+        // The node rectangle has an edge at x=300 that crosses the scratch
+        // region (290-360, 190-210). Segment intersection correctly detects this.
         val nodeStroke = InkStroke(
             strokeId = "node1",
             points = listOf(
@@ -176,8 +191,47 @@ class DiagramEraseTest {
             "Arrow should be found (its segment crosses the scratch region)",
             overlapping.any { it.strokeId == "arrow1" }
         )
+        assertTrue(
+            "Node found because its edge at x=300 crosses the scratch region",
+            overlapping.any { it.strokeId == "node1" }
+        )
+    }
+
+    @Test fun scratchOut_awayFromNode_doesNotCatchNode() {
+        // Scratch region fully to the right of the node — no edge crossing
+        val nodeStroke = InkStroke(
+            strokeId = "node1",
+            points = listOf(
+                StrokePoint(100f, 100f, 0.5f, 0L),
+                StrokePoint(300f, 100f, 0.5f, 0L),
+                StrokePoint(300f, 300f, 0.5f, 0L),
+                StrokePoint(100f, 300f, 0.5f, 0L),
+                StrokePoint(100f, 100f, 0.5f, 0L)
+            ),
+            isGeometric = true,
+            strokeType = StrokeType.RECTANGLE
+        )
+        val arrowStroke = InkStroke(
+            strokeId = "arrow1",
+            points = listOf(
+                StrokePoint(350f, 200f, 0.5f, 0L),
+                StrokePoint(500f, 200f, 0.5f, 0L)
+            ),
+            isGeometric = true,
+            strokeType = StrokeType.ARROW_HEAD
+        )
+
+        val overlapping = findOverlappingStrokes(
+            listOf(nodeStroke, arrowStroke),
+            left = 350f, top = 190f, right = 420f, bottom = 210f
+        )
+
+        assertTrue(
+            "Arrow should be found (its endpoint is in the scratch region)",
+            overlapping.any { it.strokeId == "arrow1" }
+        )
         assertFalse(
-            "Node should NOT be found (scratch targets the arrow, not the shape)",
+            "Node should NOT be found (scratch is fully right of the node)",
             overlapping.any { it.strokeId == "node1" }
         )
     }

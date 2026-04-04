@@ -211,28 +211,19 @@ class ScratchOutFocusedTest {
         )
     }
 
-    /**
-     * Simulate the overlap check from WritingCoordinator.onScratchOut:
-     * for small strokes (< 5 points), use proximity; for larger ones, use intersection.
-     */
+    /** Delegate to [StrokeEraser.findOverlappingStrokes] — the real overlap check. */
     private fun findOverlapping(
         scratchPoints: List<StrokePoint>,
         strokes: List<InkStroke>
     ): List<InkStroke> {
         val radius = ScreenMetrics.dp(ScratchOutDetection.COVERAGE_RADIUS_DP)
-        val radiusSq = radius * radius
-        return strokes.filter { stroke ->
-            if (stroke.points.size < 5) {
-                stroke.points.any { tp ->
-                    scratchPoints.any { sp ->
-                        val dx = sp.x - tp.x; val dy = sp.y - tp.y
-                        dx * dx + dy * dy <= radiusSq
-                    }
-                }
-            } else {
-                ScratchOutDetection.strokesIntersect(scratchPoints, stroke.points)
-            }
-        }
+        val left = scratchPoints.minOf { it.x }
+        val top = scratchPoints.minOf { it.y }
+        val right = scratchPoints.maxOf { it.x }
+        val bottom = scratchPoints.maxOf { it.y }
+        return com.writer.ui.writing.StrokeEraser.findOverlappingStrokes(
+            scratchPoints, strokes, left, top, right, bottom, radius
+        )
     }
 
     @Test
