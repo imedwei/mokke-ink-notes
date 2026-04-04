@@ -6,6 +6,8 @@ import org.junit.Test
 
 /**
  * Tests for Cornell Notes markdown export — cue blockquotes interleaved with main content.
+ *
+ * Uses [MarkdownExporter.buildText] directly instead of duplicating the logic.
  */
 class CornellMarkdownTest {
 
@@ -17,7 +19,7 @@ class CornellMarkdownTest {
             block(0, 1, "Introduction"),
             block(2, 4, "Main content here")
         )
-        val result = buildMarkdown(mainBlocks, emptyList())
+        val result = MarkdownExporter.buildText(mainBlocks, emptyList())
         assertEquals("Introduction\n\nMain content here", result)
     }
 
@@ -28,7 +30,7 @@ class CornellMarkdownTest {
         val cueBlocks = listOf(
             block(0, 0, "KEY CONCEPT")
         )
-        val result = buildMarkdown(mainBlocks, cueBlocks)
+        val result = MarkdownExporter.buildText(mainBlocks, cueBlocks)
         assertTrue(result.contains("> **Cue:** KEY CONCEPT"))
     }
 
@@ -40,7 +42,7 @@ class CornellMarkdownTest {
             block(0, 0, "First cue"),
             block(3, 3, "Second cue")
         )
-        val result = buildMarkdown(mainBlocks, cueBlocks)
+        val result = MarkdownExporter.buildText(mainBlocks, cueBlocks)
         assertTrue(result.contains("> **Cue:**\n> First cue\n> Second cue"))
     }
 
@@ -52,7 +54,7 @@ class CornellMarkdownTest {
         val cueBlocks = listOf(
             block(4, 4, "Cue for B")
         )
-        val result = buildMarkdown(mainBlocks, cueBlocks)
+        val result = MarkdownExporter.buildText(mainBlocks, cueBlocks)
         // Paragraph A should not have a cue
         assertTrue(!result.substringBefore("Paragraph B").contains("Cue"))
         // Paragraph B should have the cue
@@ -68,37 +70,11 @@ class CornellMarkdownTest {
         val cueBlocks = listOf(
             block(3, 3, "Only for second")
         )
-        val result = buildMarkdown(mainBlocks, cueBlocks)
+        val result = MarkdownExporter.buildText(mainBlocks, cueBlocks)
         val parts = result.split("\n\n")
         assertEquals("First paragraph", parts[0])
         assertEquals("Second paragraph", parts[1])
         assertTrue(parts[2].startsWith("> **Cue:**"))
         assertEquals("Third paragraph", parts[3])
-    }
-
-    /** Simulate the markdown building logic from WritingCoordinator.getMarkdownText(cueBlocks). */
-    private fun buildMarkdown(mainBlocks: List<WritingCoordinator.MdBlock>, cueBlocks: List<WritingCoordinator.MdBlock>): String {
-        if (mainBlocks.isEmpty()) return ""
-        val result = StringBuilder()
-        for (block in mainBlocks) {
-            if (result.isNotEmpty()) result.append("\n\n")
-            result.append(block.text)
-
-            val overlapping = cueBlocks.filter { cue ->
-                cue.startLine <= block.endLine && cue.endLine >= block.startLine
-            }
-            if (overlapping.isNotEmpty()) {
-                result.append("\n\n")
-                if (overlapping.size == 1) {
-                    result.append("> **Cue:** ${overlapping[0].text}")
-                } else {
-                    result.append("> **Cue:**")
-                    for (cue in overlapping) {
-                        result.append("\n> ${cue.text}")
-                    }
-                }
-            }
-        }
-        return result.toString()
     }
 }
