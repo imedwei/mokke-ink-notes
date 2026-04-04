@@ -34,6 +34,7 @@ import com.writer.storage.DocumentStorage
 import com.writer.storage.DocumentStorageSink
 import com.writer.storage.SearchIndexManager
 import com.writer.view.CanvasTheme
+import com.writer.view.GutterTouchGuard
 import com.writer.view.HandwritingCanvasView
 import com.writer.view.RecognizedTextView
 import com.writer.view.TouchFilter
@@ -88,6 +89,11 @@ class WritingActivity : AppCompatActivity() {
     private lateinit var undoButton: ImageView
     private lateinit var redoButton: ImageView
     private lateinit var spaceInsertButton: ImageView
+
+    /** True while the stylus is actively drawing — reject finger taps on gutter. */
+    private fun isPenBusy(): Boolean =
+        (::inkCanvas.isInitialized && inkCanvas.isPenActive()) ||
+        (::cueInkCanvas.isInitialized && cueInkCanvas.isPenActive())
     private lateinit var orientationManager: OrientationManager
     private lateinit var documentModel: DocumentModel
     private lateinit var recognizer: TextRecognizer
@@ -214,15 +220,6 @@ class WritingActivity : AppCompatActivity() {
                 set(value) { this@WritingActivity.isLandscape = value }
         })
 
-        // View toggle button in gutter — switches between Notes and Cues
-        viewToggleButton = findViewById(R.id.viewToggleButton)
-        viewToggleButton.setOnClickListener { toggleNotesCues() }
-
-        // Rotation button — manual landscape toggle when auto-rotate is off
-        val rotateButton = findViewById<ImageView>(R.id.rotateButton)
-        orientationManager = OrientationManager(this, rotateButton)
-        rotateButton.setOnClickListener { orientationManager.toggleOrientation() }
-
         // Cue canvas defers Onyx init — gets SDK session via hover-based swap in landscape.
         cueInkCanvas.deferOnyxInit = true
 
@@ -230,13 +227,34 @@ class WritingActivity : AppCompatActivity() {
         contextRail.alignLeft = true
         contextRail.onDotLongPress = { lineIndex, screenY -> showMainPeek(lineIndex, screenY) }
 
-        // Floating gutter overlay
+        // Floating gutter overlay — reject palm touches and long holds on buttons.
         gutterOverlay = findViewById(R.id.gutterOverlay)
+        val touchGuard = GutterTouchGuard(
+            palmThresholdPx = android.util.TypedValue.applyDimension(
+                android.util.TypedValue.COMPLEX_UNIT_DIP, 30f, resources.displayMetrics),
+            maxTapMs = android.view.ViewConfiguration.getLongPressTimeout().toLong(),
+            isPenBusy = ::isPenBusy
+        )
+        val palmGuard = android.view.View.OnTouchListener { _, event ->
+            when (event.actionMasked) {
+                android.view.MotionEvent.ACTION_DOWN ->
+                    touchGuard.evaluateDown(event.touchMajor) == GutterTouchGuard.Decision.REJECT
+                android.view.MotionEvent.ACTION_UP ->
+                    touchGuard.evaluateUp(event.downTime, event.eventTime) == GutterTouchGuard.Decision.REJECT
+                else -> false
+            }
+        }
         menuButton = findViewById(R.id.menuButton)
         undoButton = findViewById(R.id.undoButton)
         redoButton = findViewById(R.id.redoButton)
-
         spaceInsertButton = findViewById(R.id.spaceInsertButton)
+        viewToggleButton = findViewById(R.id.viewToggleButton)
+        val rotateButton = findViewById<ImageView>(R.id.rotateButton)
+        orientationManager = OrientationManager(this, rotateButton)
+
+        for (btn in listOf(menuButton, undoButton, redoButton, spaceInsertButton, viewToggleButton, rotateButton)) {
+            btn.setOnTouchListener(palmGuard)
+        }
 
         undoButton.imageAlpha = 77
         redoButton.imageAlpha = 77
@@ -244,6 +262,8 @@ class WritingActivity : AppCompatActivity() {
         undoButton.setOnClickListener { debounceUndoRedo { activeCoordinator?.undo(); updateUndoRedoButtons() } }
         redoButton.setOnClickListener { debounceUndoRedo { activeCoordinator?.redo(); updateUndoRedoButtons() } }
         spaceInsertButton.setOnClickListener { inkCanvas.spaceInsertMode = !inkCanvas.spaceInsertMode }
+        viewToggleButton.setOnClickListener { toggleNotesCues() }
+        rotateButton.setOnClickListener { orientationManager.toggleOrientation() }
 
         inkCanvas.onSpaceInsert = { anchorLine, lines ->
             if (lines > 0) {
