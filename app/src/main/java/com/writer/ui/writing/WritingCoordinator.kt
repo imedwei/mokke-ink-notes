@@ -303,42 +303,18 @@ class WritingCoordinator(
     }
 
     private fun onScratchOut(scratchPoints: List<StrokePoint>, left: Float, top: Float, right: Float, bottom: Float) {
-        // Erase strokes that the scratch-out physically intersects.
-        // The caller (checkPostStrokeScratchOut) already verified this is a focused
-        // scratch-out via isFocusedScratchOut — most of its path covers existing strokes.
         val radius = ScreenMetrics.dp(ScratchOutDetection.COVERAGE_RADIUS_DP)
-        val radiusSq = radius * radius
-        val overlapping = columnModel.activeStrokes.filter { stroke ->
-            // Bounding-box pre-filter: skip strokes that don't overlap the
-            // scratch-out region (expanded by radius). Without this, every
-            // stroke is checked with O(n*m) segment intersection tests.
-            val sMinX = stroke.minX; val sMaxX = stroke.maxX
-            val sMinY = stroke.minY; val sMaxY = stroke.maxY
-            if (sMaxX < left - radius || sMinX > right + radius ||
-                sMaxY < top - radius || sMinY > bottom + radius) return@filter false
-
-            if (stroke.points.size < 5) {
-                // Small strokes (dots, taps): segment intersection is unreliable,
-                // use proximity check instead — any scratch point within radius counts.
-                stroke.points.any { tp ->
-                    scratchPoints.any { sp ->
-                        val dx = sp.x - tp.x; val dy = sp.y - tp.y
-                        dx * dx + dy * dy <= radiusSq
-                    }
-                }
-            } else {
-                ScratchOutDetection.strokesIntersect(scratchPoints, stroke.points)
-            } || stroke.strokeType.isConnector
-                    && ScratchOutDetection.strokeIntersectsRect(stroke.points, left, top, right, bottom)
-        }
+        val overlapping = StrokeEraser.findOverlappingStrokes(
+            scratchPoints, columnModel.activeStrokes, left, top, right, bottom, radius
+        )
         if (overlapping.isEmpty()) return
 
-        // Expand to include the full connected word within the scratch-out region:
-        // strokes on the same line that were written close in time and overlap or
-        // are near the scratch-out bounding box. This ensures e.g. the crossbar of
-        // 't' is removed along with the rest of "entry", but doesn't jump to
-        // adjacent words outside the scratch-out region.
-        val expanded = expandToConnectedWord(overlapping, columnModel.activeStrokes, left, top, right, bottom)
+        val expanded = StrokeEraser.expandToConnectedWord(
+            overlapping, columnModel.activeStrokes,
+            left, top, right, bottom,
+            ScreenMetrics.lineSpacing,
+            lineSegmenter::getStrokeLineIndex
+        )
 
         saveSnapshot(UndoCoalescer.ActionType.SCRATCH_OUT)
 
@@ -359,50 +335,6 @@ class WritingCoordinator(
             "erased=${idsToRemove.joinToString(",")}", elapsedMs = inkCanvas.lastFinishStrokeMs)
         Log.i(TAG, "Scratch-out erase: removed ${expanded.size} strokes (${overlapping.size} direct + ${expanded.size - overlapping.size} connected) in [$left,$top,$right,$bottom]")
         onTutorialAction?.invoke("scratch_out")
-    }
-
-    /**
-     * Expand a set of directly-overlapping strokes to include the full connected word
-     * within the scratch-out region. A stroke is included if it's on the same line,
-     * overlaps or is near the scratch-out bounding box, and was written close in time.
-     * This catches fragments like the crossbar of 't' without jumping to adjacent words.
-     */
-    private fun expandToConnectedWord(
-        directHits: List<InkStroke>,
-        allStrokes: List<InkStroke>,
-        scratchLeft: Float, scratchTop: Float, scratchRight: Float, scratchBottom: Float
-    ): List<InkStroke> {
-        if (directHits.isEmpty()) return directHits
-
-        val ls = ScreenMetrics.lineSpacing
-        val margin = ls * 0.5f  // small margin around scratch-out box for nearby fragments
-        val maxTimeGap = 2000L
-
-        val hitLines = directHits.map { lineSegmenter.getStrokeLineIndex(it) }.toSet()
-
-        // Candidates: same line, within or near the scratch-out bounding box
-        val candidates = allStrokes.filter { stroke ->
-            lineSegmenter.getStrokeLineIndex(stroke) in hitLines &&
-                stroke.maxX >= scratchLeft - margin &&
-                stroke.minX <= scratchRight + margin &&
-                stroke.maxY >= scratchTop - margin &&
-                stroke.minY <= scratchBottom + margin
-        }
-
-        // Include candidates that are temporally connected to the direct hits
-        val included = directHits.map { it.strokeId }.toMutableSet()
-        for (candidate in candidates) {
-            if (candidate.strokeId in included) continue
-            val isTemporallyConnected = directHits.any { hit ->
-                kotlin.math.abs(candidate.startTime - hit.endTime) < maxTimeGap ||
-                    kotlin.math.abs(hit.startTime - candidate.endTime) < maxTimeGap
-            }
-            if (isTemporallyConnected) {
-                included.add(candidate.strokeId)
-            }
-        }
-
-        return allStrokes.filter { it.strokeId in included }
     }
 
     // --- Recognition ---
