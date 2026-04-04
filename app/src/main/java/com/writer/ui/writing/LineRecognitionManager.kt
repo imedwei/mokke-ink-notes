@@ -215,37 +215,45 @@ class LineRecognitionManager(
     fun buildPreContext(lineIndex: Int): String =
         buildPreContext(host.lineTextCache, lineIndex)
 
-    /** Re-recognize a line to rebuild the bounding-box word→stroke mapping
-     *  without clearing lineTextCache. Used after undo when stroke IDs change
-     *  but the text is known from the snapshot. */
+    /** Rebuild the bounding-box word→stroke mapping for a line using the
+     *  existing lineTextCache text and current strokes. No HWR call needed —
+     *  splits strokes proportionally by word character count.
+     *  Used after undo when stroke IDs change but the text is known. */
     fun rebuildStrokeMapping(lineIndex: Int) {
-        if (recognizingLines.contains(lineIndex)) return
-        recognizingLines.add(lineIndex)
-        scope.launch {
-            try {
-                val strokes = lineSegmenter.getStrokesForLine(columnModel.activeStrokes, lineIndex)
-                if (strokes.isEmpty()) { recognizingLines.remove(lineIndex); return@launch }
-                val filtered = strokeClassifier.filterMarkerStrokes(strokes, canvasWidthProvider(), null)
-                if (filtered.isEmpty()) { recognizingLines.remove(lineIndex); return@launch }
-                val line = lineSegmenter.buildInkLine(filtered, lineIndex)
-                val preContext = buildPreContext(lineIndex)
-                var result = withContext(Dispatchers.IO) {
-                    recognizer.recognizeLineWithCandidates(line, preContext)
-                }
-                val mapping = com.writer.recognition.StrokeMatcher.buildWordStrokeMapping(
-                    result.wordConfidences, line.strokes, line.boundingBox
-                )
-                if (mapping.isNotEmpty()) {
-                    result = result.copy(wordStrokeMapping = mapping)
-                }
-                // Update recognition result (with mapping) but preserve existing lineTextCache
-                lineRecognitionResults[lineIndex] = result
-                Log.d(TAG, "Rebuilt stroke mapping for line $lineIndex: ${mapping.size} words mapped")
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to rebuild stroke mapping for line $lineIndex: ${e.message}")
-            } finally {
-                recognizingLines.remove(lineIndex)
-            }
+        val text = host.lineTextCache[lineIndex] ?: return
+        val words = text.split(" ").filter { it.isNotBlank() }
+        if (words.isEmpty()) return
+        val strokes = lineSegmenter.getStrokesForLine(columnModel.activeStrokes, lineIndex)
+        if (strokes.isEmpty()) return
+
+        // Build synthetic WordConfidences with proportional bounding boxes
+        // based on character count. This doesn't need HWR — we know the text
+        // and can estimate word positions from the stroke extent.
+        val sorted = strokes.sortedBy { it.points.minOf { p -> p.x } }
+        val lineMinX = sorted.first().points.minOf { it.x }
+        val lineMaxX = sorted.last().points.maxOf { it.x }
+        val lineWidth = lineMaxX - lineMinX
+        val totalChars = words.sumOf { it.length }
+        if (totalChars == 0) return
+
+        var cursorX = lineMinX
+        val wordConfidences = words.mapIndexed { idx, word ->
+            val wordWidth = (word.length.toFloat() / totalChars) * lineWidth
+            val bb = com.writer.recognition.WordBoundingBox(cursorX, 0f, wordWidth, 20f)
+            cursorX += wordWidth
+            com.writer.recognition.WordConfidence(word, 1.0f, idx, bb)
+        }
+
+        val mapping = com.writer.recognition.StrokeMatcher.buildWordStrokeMapping(
+            wordConfidences, sorted, null  // null = coords already in pixel space
+        )
+        if (mapping.isNotEmpty()) {
+            lineRecognitionResults[lineIndex] = com.writer.recognition.RecognitionResult(
+                candidates = listOf(com.writer.recognition.RecognitionCandidate(text, null)),
+                wordConfidences = wordConfidences,
+                wordStrokeMapping = mapping
+            )
+            Log.d(TAG, "Rebuilt stroke mapping for line $lineIndex: ${mapping.entries.joinToString { "${it.key}→${it.value.size}" }}")
         }
     }
 
