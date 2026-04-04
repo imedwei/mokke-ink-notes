@@ -329,7 +329,6 @@ class WritingCoordinator(
 
     // --- Recognition ---
 
-    /** Recognize all lines that have strokes but no cached text or failed recognition. */
     /** Refresh the text preview display (e.g. after linked scroll from another column). */
     fun refreshDisplay() {
         displayManager.displayHiddenLines()
@@ -369,12 +368,7 @@ class WritingCoordinator(
     fun insertSpace(anchorLine: Int, lines: Int) {
         saveSnapshot(UndoCoalescer.ActionType.SPACE_INSERTED)
         SpaceInsertMode.insertSpace(columnModel, lineSegmenter, anchorLine, lines)
-        // Invalidate text cache for affected lines
-        lineTextCache.keys.filter { it >= anchorLine }.forEach { lineTextCache.remove(it) }
-        inkCanvas.loadStrokes(columnModel.activeStrokes.toList())
-        inkCanvas.diagramAreas = columnModel.diagramAreas.toList()
-        displayManager.clearEverHiddenLines()
-        displayManager.displayHiddenLines()
+        reloadAfterSpaceChange(anchorLine)
         Log.i(TAG, "Insert space: $lines lines at anchor=$anchorLine")
         onSpaceChanged?.invoke(anchorLine, lines)
     }
@@ -384,11 +378,7 @@ class WritingCoordinator(
         saveSnapshot(UndoCoalescer.ActionType.SPACE_INSERTED)
         val removed = SpaceInsertMode.removeSpace(columnModel, lineSegmenter, anchorLine, lines)
         if (removed == 0) return 0
-        lineTextCache.keys.filter { it >= anchorLine }.forEach { lineTextCache.remove(it) }
-        inkCanvas.loadStrokes(columnModel.activeStrokes.toList())
-        inkCanvas.diagramAreas = columnModel.diagramAreas.toList()
-        displayManager.clearEverHiddenLines()
-        displayManager.displayHiddenLines()
+        reloadAfterSpaceChange(anchorLine)
         Log.i(TAG, "Remove space: $removed lines at anchor=$anchorLine")
         onSpaceChanged?.invoke(anchorLine, -removed)
         return removed
@@ -406,12 +396,16 @@ class WritingCoordinator(
         } else if (lineDelta < 0) {
             SpaceInsertMode.removeSpace(columnModel, lineSegmenter, anchorLine, -lineDelta)
         }
+        reloadAfterSpaceChange(anchorLine)
+        Log.i(TAG, "Sync space change from other column: delta=$lineDelta at anchor=$anchorLine")
+    }
+
+    private fun reloadAfterSpaceChange(anchorLine: Int) {
         lineTextCache.keys.filter { it >= anchorLine }.forEach { lineTextCache.remove(it) }
         inkCanvas.loadStrokes(columnModel.activeStrokes.toList())
         inkCanvas.diagramAreas = columnModel.diagramAreas.toList()
         displayManager.clearEverHiddenLines()
         displayManager.displayHiddenLines()
-        Log.i(TAG, "Sync space change from other column: delta=$lineDelta at anchor=$anchorLine")
     }
 
     // --- Text display sync ---
@@ -423,13 +417,7 @@ class WritingCoordinator(
 
     // --- Markdown export ---
 
-    /**
-     * Build markdown blocks from this coordinator's column, each tagged with its line range.
-     * Returns a list of (startLine, endLine, markdownText) triples.
-     */
-    data class MdBlock(val startLine: Int, val endLine: Int, val text: String)
-
-    fun getMarkdownBlocks(): List<MdBlock> = MarkdownExporter.buildBlocks(
+    fun getMarkdownBlocks(): List<MarkdownExporter.MdBlock> = MarkdownExporter.buildBlocks(
         lineTextCache, columnModel.activeStrokes, columnModel.diagramAreas,
         inkCanvas.width.toFloat(), paragraphBuilder, lineSegmenter,
         isDiagramLine = { diagramManager.isDiagramLine(it) }
@@ -437,7 +425,7 @@ class WritingCoordinator(
 
     fun getMarkdownText(): String = getMarkdownText(cueBlocks = emptyList())
 
-    fun getMarkdownText(cueBlocks: List<MdBlock>): String =
+    fun getMarkdownText(cueBlocks: List<MarkdownExporter.MdBlock>): String =
         MarkdownExporter.buildText(getMarkdownBlocks(), cueBlocks)
 
     // --- Diagram node rebuild ---

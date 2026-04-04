@@ -44,7 +44,7 @@ class MarkdownExporterTest {
     }
 
     private fun block(start: Int, end: Int, text: String) =
-        WritingCoordinator.MdBlock(start, end, text)
+        MarkdownExporter.MdBlock(start, end, text)
 
     // --- buildBlocks ---
 
