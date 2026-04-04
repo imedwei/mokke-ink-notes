@@ -14,6 +14,8 @@ import com.writer.view.HandwritingCanvasView
  */
 object MarkdownExporter {
 
+    data class MdBlock(val startLine: Int, val endLine: Int, val text: String)
+
     /**
      * Build markdown blocks from recognized text, paragraph classification, and diagrams.
      *
@@ -34,7 +36,7 @@ object MarkdownExporter {
                 val svg = SvgExporter.strokesToSvg(strokes, width, height, offsetX = 0f, offsetY = offsetY)
                 "![diagram](${SvgExporter.toBase64DataUri(svg)})"
             }
-    ): List<WritingCoordinator.MdBlock> {
+    ): List<MdBlock> {
         if (lineTextCache.isEmpty() && diagramAreas.isEmpty()) return emptyList()
 
         val strokesByLine = lineSegmenter.groupByLine(activeStrokes)
@@ -52,14 +54,14 @@ object MarkdownExporter {
             classifiedLines, strokesByLine, writingWidth, diagramAreas
         )
 
-        val blocks = mutableListOf<WritingCoordinator.MdBlock>()
+        val blocks = mutableListOf<MdBlock>()
 
         for (group in grouped) {
             val joined = group.joinToString(" ") { it.text }
             val first = group.first()
             val last = group.last()
             val prefix = if (first.isHeading) "## " else if (first.isList) "- " else ""
-            blocks.add(WritingCoordinator.MdBlock(first.lineIndex, last.lineIndex, "$prefix$joined"))
+            blocks.add(MdBlock(first.lineIndex, last.lineIndex, "$prefix$joined"))
         }
 
         // Insert diagram blocks at correct positions
@@ -73,7 +75,7 @@ object MarkdownExporter {
             val areaTop = lineSegmenter.getLineY(area.startLineIndex)
             val areaHeight = area.heightInLines * HandwritingCanvasView.LINE_SPACING
             val text = svgEncoder(diagramStrokes, writingWidth, areaHeight, areaTop)
-            blocks.add(WritingCoordinator.MdBlock(area.startLineIndex, area.endLineIndex, text))
+            blocks.add(MdBlock(area.startLineIndex, area.endLineIndex, text))
         }
 
         return blocks.sortedBy { it.startLine }
@@ -85,8 +87,8 @@ object MarkdownExporter {
      * that overlaps their line range.
      */
     fun buildText(
-        mainBlocks: List<WritingCoordinator.MdBlock>,
-        cueBlocks: List<WritingCoordinator.MdBlock>
+        mainBlocks: List<MdBlock>,
+        cueBlocks: List<MdBlock>
     ): String {
         if (mainBlocks.isEmpty()) return ""
 
