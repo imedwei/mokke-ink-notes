@@ -17,8 +17,10 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "0.1.0"
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        testInstrumentationRunner = "com.writer.WriterTestRunner"
         testInstrumentationRunnerArguments["notAnnotation"] = "com.writer.recognition.DevTool"
+        // Separate test APK package so connected tests don't replace the dev app
+        testApplicationId = "com.writer.test"
     }
 
     buildTypes {
