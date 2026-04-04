@@ -226,11 +226,8 @@ class WritingActivity : AppCompatActivity() {
         // Cue canvas defers Onyx init — gets SDK session via hover-based swap in landscape.
         cueInkCanvas.deferOnyxInit = true
 
-        // Portrait fold/unfold: tap indicator strip to show cues, tap context rail to show notes
-        cueIndicatorStrip.onTap = { foldToCues() }
         cueIndicatorStrip.onDotLongPress = { lineIndex, screenY -> showCuePeek(lineIndex, screenY) }
         contextRail.alignLeft = true
-        contextRail.onTap = { unfoldToNotes() }
         contextRail.onDotLongPress = { lineIndex, screenY -> showMainPeek(lineIndex, screenY) }
 
         // Floating gutter overlay
