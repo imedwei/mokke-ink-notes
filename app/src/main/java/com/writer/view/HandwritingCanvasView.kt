@@ -1078,24 +1078,26 @@ class HandwritingCanvasView @JvmOverloads constructor(
     /** Check if the completed stroke is a scratch-out erase gesture. */
     private fun checkPostStrokeScratchOut(): Boolean {
         val t0 = android.os.SystemClock.elapsedRealtime()
-        // Include Hershey synthetic strokes so scratch-out detection works
-        // on consolidated text. Hershey strokes are in raw document space but
-        // currentStrokePoints have overflow shift subtracted (via toDocStrokePoint).
-        // Adjust scratch points to raw document space for the overlap check.
-        val adjustedPoints = if (consolidationOverflowShiftPx > 0f) {
-            currentStrokePoints.map { StrokePoint(it.x, it.y + consolidationOverflowShiftPx, it.pressure, it.timestamp) }
-        } else {
-            currentStrokePoints.toList()
-        }
-        val allStrokes = buildList {
-            addAll(completedStrokes)
-            for ((_, state) in inlineTextOverlays) {
-                if (state.consolidated && !state.unConsolidated) {
-                    addAll(state.syntheticStrokes)
+        // Check scratch-out against raw strokes (document space)
+        val rawPoints = currentStrokePoints.toList()
+        var isScratch = ScratchOutDetection.isScratchOut(rawPoints, completedStrokes, LINE_SPACING)
+        // If not detected against raw strokes and there's overflow, also check
+        // against Hershey synthetic strokes (shifted coordinate space)
+        if (!isScratch && consolidationOverflowShiftPx > 0f) {
+            val hersheyStrokes = buildList {
+                for ((_, state) in inlineTextOverlays) {
+                    if (state.consolidated && !state.unConsolidated) {
+                        addAll(state.syntheticStrokes)
+                    }
                 }
             }
+            if (hersheyStrokes.isNotEmpty()) {
+                val shiftedPoints = rawPoints.map {
+                    StrokePoint(it.x, it.y + consolidationOverflowShiftPx, it.pressure, it.timestamp)
+                }
+                isScratch = ScratchOutDetection.isScratchOut(shiftedPoints, hersheyStrokes, LINE_SPACING)
+            }
         }
-        val isScratch = ScratchOutDetection.isScratchOut(adjustedPoints, allStrokes, LINE_SPACING)
         val elapsed = android.os.SystemClock.elapsedRealtime() - t0
         if (elapsed > 10) Log.w(TAG, "isScratchOut took ${elapsed}ms (${currentStrokePoints.size} pts, ${completedStrokes.size} strokes)")
         if (!isScratch) return false
