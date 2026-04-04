@@ -1078,25 +1078,31 @@ class HandwritingCanvasView @JvmOverloads constructor(
     /** Check if the completed stroke is a scratch-out erase gesture. */
     private fun checkPostStrokeScratchOut(): Boolean {
         val t0 = android.os.SystemClock.elapsedRealtime()
-        // Check scratch-out against raw strokes (document space)
         val rawPoints = currentStrokePoints.toList()
-        var isScratch = ScratchOutDetection.isScratchOut(rawPoints, completedStrokes, LINE_SPACING)
-        // If not detected against raw strokes and there's overflow, also check
-        // against Hershey synthetic strokes (shifted coordinate space)
-        if (!isScratch && consolidationOverflowShiftPx > 0f) {
-            val hersheyStrokes = buildList {
-                for ((_, state) in inlineTextOverlays) {
-                    if (state.consolidated && !state.unConsolidated) {
-                        addAll(state.syntheticStrokes)
-                    }
-                }
-            }
-            if (hersheyStrokes.isNotEmpty()) {
-                val shiftedPoints = rawPoints.map {
-                    StrokePoint(it.x, it.y + consolidationOverflowShiftPx, it.pressure, it.timestamp)
-                }
-                isScratch = ScratchOutDetection.isScratchOut(shiftedPoints, hersheyStrokes, LINE_SPACING)
-            }
+        // Determine which line the scratch is on, then check against
+        // the appropriate strokes for that line's identity.
+        val scratchCenterY = rawPoints.let { pts ->
+            val minY = pts.minOf { it.y }; val maxY = pts.maxOf { it.y }
+            (minY + maxY) / 2f
+        }
+        // Compute line index in raw document space (for raw strokes)
+        val rawLineIdx = ((scratchCenterY - TOP_MARGIN) / LINE_SPACING).toInt()
+        // Compute line index in Hershey space (for consolidated text)
+        val hersheyLineIdx = ((scratchCenterY + consolidationOverflowShiftPx - TOP_MARGIN) / LINE_SPACING).toInt()
+
+        val overlay = inlineTextOverlays[hersheyLineIdx]
+        val isConsolidatedLine = overlay != null && overlay.consolidated && !overlay.unConsolidated
+
+        val isScratch: Boolean
+        if (isConsolidatedLine && overlay!!.syntheticStrokes.isNotEmpty()) {
+            // Consolidated line: check against Hershey synthetic strokes in shifted space
+            val shiftedPoints = if (consolidationOverflowShiftPx > 0f) {
+                rawPoints.map { StrokePoint(it.x, it.y + consolidationOverflowShiftPx, it.pressure, it.timestamp) }
+            } else rawPoints
+            isScratch = ScratchOutDetection.isScratchOut(shiftedPoints, overlay.syntheticStrokes, LINE_SPACING)
+        } else {
+            // Raw handwriting line: check against completed strokes in document space
+            isScratch = ScratchOutDetection.isScratchOut(rawPoints, completedStrokes, LINE_SPACING)
         }
         val elapsed = android.os.SystemClock.elapsedRealtime() - t0
         if (elapsed > 10) Log.w(TAG, "isScratchOut took ${elapsed}ms (${currentStrokePoints.size} pts, ${completedStrokes.size} strokes)")
