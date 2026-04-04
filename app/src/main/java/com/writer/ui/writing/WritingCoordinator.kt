@@ -83,6 +83,8 @@ class WritingCoordinator(
     private lateinit var displayManager: DisplayManager
     // Line recognition manager (created in start())
     private lateinit var recognitionManager: LineRecognitionManager
+    // Stroke routing logic (created in start())
+    private lateinit var strokeRouter: StrokeRouter
 
     /** Always-on ring buffer for bug report capture. */
     val eventLog = StrokeEventLog()
@@ -141,6 +143,18 @@ class WritingCoordinator(
         displayManager = DisplayManager(inkCanvas, textView, scope, lineSegmenter, paragraphBuilder, displayHost)
         displayManager.onScrollAnimated = { onLinkedScroll?.invoke() }
 
+        val routerHost = object : StrokeRouter.Host {
+            override val diagramAreas get() = columnModel.diagramAreas.toList()
+            override fun getStrokeLineIndex(stroke: InkStroke) = lineSegmenter.getStrokeLineIndex(stroke)
+            override fun isDiagramLine(lineIndex: Int) = diagramManager.isDiagramLine(lineIndex)
+            override fun hasTextStrokesOnLine(lineIndex: Int, excluding: InkStroke) =
+                diagramManager.hasTextStrokesOnLine(lineIndex, excluding = excluding)
+            override fun isEverHidden(lineIndex: Int) = displayManager.isEverHidden(lineIndex)
+        }
+        strokeRouter = StrokeRouter(routerHost)
+        strokeRouter.currentLineIndex = currentLineIndex
+        strokeRouter.highestLineIndex = highestLineIndex
+
         inkCanvas.columnModel = columnModel
         inkCanvas.onPenDown = { onTutorialAction?.invoke("pen_down") }
         inkCanvas.onRawStrokeCapture = { points ->
@@ -196,6 +210,8 @@ class WritingCoordinator(
         lineTextCache.clear()
         highestLineIndex = -1
         currentLineIndex = -1
+        strokeRouter.currentLineIndex = -1
+        strokeRouter.highestLineIndex = -1
         userRenamed = false
         columnModel.activeStrokes.clear()
         columnModel.diagramAreas.clear()
@@ -212,70 +228,45 @@ class WritingCoordinator(
             return
         }
 
-        saveSnapshot(UndoCoalescer.ActionType.STROKE_ADDED, lineSegmenter.getStrokeLineIndex(stroke))
-        columnModel.activeStrokes.add(stroke)
-        eventLog.recordEvent(lastStrokeIndex, StrokeEventLog.EventType.ADDED, "line=${lineSegmenter.getStrokeLineIndex(stroke)}", elapsedMs = elapsedMs)
-        onTutorialAction?.invoke("stroke_completed")
-        if (elapsedMs > PERF_BUDGET_MS) Log.w(TAG, "Slow stroke: ${elapsedMs}ms (added, line=${lineSegmenter.getStrokeLineIndex(stroke)})")
-
         val lineIdx = lineSegmenter.getStrokeLineIndex(stroke)
+        saveSnapshot(UndoCoalescer.ActionType.STROKE_ADDED, lineIdx)
+        columnModel.activeStrokes.add(stroke)
+        eventLog.recordEvent(lastStrokeIndex, StrokeEventLog.EventType.ADDED, "line=$lineIdx", elapsedMs = elapsedMs)
+        onTutorialAction?.invoke("stroke_completed")
+        if (elapsedMs > PERF_BUDGET_MS) Log.w(TAG, "Slow stroke: ${elapsedMs}ms (added, line=$lineIdx)")
 
-        // Diagram strokes: recognize freehand by spatial groups, not by line
-        if (diagramManager.isDiagramLine(lineIdx)) {
-            if (stroke.strokeType == StrokeType.FREEHAND) {
-                val area = columnModel.diagramAreas.find { it.containsLine(lineIdx) }
-                if (area != null) diagramManager.recognizeDiagramArea(area)
+        val result = strokeRouter.classifyStroke(stroke)
+        currentLineIndex = strokeRouter.currentLineIndex
+        highestLineIndex = strokeRouter.highestLineIndex
+
+        when (result.action) {
+            StrokeRouter.Action.DIAGRAM_STROKE -> {
+                result.diagramArea?.let { diagramManager.recognizeDiagramArea(it) }
             }
-            return
-        }
-
-        // Sticky zone: if a geometric (shape-snapped) stroke lands adjacent to a diagram
-        // area, expand it. Freehand strokes do NOT trigger sticky expansion — they're
-        // likely text and should stay outside the diagram.
-        val adjacentArea = columnModel.diagramAreas.find {
-            lineIdx == it.startLineIndex - 1 || lineIdx == it.endLineIndex + 1
-        }
-        if (adjacentArea != null && stroke.isGeometric && !diagramManager.hasTextStrokesOnLine(lineIdx, excluding = stroke)) {
-            val newStart = minOf(adjacentArea.startLineIndex, lineIdx)
-            val newEnd = maxOf(adjacentArea.endLineIndex, lineIdx)
-            columnModel.diagramAreas.remove(adjacentArea)
-            val expanded = adjacentArea.copy(
-                startLineIndex = newStart,
-                heightInLines = newEnd - newStart + 1
-            )
-            columnModel.diagramAreas.add(expanded)
-            inkCanvas.diagramAreas = columnModel.diagramAreas.toList()
-            for (line in newStart..newEnd) {
-                lineTextCache.remove(line)
+            StrokeRouter.Action.STICKY_EXPAND -> {
+                columnModel.diagramAreas.remove(result.expandedFrom)
+                columnModel.diagramAreas.add(result.expandedTo!!)
+                inkCanvas.diagramAreas = columnModel.diagramAreas.toList()
+                for (line in result.expandedTo.startLineIndex..result.expandedTo.startLineIndex + result.expandedTo.heightInLines - 1) {
+                    lineTextCache.remove(line)
+                }
+                Log.i(TAG, "Sticky zone: expanded diagram ${result.expandedFrom!!.startLineIndex}-${result.expandedFrom.endLineIndex} → ${result.expandedTo.startLineIndex}-${result.expandedTo.endLineIndex}")
+                if (stroke.strokeType == StrokeType.FREEHAND) {
+                    diagramManager.recognizeDiagramArea(result.expandedTo)
+                }
             }
-            Log.i(TAG, "Sticky zone: expanded diagram ${adjacentArea.startLineIndex}-${adjacentArea.endLineIndex} → $newStart-$newEnd")
-            if (stroke.strokeType == StrokeType.FREEHAND) {
-                diagramManager.recognizeDiagramArea(expanded)
+            StrokeRouter.Action.TEXT_STROKE -> {
+                lineTextCache.remove(result.lineIndex)
+                if (result.recognizePreviousLine) {
+                    recognitionManager.eagerRecognizeLine(result.previousLineIndex)
+                }
+                if (result.reRecognizeLine) {
+                    Log.i(TAG, "Stroke on rendered line ${result.lineIndex}, triggering re-recognition")
+                    recognitionManager.recognizeRenderedLine(result.lineIndex)
+                } else {
+                    Log.d(TAG, "Stroke on line ${result.lineIndex} (not in everHiddenLines=${displayManager.getEverHiddenLinesSnapshot()})")
+                }
             }
-            return
-        }
-
-        // If the user modified a previously recognized line, invalidate cache
-        lineTextCache.remove(lineIdx)
-
-        // Only trigger recognition when the user moves to a DIFFERENT line
-        if (lineIdx != currentLineIndex) {
-            if (currentLineIndex >= 0) {
-                recognitionManager.eagerRecognizeLine(currentLineIndex)
-            }
-            currentLineIndex = lineIdx
-        }
-
-        // If editing a line that has rendered text, re-recognize immediately
-        if (displayManager.isEverHidden(lineIdx)) {
-            Log.i(TAG, "Stroke on rendered line $lineIdx, triggering re-recognition")
-            recognitionManager.recognizeRenderedLine(lineIdx)
-        } else {
-            Log.d(TAG, "Stroke on line $lineIdx (not in everHiddenLines=${displayManager.getEverHiddenLinesSnapshot()})")
-        }
-
-        if (lineIdx > highestLineIndex) {
-            highestLineIndex = lineIdx
         }
     }
 
@@ -476,10 +467,7 @@ class WritingCoordinator(
     }
 
     private fun applySnapshot(snapshot: UndoManager.Snapshot) {
-        // Compute which strokes changed so we can scroll to them if off-screen
         val oldStrokeIds = columnModel.activeStrokes.map { it.strokeId }.toSet()
-        val newStrokeIds = snapshot.strokes.map { it.strokeId }.toSet()
-        val changedIds = (oldStrokeIds - newStrokeIds) + (newStrokeIds - oldStrokeIds)
 
         columnModel.activeStrokes.clear()
         columnModel.activeStrokes.addAll(snapshot.strokes)
@@ -490,22 +478,12 @@ class WritingCoordinator(
         inkCanvas.diagramAreas = snapshot.diagramAreas
         inkCanvas.loadStrokes(snapshot.strokes)
 
-        // Keep current scroll position, but scroll to show changed strokes if off-screen
-        val currentScroll = inkCanvas.scrollOffsetY
-        if (changedIds.isNotEmpty()) {
-            // Find bounds of changed strokes (in both old and new sets)
-            val changedStrokes = (snapshot.strokes.filter { it.strokeId in changedIds })
-            if (changedStrokes.isNotEmpty()) {
-                val minY = changedStrokes.minOf { it.minY }
-                val maxY = changedStrokes.maxOf { it.maxY }
-                val visibleTop = currentScroll
-                val visibleBottom = currentScroll + inkCanvas.height
-                if (minY < visibleTop || maxY > visibleBottom) {
-                    // Scroll so the changed region is centered in view
-                    val centerY = (minY + maxY) / 2f
-                    inkCanvas.scrollOffsetY = (centerY - inkCanvas.height / 2f).coerceAtLeast(0f)
-                }
-            }
+        val scrollDecision = UndoScrollCalculator.computeScroll(
+            oldStrokeIds, snapshot.strokes,
+            inkCanvas.scrollOffsetY, inkCanvas.height.toFloat()
+        )
+        if (scrollDecision.shouldScroll) {
+            inkCanvas.scrollOffsetY = scrollDecision.newScrollOffsetY
         }
 
         inkCanvas.drawToSurface()
