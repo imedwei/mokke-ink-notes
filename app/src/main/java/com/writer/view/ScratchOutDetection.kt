@@ -463,8 +463,11 @@ object ScratchOutDetection {
         val (indexed, query) = if (segB <= segA) strokeB to strokeA else strokeA to strokeB
         val overlapMinX = maxOf(aMinX, bMinX); val overlapMaxX = minOf(aMaxX, bMaxX)
         val overlapMinY = maxOf(aMinY, bMinY); val overlapMaxY = minOf(aMaxY, bMaxY)
-        val cellSize = maxOf(overlapMaxX - overlapMinX, overlapMaxY - overlapMinY) /
-            maxOf(1f, kotlin.math.sqrt(indexed.size.toFloat()))
+        // Minimum 1px cell size: when the overlap region is tiny (e.g. 1px),
+        // a sub-pixel cellSize causes segments far from the overlap to map to
+        // enormous cell ranges, exploding HashMap allocations and causing ANR.
+        val cellSize = maxOf(1f, maxOf(overlapMaxX - overlapMinX, overlapMaxY - overlapMinY) /
+            maxOf(1f, kotlin.math.sqrt(indexed.size.toFloat())))
 
         // Each grid cell holds segment indices from the indexed stroke.
         val grid = HashMap<Long, MutableList<Int>>()
