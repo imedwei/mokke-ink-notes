@@ -215,6 +215,40 @@ class LineRecognitionManager(
     fun buildPreContext(lineIndex: Int): String =
         buildPreContext(host.lineTextCache, lineIndex)
 
+    /** Re-recognize a line to rebuild the bounding-box word→stroke mapping
+     *  without clearing lineTextCache. Used after undo when stroke IDs change
+     *  but the text is known from the snapshot. */
+    fun rebuildStrokeMapping(lineIndex: Int) {
+        if (recognizingLines.contains(lineIndex)) return
+        recognizingLines.add(lineIndex)
+        scope.launch {
+            try {
+                val strokes = lineSegmenter.getStrokesForLine(columnModel.activeStrokes, lineIndex)
+                if (strokes.isEmpty()) { recognizingLines.remove(lineIndex); return@launch }
+                val filtered = strokeClassifier.filterMarkerStrokes(strokes, canvasWidthProvider(), null)
+                if (filtered.isEmpty()) { recognizingLines.remove(lineIndex); return@launch }
+                val line = lineSegmenter.buildInkLine(filtered, lineIndex)
+                val preContext = buildPreContext(lineIndex)
+                var result = withContext(Dispatchers.IO) {
+                    recognizer.recognizeLineWithCandidates(line, preContext)
+                }
+                val mapping = com.writer.recognition.StrokeMatcher.buildWordStrokeMapping(
+                    result.wordConfidences, line.strokes, line.boundingBox
+                )
+                if (mapping.isNotEmpty()) {
+                    result = result.copy(wordStrokeMapping = mapping)
+                }
+                // Update recognition result (with mapping) but preserve existing lineTextCache
+                lineRecognitionResults[lineIndex] = result
+                Log.d(TAG, "Rebuilt stroke mapping for line $lineIndex: ${mapping.size} words mapped")
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to rebuild stroke mapping for line $lineIndex: ${e.message}")
+            } finally {
+                recognizingLines.remove(lineIndex)
+            }
+        }
+    }
+
     fun reset() {
         recognizingLines.clear()
         pendingRerecognize.clear()
