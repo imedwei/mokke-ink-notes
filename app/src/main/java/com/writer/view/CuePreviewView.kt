@@ -6,8 +6,10 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
+import android.text.TextPaint
 import android.view.View
 import com.writer.model.InkStroke
+import com.writer.model.TextBlock
 import com.writer.model.minX
 import com.writer.model.minY
 import com.writer.model.maxX
@@ -38,25 +40,48 @@ class CuePreviewView(context: Context) : View(context) {
         strokeWidth = ScreenMetrics.dp(2f)
     }
 
+    private val textBlockPaint = TextPaint().apply {
+        color = Color.BLACK
+        textSize = ScreenMetrics.textBody
+        isAntiAlias = false
+    }
+
     private val cornerRadius = ScreenMetrics.dp(8f)
 
     private val path = Path()
     private var strokes: List<InkStroke> = emptyList()
+    private var textBlocks: List<TextBlock> = emptyList()
     private var strokeMinX = 0f
     private var strokeMinY = 0f
     private var strokeMaxX = 0f
     private var strokeMaxY = 0f
     private var scale = 1f
 
-    fun setStrokes(strokes: List<InkStroke>, previewWidth: Int) {
+    fun setStrokes(strokes: List<InkStroke>, previewWidth: Int, textBlocks: List<TextBlock> = emptyList()) {
         this.strokes = strokes
-        if (strokes.isEmpty()) return
+        this.textBlocks = textBlocks
 
-        // Compute bounding box of all strokes
-        strokeMinX = strokes.minOf { it.minX }
-        strokeMinY = strokes.minOf { it.minY }
-        strokeMaxX = strokes.maxOf { it.maxX }
-        strokeMaxY = strokes.maxOf { it.maxY }
+        val ls = HandwritingCanvasView.LINE_SPACING
+        val tm = HandwritingCanvasView.TOP_MARGIN
+
+        // Compute bounding box of all strokes and text blocks
+        val hasStrokes = strokes.isNotEmpty()
+        val hasTextBlocks = textBlocks.isNotEmpty()
+        if (!hasStrokes && !hasTextBlocks) return
+
+        strokeMinX = if (hasStrokes) strokes.minOf { it.minX } else 0f
+        strokeMinY = if (hasStrokes) strokes.minOf { it.minY } else Float.MAX_VALUE
+        strokeMaxX = if (hasStrokes) strokes.maxOf { it.maxX } else 0f
+        strokeMaxY = if (hasStrokes) strokes.maxOf { it.maxY } else 0f
+
+        // Expand bounds to include text blocks
+        for (tb in textBlocks) {
+            val tbTop = tm + tb.startLineIndex * ls
+            val tbBottom = tm + (tb.endLineIndex + 1) * ls
+            strokeMinY = minOf(strokeMinY, tbTop)
+            strokeMaxY = maxOf(strokeMaxY, tbBottom)
+            strokeMaxX = maxOf(strokeMaxX, previewWidth.toFloat())
+        }
 
         val contentWidth = strokeMaxX - strokeMinX
         val contentHeight = strokeMaxY - strokeMinY
@@ -89,7 +114,7 @@ class CuePreviewView(context: Context) : View(context) {
         drawWavyLine(canvas, 0f, 0f, width.toFloat(), true, borderPaint)
         drawWavyLine(canvas, 0f, height.toFloat(), width.toFloat(), false, borderPaint)
 
-        if (strokes.isEmpty()) return
+        if (strokes.isEmpty() && textBlocks.isEmpty()) return
 
         val pad = ScreenMetrics.dp(8f)
 
@@ -103,6 +128,22 @@ class CuePreviewView(context: Context) : View(context) {
 
         for (stroke in strokes) {
             CanvasTheme.drawStroke(canvas, stroke, path, strokePaint)
+        }
+
+        // Render text blocks
+        val ls = HandwritingCanvasView.LINE_SPACING
+        val tm = HandwritingCanvasView.TOP_MARGIN
+        val textLeftMargin = ls * 0.3f
+        textBlockPaint.textSize = ScreenMetrics.textBody / scale
+        for (block in textBlocks) {
+            if (block.text.isBlank()) continue
+            for (i in 0 until block.heightInLines) {
+                val baselineY = tm + (block.startLineIndex + i + 1) * ls
+                // Simple single-line render per height line; full text on first line
+                if (i == 0) {
+                    canvas.drawText(block.text, textLeftMargin, baselineY, textBlockPaint)
+                }
+            }
         }
 
         canvas.restore()

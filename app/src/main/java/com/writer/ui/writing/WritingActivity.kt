@@ -1474,12 +1474,12 @@ popupView.findViewById<android.view.View>(R.id.menuTutorial).setOnClickListener 
 
     /** Show a floating preview of main content strokes (from context rail long-press). */
     private fun showMainPeek(lineIndex: Int, screenY: Float) {
-        showStrokePeek(lineIndex, screenY, documentModel.main.activeStrokes, documentModel.main.diagramAreas, contextRail)
+        showStrokePeek(lineIndex, screenY, documentModel.main.activeStrokes, documentModel.main.diagramAreas, documentModel.main.textBlocks, contextRail)
     }
 
     /** Show a floating preview of cue strokes (from cue indicator strip long-press). */
     private fun showCuePeek(lineIndex: Int, screenY: Float) {
-        showStrokePeek(lineIndex, screenY, documentModel.cue.activeStrokes, documentModel.cue.diagramAreas, cueIndicatorStrip)
+        showStrokePeek(lineIndex, screenY, documentModel.cue.activeStrokes, documentModel.cue.diagramAreas, documentModel.cue.textBlocks, cueIndicatorStrip)
     }
 
     /** Show a floating preview of strokes for a contiguous block around [lineIndex]. */
@@ -1487,6 +1487,7 @@ popupView.findViewById<android.view.View>(R.id.menuTutorial).setOnClickListener 
         lineIndex: Int, screenY: Float,
         strokes: List<com.writer.model.InkStroke>,
         diagramAreas: List<com.writer.model.DiagramArea>,
+        textBlocks: List<com.writer.model.TextBlock>,
         anchorView: View
     ) {
         val segmenter = com.writer.recognition.LineSegmenter()
@@ -1496,7 +1497,8 @@ popupView.findViewById<android.view.View>(R.id.menuTutorial).setOnClickListener 
         for (area in diagramAreas) {
             for (l in area.startLineIndex..area.endLineIndex) diagramLines.add(l)
         }
-        val occupiedLines = strokeLines + diagramLines
+        val textBlockLines = textBlocks.flatMap { it.startLineIndex..it.endLineIndex }.toSet()
+        val occupiedLines = strokeLines + diagramLines + textBlockLines
         if (lineIndex !in occupiedLines) return
 
         var top = lineIndex
@@ -1506,11 +1508,12 @@ popupView.findViewById<android.view.View>(R.id.menuTutorial).setOnClickListener 
 
         val blockLines = (top..bottom).toSet()
         val blockStrokes = strokes.filter { segmenter.getStrokeLineIndex(it) in blockLines }
-        if (blockStrokes.isEmpty()) return
+        val blockTextBlocks = textBlocks.filter { tb -> (tb.startLineIndex..tb.endLineIndex).any { it in blockLines } }
+        if (blockStrokes.isEmpty() && blockTextBlocks.isEmpty()) return
 
         val previewWidth = (inkCanvas.width * 0.6f).toInt()
         val previewView = com.writer.view.CuePreviewView(this)
-        previewView.setStrokes(blockStrokes, previewWidth)
+        previewView.setStrokes(blockStrokes, previewWidth, blockTextBlocks)
 
         previewView.measure(
             View.MeasureSpec.makeMeasureSpec(previewWidth, View.MeasureSpec.EXACTLY),
@@ -1549,7 +1552,8 @@ popupView.findViewById<android.view.View>(R.id.menuTutorial).setOnClickListener 
     /** Populate the context rail with main content indicators (dots/segments). */
     private fun populateContextRail() {
         val segmenter = com.writer.recognition.LineSegmenter()
-        val mainLines = documentModel.main.activeStrokes.map { segmenter.getStrokeLineIndex(it) }.toSet()
+        val mainLines = documentModel.main.activeStrokes.map { segmenter.getStrokeLineIndex(it) }.toSet() +
+            documentModel.main.textBlocks.flatMap { it.startLineIndex..it.endLineIndex }.toSet()
         contextRail.cueLineIndices = mainLines
         contextRail.cueDiagramAreas = documentModel.main.diagramAreas.toList()
         contextRail.scrollOffsetY = cueInkCanvas.scrollOffsetY
@@ -1568,7 +1572,8 @@ popupView.findViewById<android.view.View>(R.id.menuTutorial).setOnClickListener 
         val segmenter = com.writer.recognition.LineSegmenter()
         val cueLines = documentModel.cue.activeStrokes.map { stroke ->
             segmenter.getStrokeLineIndex(stroke)
-        }.toSet()
+        }.toSet() +
+            documentModel.cue.textBlocks.flatMap { it.startLineIndex..it.endLineIndex }.toSet()
         cueIndicatorStrip.cueLineIndices = cueLines
         cueIndicatorStrip.cueDiagramAreas = documentModel.cue.diagramAreas.toList()
         cueIndicatorStrip.scrollOffsetY = inkCanvas.scrollOffsetY
