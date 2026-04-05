@@ -234,6 +234,13 @@ object SearchIndexManager {
         for ((_, text) in data.cue.lineTextCache) {
             if (text.isNotEmpty()) lines.add(text.lowercase())
         }
+        // Include TextBlock text for search
+        for (tb in data.main.textBlocks) {
+            if (tb.text.isNotEmpty()) lines.add(tb.text.lowercase())
+        }
+        for (tb in data.cue.textBlocks) {
+            if (tb.text.isNotEmpty()) lines.add(tb.text.lowercase())
+        }
         return lines.joinToString("\n")
     }
 
@@ -245,6 +252,13 @@ object SearchIndexManager {
         }
         for ((lineIdx, text) in data.cue.lineTextCache) {
             if (text.isNotEmpty()) json.put("c$lineIdx", text.lowercase())
+        }
+        // Include TextBlock text keyed by "tb{lineIndex}"
+        for (tb in data.main.textBlocks) {
+            if (tb.text.isNotEmpty()) json.put("tb${tb.startLineIndex}", tb.text.lowercase())
+        }
+        for (tb in data.cue.textBlocks) {
+            if (tb.text.isNotEmpty()) json.put("ctb${tb.startLineIndex}", tb.text.lowercase())
         }
         return json
     }

@@ -595,7 +595,6 @@ class WritingCoordinator(
         )
         saveSnapshot(UndoCoalescer.ActionType.STROKE_ADDED, lineIndex)
         columnModel.textBlocks.add(block)
-        lineTextCache[lineIndex] = text
         displayManager.displayHiddenLines()
         onUndoRedoStateChanged?.invoke()
     }
