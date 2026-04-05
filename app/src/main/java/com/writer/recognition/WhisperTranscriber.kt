@@ -111,24 +111,17 @@ class WhisperTranscriber(private val context: Context) : AudioTranscriber {
         recorder.startRecording()
         audioBuffer.clear()
 
-        // Continuous recording + periodic transcription
+        // Record audio continuously — transcription happens on stop()
         recordingJob = CoroutineScope(Dispatchers.IO).launch {
             val shortBuffer = ShortArray(sampleRate) // 1 second chunks
-            var chunkCount = 0
 
             while (isActive && isListening) {
                 val read = recorder.read(shortBuffer, 0, shortBuffer.size)
                 if (read > 0) {
                     synchronized(audioBuffer) {
                         for (i in 0 until read) {
-                            audioBuffer.add(shortBuffer[i] / 32768f) // Convert to float [-1, 1]
+                            audioBuffer.add(shortBuffer[i] / 32768f)
                         }
-                    }
-                    chunkCount++
-
-                    // Transcribe every CHUNK_SECONDS seconds of audio
-                    if (chunkCount % CHUNK_SECONDS == 0) {
-                        transcribeAccumulated()
                     }
                 }
             }
@@ -162,7 +155,7 @@ class WhisperTranscriber(private val context: Context) : AudioTranscriber {
         audioRecord?.release()
         audioRecord = null
 
-        // Final transcription of all accumulated audio
+        // Transcribe all accumulated audio (batch mode — may take a while)
         CoroutineScope(Dispatchers.IO).launch {
             val samples: FloatArray
             synchronized(audioBuffer) {
@@ -171,6 +164,10 @@ class WhisperTranscriber(private val context: Context) : AudioTranscriber {
             }
 
             if (samples.size >= WHISPER_SAMPLE_RATE) {
+                val durationSec = samples.size / WHISPER_SAMPLE_RATE.toFloat()
+                withContext(Dispatchers.Main) {
+                    onStatusUpdate?.invoke("Transcribing %.0fs of audio...".format(durationSec))
+                }
                 val text = withContext(scope.coroutineContext) {
                     transcribe(samples)
                 }
