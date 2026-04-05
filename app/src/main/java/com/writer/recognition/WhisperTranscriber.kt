@@ -42,9 +42,6 @@ class WhisperTranscriber(private val context: Context) : AudioTranscriber {
 
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                withContext(Dispatchers.Main) {
-                    onStatusUpdate?.invoke("Preparing whisper model...")
-                }
                 val modelPath = ensureModel()
                 if (modelPath == null) {
                     withContext(Dispatchers.Main) {
@@ -56,9 +53,6 @@ class WhisperTranscriber(private val context: Context) : AudioTranscriber {
                 }
 
                 // Initialize whisper context on the whisper thread
-                withContext(Dispatchers.Main) {
-                    onStatusUpdate?.invoke("Loading whisper model...")
-                }
                 whisperPtr = withContext(scope.coroutineContext) {
                     WhisperLib.initContext(modelPath)
                 }
@@ -73,7 +67,7 @@ class WhisperTranscriber(private val context: Context) : AudioTranscriber {
                 }
                 Log.i(tag, "Whisper context initialized")
                 withContext(Dispatchers.Main) {
-                    onStatusUpdate?.invoke("Listening...")
+                    onStatusUpdate?.invoke("Lecture mode started")
                 }
 
                 // Start recording
@@ -226,10 +220,16 @@ class WhisperTranscriber(private val context: Context) : AudioTranscriber {
 
         if (modelFile.exists() && modelFile.length() > 0) {
             Log.i(tag, "Model already downloaded: ${modelFile.absolutePath}")
+            withContext(Dispatchers.Main) {
+                onStatusUpdate?.invoke("Loading whisper model...")
+            }
             return@withContext modelFile.absolutePath
         }
 
         Log.i(tag, "Downloading whisper model ($MODEL_FILENAME)...")
+        withContext(Dispatchers.Main) {
+            onStatusUpdate?.invoke("Downloading model...")
+        }
         try {
             val url = URL(MODEL_URL)
             val connection = url.openConnection()
@@ -244,12 +244,21 @@ class WhisperTranscriber(private val context: Context) : AudioTranscriber {
                         if (read == -1) break
                         output.write(buffer, 0, read)
                         downloaded += read
+                        val downloadedMB = downloaded / (1024 * 1024)
                         if (totalBytes > 0) {
                             val percent = (downloaded * 100 / totalBytes).toInt()
-                            if (percent != lastReportPercent && percent % 10 == 0) {
+                            if (percent != lastReportPercent && percent % 5 == 0) {
                                 lastReportPercent = percent
                                 withContext(Dispatchers.Main) {
                                     onStatusUpdate?.invoke("Downloading model: $percent%")
+                                }
+                            }
+                        } else {
+                            // No content-length — report MB downloaded
+                            val prevMB = (downloaded - read) / (1024 * 1024)
+                            if (downloadedMB != prevMB) {
+                                withContext(Dispatchers.Main) {
+                                    onStatusUpdate?.invoke("Downloading model: ${downloadedMB} MB")
                                 }
                             }
                         }

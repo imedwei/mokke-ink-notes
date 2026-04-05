@@ -1016,8 +1016,6 @@ class WritingActivity : AppCompatActivity() {
         // with SpeechRecognizer for microphone access. Audio file recording
         // Use WhisperTranscriber for lecture mode (better accuracy than SpeechRecognizer)
         startWhisperLectureRecognition()
-
-        Toast.makeText(this, "Lecture capture started — downloading model if needed...", Toast.LENGTH_SHORT).show()
     }
 
     private fun startLectureSpeechRecognition() {
