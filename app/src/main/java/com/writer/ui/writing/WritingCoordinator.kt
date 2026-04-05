@@ -65,6 +65,8 @@ class WritingCoordinator(
     private var highestLineIndex = -1
     // Track which line the user is currently writing on
     private var currentLineIndex = -1
+    // Audio recordings associated with this document
+    private val audioRecordings = mutableListOf<com.writer.model.AudioRecording>()
     // Whether the user has manually renamed this document
     var userRenamed = false
     // Callback to notify activity when heading-based rename should happen
@@ -575,7 +577,8 @@ class WritingCoordinator(
             scrollOffsetY = inkCanvas.scrollOffsetY,
             highestLineIndex = highestLineIndex,
             currentLineIndex = currentLineIndex,
-            userRenamed = userRenamed
+            userRenamed = userRenamed,
+            audioRecordings = audioRecordings.toList()
         )
     }
 
@@ -584,6 +587,12 @@ class WritingCoordinator(
         highestLineIndex = data.highestLineIndex
         currentLineIndex = data.currentLineIndex
         userRenamed = data.userRenamed
+        audioRecordings.clear()
+        audioRecordings.addAll(data.audioRecordings)
+    }
+
+    fun addAudioRecording(recording: com.writer.model.AudioRecording) {
+        audioRecordings.add(recording)
     }
 
     /** Insert a transcribed text block after all existing content. */

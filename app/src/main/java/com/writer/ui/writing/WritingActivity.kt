@@ -91,6 +91,9 @@ class WritingActivity : AppCompatActivity() {
     private lateinit var spaceInsertButton: ImageView
     private lateinit var micButton: ImageView
     private var audioTranscriber: com.writer.recognition.AudioTranscriber? = null
+    private var audioCaptureManager: com.writer.audio.AudioCaptureManager? = null
+    private var lectureMode = false
+    private var lectureRecordingStartMs = 0L
 
     /** True while the stylus is actively drawing — reject finger taps on gutter. */
     private fun isPenBusy(): Boolean =
@@ -277,6 +280,7 @@ class WritingActivity : AppCompatActivity() {
         redoButton.setOnClickListener { debounceUndoRedo { activeCoordinator?.redo(); updateUndoRedoButtons() } }
         spaceInsertButton.setOnClickListener { inkCanvas.spaceInsertMode = !inkCanvas.spaceInsertMode }
         micButton.setOnClickListener { toggleVoiceMemo() }
+        micButton.setOnLongClickListener { startLectureCapture(); true }
         viewToggleButton.setOnClickListener { toggleNotesCues() }
         rotateButton.setOnClickListener { orientationManager.toggleOrientation() }
 
@@ -694,6 +698,7 @@ class WritingActivity : AppCompatActivity() {
     }
 
     private fun newDocument() {
+        if (lectureMode) stopLectureCapture()
         snapshotAndSaveBlocking()
 
         coordinator?.stop()
@@ -927,6 +932,12 @@ class WritingActivity : AppCompatActivity() {
     // --- Voice Memo ---
 
     private fun toggleVoiceMemo() {
+        // If in lecture mode, stop it
+        if (lectureMode) {
+            stopLectureCapture()
+            return
+        }
+
         val transcriber = audioTranscriber
         if (transcriber != null && transcriber.isListening) {
             transcriber.stop()
@@ -969,6 +980,114 @@ class WritingActivity : AppCompatActivity() {
         }
 
         transcriber.start("en-US")
+    }
+
+    // --- Lecture Capture ---
+
+    private fun startLectureCapture() {
+        if (lectureMode) return
+
+        // Check permission
+        if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)
+            != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            requestAudioPermission.launch(android.Manifest.permission.RECORD_AUDIO)
+            return
+        }
+
+        if (!com.writer.recognition.SystemSpeechTranscriber.isAvailable(this)) {
+            Toast.makeText(this, "Speech recognition not available", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        lectureMode = true
+        lectureRecordingStartMs = System.currentTimeMillis()
+        micButton.setImageResource(R.drawable.ic_mic_active)
+
+        // Start foreground service
+        val serviceIntent = android.content.Intent(this, com.writer.audio.AudioRecordingService::class.java)
+        startForegroundService(serviceIntent)
+
+        // Start audio recording
+        val recordingName = com.writer.audio.AudioCaptureManager.generateRecordingName()
+        val captureManager = com.writer.audio.AudioCaptureManager(this)
+        captureManager.start(recordingName)
+        audioCaptureManager = captureManager
+
+        // Start continuous speech recognition
+        startLectureSpeechRecognition()
+
+        Toast.makeText(this, "Lecture capture started — tap mic to stop", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun startLectureSpeechRecognition() {
+        val transcriber = com.writer.recognition.SystemSpeechTranscriber(this)
+        audioTranscriber = transcriber
+
+        transcriber.onFinalResult = { text ->
+            if (text.isNotBlank() && lectureMode) {
+                val now = System.currentTimeMillis()
+                val startMs = now - lectureRecordingStartMs - 3000L // approximate: result covers ~last 3s
+                val endMs = now - lectureRecordingStartMs
+                val audioFile = audioCaptureManager?.getOutputFile()?.nameWithoutExtension?.plus(".opus") ?: ""
+                activeCoordinator?.insertTextBlock(
+                    text, audioFile = audioFile,
+                    startMs = startMs.coerceAtLeast(0), endMs = endMs
+                )
+                updateCueIndicatorStrip()
+            }
+            // Restart recognition for the next sentence (continuous mode)
+            if (lectureMode) {
+                startLectureSpeechRecognition()
+            }
+        }
+
+        transcriber.onError = { errorCode ->
+            // Restart on recoverable errors while in lecture mode
+            if (lectureMode) {
+                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                    if (lectureMode) startLectureSpeechRecognition()
+                }, 1000)
+            }
+        }
+
+        transcriber.start("en-US")
+    }
+
+    private fun stopLectureCapture() {
+        if (!lectureMode) return
+        lectureMode = false
+        micButton.setImageResource(R.drawable.ic_mic)
+
+        // Stop speech recognition
+        audioTranscriber?.close()
+        audioTranscriber = null
+
+        // Stop audio recording
+        audioCaptureManager?.stop()
+
+        // Stop foreground service
+        val serviceIntent = android.content.Intent(this, com.writer.audio.AudioRecordingService::class.java)
+        stopService(serviceIntent)
+
+        // Save the recording metadata
+        val captureManager = audioCaptureManager
+        if (captureManager != null) {
+            val durationMs = System.currentTimeMillis() - lectureRecordingStartMs
+            val audioFileName = captureManager.getOutputFile()?.name ?: ""
+            val recording = com.writer.model.AudioRecording(
+                audioFile = audioFileName,
+                startTimeMs = lectureRecordingStartMs,
+                durationMs = durationMs
+            )
+            // Add to document data via coordinator
+            coordinator?.addAudioRecording(recording)
+        }
+
+        // Save document
+        snapshotAndSaveBlocking()
+        audioCaptureManager = null
+
+        Toast.makeText(this, "Lecture capture stopped", Toast.LENGTH_SHORT).show()
     }
 
     // --- Menu ---
@@ -1788,6 +1907,7 @@ popupView.findViewById<android.view.View>(R.id.menuTutorial).setOnClickListener 
 
     override fun onDestroy() {
         super.onDestroy()
+        if (lectureMode) stopLectureCapture()
         unregisterReceiver(bugReportReceiver)
         closeDualCanvasOnyx()
         coordinator?.stop()
