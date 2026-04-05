@@ -1004,15 +1004,13 @@ class WritingActivity : AppCompatActivity() {
         micButton.setImageResource(R.drawable.ic_mic_active)
         inkCanvas.lectureRecording = true
 
-        // Start foreground service
+        // Start foreground service to keep alive when backgrounded
         val serviceIntent = android.content.Intent(this, com.writer.audio.AudioRecordingService::class.java)
         startForegroundService(serviceIntent)
 
-        // Start audio recording
-        val recordingName = com.writer.audio.AudioCaptureManager.generateRecordingName()
-        val captureManager = com.writer.audio.AudioCaptureManager(this)
-        captureManager.start(recordingName)
-        audioCaptureManager = captureManager
+        // Note: MediaRecorder is NOT started here because it would conflict
+        // with SpeechRecognizer for microphone access. Audio file recording
+        // will be added in a future phase using AudioRecord for shared access.
 
         // Start continuous speech recognition
         startLectureSpeechRecognition()
@@ -1051,11 +1049,13 @@ class WritingActivity : AppCompatActivity() {
 
         transcriber.onError = { errorCode ->
             android.util.Log.w("WritingActivity", "Lecture recognition error: $errorCode")
-            // Restart on recoverable errors while in lecture mode
             if (lectureMode) {
+                // NO_MATCH (7) and ERROR_SPEECH_TIMEOUT (6) are normal in continuous
+                // mode — restart immediately. Other errors get a brief delay.
+                val delayMs = if (errorCode == 6 || errorCode == 7) 100L else 1000L
                 android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
                     if (lectureMode) startLectureSpeechRecognition()
-                }, 1000)
+                }, delayMs)
             }
         }
 
@@ -1072,30 +1072,12 @@ class WritingActivity : AppCompatActivity() {
         audioTranscriber?.close()
         audioTranscriber = null
 
-        // Stop audio recording
-        audioCaptureManager?.stop()
-
         // Stop foreground service
         val serviceIntent = android.content.Intent(this, com.writer.audio.AudioRecordingService::class.java)
         stopService(serviceIntent)
 
-        // Save the recording metadata
-        val captureManager = audioCaptureManager
-        if (captureManager != null) {
-            val durationMs = System.currentTimeMillis() - lectureRecordingStartMs
-            val audioFileName = captureManager.getOutputFile()?.name ?: ""
-            val recording = com.writer.model.AudioRecording(
-                audioFile = audioFileName,
-                startTimeMs = lectureRecordingStartMs,
-                durationMs = durationMs
-            )
-            // Add to document data via coordinator
-            coordinator?.addAudioRecording(recording)
-        }
-
         // Save document
         snapshotAndSaveBlocking()
-        audioCaptureManager = null
 
         Toast.makeText(this, "Lecture capture stopped", Toast.LENGTH_SHORT).show()
     }
