@@ -1002,6 +1002,7 @@ class WritingActivity : AppCompatActivity() {
         lectureMode = true
         lectureRecordingStartMs = System.currentTimeMillis()
         micButton.setImageResource(R.drawable.ic_mic_active)
+        inkCanvas.lectureRecording = true
 
         // Start foreground service
         val serviceIntent = android.content.Intent(this, com.writer.audio.AudioRecordingService::class.java)
@@ -1020,28 +1021,36 @@ class WritingActivity : AppCompatActivity() {
     }
 
     private fun startLectureSpeechRecognition() {
+        // Close previous transcriber before creating a new one
+        audioTranscriber?.close()
+
         val transcriber = com.writer.recognition.SystemSpeechTranscriber(this)
         audioTranscriber = transcriber
 
         transcriber.onFinalResult = { text ->
             if (text.isNotBlank() && lectureMode) {
                 val now = System.currentTimeMillis()
-                val startMs = now - lectureRecordingStartMs - 3000L // approximate: result covers ~last 3s
+                val startMs = now - lectureRecordingStartMs - 3000L
                 val endMs = now - lectureRecordingStartMs
-                val audioFile = audioCaptureManager?.getOutputFile()?.nameWithoutExtension?.plus(".opus") ?: ""
+                val audioFile = audioCaptureManager?.getOutputFile()?.name ?: ""
                 activeCoordinator?.insertTextBlock(
                     text, audioFile = audioFile,
                     startMs = startMs.coerceAtLeast(0), endMs = endMs
                 )
                 updateCueIndicatorStrip()
+                android.util.Log.i("WritingActivity", "Lecture transcribed: $text")
             }
             // Restart recognition for the next sentence (continuous mode)
             if (lectureMode) {
-                startLectureSpeechRecognition()
+                // Post to main looper to allow SpeechRecognizer cleanup
+                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                    if (lectureMode) startLectureSpeechRecognition()
+                }
             }
         }
 
         transcriber.onError = { errorCode ->
+            android.util.Log.w("WritingActivity", "Lecture recognition error: $errorCode")
             // Restart on recoverable errors while in lecture mode
             if (lectureMode) {
                 android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
@@ -1057,6 +1066,7 @@ class WritingActivity : AppCompatActivity() {
         if (!lectureMode) return
         lectureMode = false
         micButton.setImageResource(R.drawable.ic_mic)
+        inkCanvas.lectureRecording = false
 
         // Stop speech recognition
         audioTranscriber?.close()

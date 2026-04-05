@@ -98,6 +98,46 @@ class HandwritingCanvasView @JvmOverloads constructor(
         isAntiAlias = false
     }
 
+    /** Whether lecture capture is active — shows a recording indicator. */
+    var lectureRecording: Boolean = false
+        set(value) {
+            field = value
+            if (value) startRecordingIndicator() else stopRecordingIndicator()
+        }
+
+    private val recordingDotPaint = Paint().apply {
+        color = Color.RED
+        style = Paint.Style.FILL
+        isAntiAlias = true
+    }
+
+    private val recordingTextPaint = Paint().apply {
+        color = Color.RED
+        textSize = ScreenMetrics.dp(12f)
+        isAntiAlias = true
+    }
+
+    private var recordingDotVisible = true
+    private val recordingBlinkRunnable = object : Runnable {
+        override fun run() {
+            recordingDotVisible = !recordingDotVisible
+            drawToSurface()
+            if (lectureRecording) handler.postDelayed(this, 1000)
+        }
+    }
+
+    private fun startRecordingIndicator() {
+        recordingDotVisible = true
+        handler.removeCallbacks(recordingBlinkRunnable)
+        handler.postDelayed(recordingBlinkRunnable, 1000)
+        drawToSurface()
+    }
+
+    private fun stopRecordingIndicator() {
+        handler.removeCallbacks(recordingBlinkRunnable)
+        drawToSurface()
+    }
+
     /** Column model reference for magnetic snap access. */
     var columnModel: ColumnModel? = null
 
@@ -1281,6 +1321,15 @@ class HandwritingCanvasView @JvmOverloads constructor(
         }
 
         canvas.restore()
+
+        // Draw recording indicator (screen-space, not scrolled)
+        if (lectureRecording && recordingDotVisible) {
+            val dotX = ScreenMetrics.dp(20f)
+            val dotY = ScreenMetrics.dp(20f)
+            val dotR = ScreenMetrics.dp(5f)
+            canvas.drawCircle(dotX, dotY, dotR, recordingDotPaint)
+            canvas.drawText("REC", dotX + dotR + ScreenMetrics.dp(6f), dotY + ScreenMetrics.dp(4f), recordingTextPaint)
+        }
 
         // Draw tutorial annotations on top of everything
         if (annotationStrokes.isNotEmpty() || textAnnotations.isNotEmpty()) {
