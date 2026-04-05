@@ -56,6 +56,7 @@ class CuePreviewView(context: Context) : View(context) {
     private var strokeMaxX = 0f
     private var strokeMaxY = 0f
     private var scale = 1f
+    private var originalCanvasWidth = 0f
 
     fun setStrokes(
         strokes: List<InkStroke>, previewWidth: Int,
@@ -64,6 +65,7 @@ class CuePreviewView(context: Context) : View(context) {
     ) {
         this.strokes = strokes
         this.textBlocks = textBlocks
+        this.originalCanvasWidth = canvasWidth
 
         val ls = HandwritingCanvasView.LINE_SPACING
         val tm = HandwritingCanvasView.TOP_MARGIN
@@ -140,8 +142,10 @@ class CuePreviewView(context: Context) : View(context) {
         val ls = HandwritingCanvasView.LINE_SPACING
         val tm = HandwritingCanvasView.TOP_MARGIN
         val textLeftMargin = ls * 0.3f
-        textBlockPaint.textSize = ScreenMetrics.textBody / scale
-        val textWidth = ((strokeMaxX - textLeftMargin).coerceAtLeast(1f)).toInt()
+        // Use original canvas text size and width so text wraps at the same
+        // points as on the canvas — the canvas scale transform shrinks it to fit.
+        textBlockPaint.textSize = ScreenMetrics.textBody
+        val textWidth = ((originalCanvasWidth - 2 * textLeftMargin).coerceAtLeast(1f)).toInt()
         for (block in textBlocks) {
             if (block.text.isBlank()) continue
             val layout = android.text.StaticLayout.Builder
