@@ -247,7 +247,7 @@ class WritingCoordinator(
                 columnModel.diagramAreas.remove(result.expandedFrom)
                 columnModel.diagramAreas.add(result.expandedTo!!)
                 inkCanvas.diagramAreas = columnModel.diagramAreas.toList()
-                for (line in result.expandedTo.startLineIndex..result.expandedTo.startLineIndex + result.expandedTo.heightInLines - 1) {
+                for (line in result.expandedTo.startLineIndex..result.expandedTo.endLineIndex) {
                     lineTextCache.remove(line)
                 }
                 Log.i(TAG, "Sticky zone: expanded diagram ${result.expandedFrom!!.startLineIndex}-${result.expandedFrom.endLineIndex} → ${result.expandedTo.startLineIndex}-${result.expandedTo.endLineIndex}")
