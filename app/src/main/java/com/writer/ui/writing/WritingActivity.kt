@@ -958,6 +958,7 @@ class WritingActivity : AppCompatActivity() {
             micButton.setImageResource(R.drawable.ic_mic)
             if (text.isNotBlank()) {
                 activeCoordinator?.insertTextBlock(text)
+                updateCueIndicatorStrip()
             }
             audioTranscriber = null
         }

@@ -595,7 +595,7 @@ class WritingCoordinator(
         val highestTextBlockLine = if (columnModel.textBlocks.isNotEmpty()) {
             columnModel.textBlocks.maxOf { it.endLineIndex }
         } else -1
-        val lineIndex = maxOf(highestStrokeLine, highestTextBlockLine, highestLineIndex) + 1
+        val lineIndex = maxOf(highestStrokeLine, highestTextBlockLine) + 1
 
         // Compute how many ruled lines the text occupies when word-wrapped
         val canvasWidth = inkCanvas.width.toFloat()
