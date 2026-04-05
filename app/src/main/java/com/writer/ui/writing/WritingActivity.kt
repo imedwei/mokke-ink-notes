@@ -1014,12 +1014,10 @@ class WritingActivity : AppCompatActivity() {
 
         // Note: MediaRecorder is NOT started here because it would conflict
         // with SpeechRecognizer for microphone access. Audio file recording
-        // will be added in a future phase using AudioRecord for shared access.
+        // Use WhisperTranscriber for lecture mode (better accuracy than SpeechRecognizer)
+        startWhisperLectureRecognition()
 
-        // Start continuous speech recognition
-        startLectureSpeechRecognition()
-
-        Toast.makeText(this, "Lecture capture started — tap mic to stop", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "Lecture capture started — downloading model if needed...", Toast.LENGTH_SHORT).show()
     }
 
     private fun startLectureSpeechRecognition() {
@@ -1080,6 +1078,34 @@ class WritingActivity : AppCompatActivity() {
                 android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
                     if (lectureMode) startLectureSpeechRecognition()
                 }, delayMs)
+            }
+        }
+
+        transcriber.start("en-US")
+    }
+
+    private fun startWhisperLectureRecognition() {
+        val transcriber = com.writer.recognition.WhisperTranscriber(this)
+        audioTranscriber = transcriber
+
+        transcriber.onPartialResult = { text ->
+            if (text.isNotBlank() && lectureMode) {
+                android.util.Log.i("WritingActivity", "Whisper partial: $text")
+            }
+        }
+
+        transcriber.onFinalResult = { text ->
+            if (text.isNotBlank() && lectureMode) {
+                android.util.Log.i("WritingActivity", "Whisper final: $text")
+                activeCoordinator?.insertTextBlock(text)
+                updateCueIndicatorStrip()
+            }
+        }
+
+        transcriber.onError = { _ ->
+            android.util.Log.w("WritingActivity", "Whisper error")
+            if (lectureMode) {
+                Toast.makeText(this, "Whisper transcription error", Toast.LENGTH_SHORT).show()
             }
         }
 

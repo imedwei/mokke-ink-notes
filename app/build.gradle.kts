@@ -21,6 +21,18 @@ android {
         testInstrumentationRunnerArguments["notAnnotation"] = "com.writer.recognition.DevTool"
         // Separate test APK package so connected tests don't replace the dev app
         testApplicationId = "com.writer.test"
+
+        externalNativeBuild {
+            cmake {
+                arguments("-DANDROID_STL=c++_shared")
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+        }
     }
 
     buildTypes {
