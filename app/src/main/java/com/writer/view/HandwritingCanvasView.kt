@@ -21,7 +21,9 @@ import com.onyx.android.sdk.data.note.TouchPoint
 import com.onyx.android.sdk.pen.RawInputCallback
 import com.onyx.android.sdk.pen.TouchHelper
 import com.onyx.android.sdk.pen.data.TouchPointList
+import android.text.TextPaint
 import com.writer.model.DiagramArea
+import com.writer.model.TextBlock
 import com.writer.ui.writing.DiagramStrokeClassifier
 import com.writer.ui.writing.SpaceInsertMode
 import com.writer.model.ColumnModel
@@ -86,6 +88,15 @@ class HandwritingCanvasView @JvmOverloads constructor(
 
     /** Diagram areas in the current document. */
     var diagramAreas: List<DiagramArea> = emptyList()
+
+    /** Text blocks (transcribed audio) in the current document. */
+    var textBlocks: List<TextBlock> = emptyList()
+
+    private val textBlockPaint = TextPaint().apply {
+        color = Color.BLACK
+        textSize = ScreenMetrics.textBody
+        isAntiAlias = false
+    }
 
     /** Column model reference for magnetic snap access. */
     var columnModel: ColumnModel? = null
@@ -1186,6 +1197,31 @@ class HandwritingCanvasView @JvmOverloads constructor(
             }
         }
 
+        // Draw text blocks (transcribed audio) at their line positions,
+        // with each wrapped line aligned to a ruled line on the canvas.
+        val textLeftMargin = LINE_SPACING * 0.3f
+        val textWidth = (canvasRight - 2 * textLeftMargin).toInt().coerceAtLeast(1)
+        for (block in textBlocks) {
+            if (block.text.isBlank()) continue
+            val blockShift = if (spaceInsertMode && spaceInsertDragActive &&
+                block.startLineIndex >= spaceInsertAnchorLine
+            ) previewShiftPx else 0f
+
+            // Build a StaticLayout for word wrapping
+            val layout = android.text.StaticLayout.Builder
+                .obtain(block.text, 0, block.text.length, textBlockPaint, textWidth)
+                .setAlignment(android.text.Layout.Alignment.ALIGN_NORMAL)
+                .build()
+
+            // Draw each wrapped line on its own ruled line
+            for (i in 0 until layout.lineCount) {
+                val lineText = block.text.substring(layout.getLineStart(i), layout.getLineEnd(i)).trimEnd()
+                val ruledLineIndex = block.startLineIndex + i
+                val baselineY = TOP_MARGIN + ruledLineIndex * LINE_SPACING + LINE_SPACING * 0.65f + blockShift
+                canvas.drawText(lineText, textLeftMargin, baselineY, textBlockPaint)
+            }
+        }
+
         // Draw space-insert mode: dashed line boundaries (skip inside diagram areas)
         if (spaceInsertMode) {
             var handleY = TOP_MARGIN + LINE_SPACING
@@ -1374,6 +1410,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
         scrollOffsetY = 0f
         textOverscroll = 0f
         diagramAreas = emptyList()
+        textBlocks = emptyList()
         handler.removeCallbacks(idleRunnable)
         drawToSurface()
     }

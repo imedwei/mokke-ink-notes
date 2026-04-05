@@ -216,7 +216,9 @@ class WritingCoordinator(
         userRenamed = false
         columnModel.activeStrokes.clear()
         columnModel.diagramAreas.clear()
+        columnModel.textBlocks.clear()
         inkCanvas.diagramAreas = emptyList()
+        inkCanvas.textBlocks = emptyList()
     }
 
     private fun onStrokeCompleted(stroke: InkStroke) {
@@ -405,6 +407,7 @@ class WritingCoordinator(
         lineTextCache.keys.filter { it >= anchorLine }.forEach { lineTextCache.remove(it) }
         inkCanvas.loadStrokes(columnModel.activeStrokes.toList())
         inkCanvas.diagramAreas = columnModel.diagramAreas.toList()
+        inkCanvas.textBlocks = columnModel.textBlocks.toList()
         displayManager.clearEverHiddenLines()
         displayManager.displayHiddenLines()
     }
@@ -467,6 +470,7 @@ class WritingCoordinator(
         diagramManager.clearTextCache()
         rebuildDiagramNodes(snapshot.strokes)
         inkCanvas.diagramAreas = snapshot.diagramAreas
+        inkCanvas.textBlocks = snapshot.textBlocks
         inkCanvas.loadStrokes(snapshot.strokes)
 
         val scrollDecision = UndoScrollCalculator.computeScroll(
@@ -595,6 +599,8 @@ class WritingCoordinator(
         )
         saveSnapshot(UndoCoalescer.ActionType.STROKE_ADDED, lineIndex)
         columnModel.textBlocks.add(block)
+        inkCanvas.textBlocks = columnModel.textBlocks.toList()
+        inkCanvas.drawToSurface()
         displayManager.displayHiddenLines()
         onUndoRedoStateChanged?.invoke()
     }
@@ -608,6 +614,7 @@ class WritingCoordinator(
         columnModel.textBlocks.clear()
         columnModel.textBlocks.addAll(col.textBlocks)
         inkCanvas.diagramAreas = col.diagramAreas
+        inkCanvas.textBlocks = col.textBlocks
         rebuildDiagramNodes(columnModel.activeStrokes)
         displayManager.displayHiddenLines()
     }
