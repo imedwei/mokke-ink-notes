@@ -203,13 +203,21 @@ class WhisperTranscriber(private val context: Context) : AudioTranscriber {
     private fun transcribe(samples: FloatArray): String {
         if (whisperPtr == 0L) return ""
         val threads = Runtime.getRuntime().availableProcessors().coerceIn(2, 4)
+        val startMs = System.currentTimeMillis()
         WhisperLib.fullTranscribe(whisperPtr, threads, samples)
+        val elapsedMs = System.currentTimeMillis() - startMs
         val segmentCount = WhisperLib.getTextSegmentCount(whisperPtr)
-        return buildString {
+        val result = buildString {
             for (i in 0 until segmentCount) {
                 append(WhisperLib.getTextSegment(whisperPtr, i))
             }
         }
+        val audioDurationSec = samples.size / WHISPER_SAMPLE_RATE.toFloat()
+        Log.i(tag, "Transcribed %.1fs audio in %dms (%.1fx realtime): %d segments, \"%s\"".format(
+            audioDurationSec, elapsedMs, elapsedMs / 1000f / audioDurationSec,
+            segmentCount, result.take(80)
+        ))
+        return result
     }
 
     /** Download the whisper model if not already cached. Returns the file path. */
@@ -279,12 +287,12 @@ class WhisperTranscriber(private val context: Context) : AudioTranscriber {
 
     companion object {
         private const val WHISPER_SAMPLE_RATE = 16000
-        private const val CHUNK_SECONDS = 5 // Transcribe every N seconds
+        private const val CHUNK_SECONDS = 10 // Transcribe every N seconds
 
-        // ggml-base.en model (~75 MB) — best balance of size and quality for English
-        private const val MODEL_FILENAME = "ggml-base.en.bin"
+        // ggml-tiny.en model (~39 MB) — fastest model, suitable for e-ink tablet CPUs
+        private const val MODEL_FILENAME = "ggml-tiny.en.bin"
         private const val MODEL_URL =
-            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin"
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin"
 
         fun isAvailable(): Boolean = try {
             WhisperLib // Triggers native library load
