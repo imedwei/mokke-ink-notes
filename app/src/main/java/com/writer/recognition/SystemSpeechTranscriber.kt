@@ -22,6 +22,8 @@ class SystemSpeechTranscriber(private val context: Context) : AudioTranscriber {
     override var onPartialResult: ((String) -> Unit)? = null
     override var onFinalResult: ((String) -> Unit)? = null
     override var onError: ((Int) -> Unit)? = null
+    /** Called with RMS dB level on each audio frame — use for quality monitoring. */
+    var onRmsChanged: ((Float) -> Unit)? = null
     override var isListening: Boolean = false
         private set
 
@@ -40,7 +42,9 @@ class SystemSpeechTranscriber(private val context: Context) : AudioTranscriber {
                 Log.d(tag, "Speech started")
             }
 
-            override fun onRmsChanged(rmsdB: Float) {}
+            override fun onRmsChanged(rmsdB: Float) {
+                onRmsChanged?.invoke(rmsdB)
+            }
             override fun onBufferReceived(buffer: ByteArray?) {}
 
             override fun onEndOfSpeech() {

@@ -94,6 +94,8 @@ class WritingActivity : AppCompatActivity() {
     private var audioCaptureManager: com.writer.audio.AudioCaptureManager? = null
     private var lectureMode = false
     private var lectureRecordingStartMs = 0L
+    private val audioQualityMonitor = com.writer.audio.AudioQualityMonitor()
+    private var audioQualityWarned = false
 
     /** True while the stylus is actively drawing — reject finger taps on gutter. */
     private fun isPenBusy(): Boolean =
@@ -1001,6 +1003,8 @@ class WritingActivity : AppCompatActivity() {
 
         lectureMode = true
         lectureRecordingStartMs = System.currentTimeMillis()
+        audioQualityMonitor.reset()
+        audioQualityWarned = false
         micButton.setImageResource(R.drawable.ic_mic_active)
         inkCanvas.lectureRecording = true
 
@@ -1044,6 +1048,14 @@ class WritingActivity : AppCompatActivity() {
                 android.os.Handler(android.os.Looper.getMainLooper()).post {
                     if (lectureMode) startLectureSpeechRecognition()
                 }
+            }
+        }
+
+        transcriber.onRmsChanged = { rmsdB ->
+            audioQualityMonitor.onRmsChanged(rmsdB)
+            if (audioQualityMonitor.shouldWarn && !audioQualityWarned) {
+                audioQualityWarned = true
+                Toast.makeText(this, audioQualityMonitor.qualityMessage, Toast.LENGTH_LONG).show()
             }
         }
 
