@@ -586,9 +586,16 @@ class WritingCoordinator(
         userRenamed = data.userRenamed
     }
 
-    /** Insert a transcribed text block at the current line position. */
+    /** Insert a transcribed text block after all existing content. */
     fun insertTextBlock(text: String, audioFile: String = "", startMs: Long = 0, endMs: Long = 0) {
-        val lineIndex = if (currentLineIndex >= 0) currentLineIndex else 0
+        // Place after the highest stroke or text block content
+        val highestStrokeLine = if (columnModel.activeStrokes.isNotEmpty()) {
+            columnModel.activeStrokes.maxOf { lineSegmenter.getStrokeLineIndex(it) }
+        } else -1
+        val highestTextBlockLine = if (columnModel.textBlocks.isNotEmpty()) {
+            columnModel.textBlocks.maxOf { it.endLineIndex }
+        } else -1
+        val lineIndex = maxOf(highestStrokeLine, highestTextBlockLine, highestLineIndex) + 1
         val block = TextBlock(
             startLineIndex = lineIndex,
             heightInLines = 1,
