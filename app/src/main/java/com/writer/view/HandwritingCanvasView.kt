@@ -1213,11 +1213,13 @@ class HandwritingCanvasView @JvmOverloads constructor(
                 .setAlignment(android.text.Layout.Alignment.ALIGN_NORMAL)
                 .build()
 
-            // Draw each wrapped line on its own ruled line
+            // Draw each wrapped line with its baseline on the ruled line.
+            // Ruled line is at TOP_MARGIN + (lineIndex+1) * LINE_SPACING.
+            // Descenders naturally hang below the baseline (below the ruled line).
             for (i in 0 until layout.lineCount) {
                 val lineText = block.text.substring(layout.getLineStart(i), layout.getLineEnd(i)).trimEnd()
                 val ruledLineIndex = block.startLineIndex + i
-                val baselineY = TOP_MARGIN + ruledLineIndex * LINE_SPACING + LINE_SPACING * 0.65f + blockShift
+                val baselineY = TOP_MARGIN + (ruledLineIndex + 1) * LINE_SPACING + blockShift
                 canvas.drawText(lineText, textLeftMargin, baselineY, textBlockPaint)
             }
         }
