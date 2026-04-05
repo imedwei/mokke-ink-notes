@@ -1088,6 +1088,10 @@ class WritingActivity : AppCompatActivity() {
         val transcriber = com.writer.recognition.WhisperTranscriber(this)
         audioTranscriber = transcriber
 
+        transcriber.onStatusUpdate = { status ->
+            Toast.makeText(this, status, Toast.LENGTH_SHORT).show()
+        }
+
         transcriber.onPartialResult = { text ->
             if (text.isNotBlank() && lectureMode) {
                 android.util.Log.i("WritingActivity", "Whisper partial: $text")

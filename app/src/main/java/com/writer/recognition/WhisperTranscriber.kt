@@ -31,6 +31,8 @@ class WhisperTranscriber(private val context: Context) : AudioTranscriber {
     override var onPartialResult: ((String) -> Unit)? = null
     override var onFinalResult: ((String) -> Unit)? = null
     override var onError: ((Int) -> Unit)? = null
+    /** Status updates for model download progress, initialization, etc. */
+    var onStatusUpdate: ((String) -> Unit)? = null
     override var isListening: Boolean = false
         private set
 
@@ -40,9 +42,13 @@ class WhisperTranscriber(private val context: Context) : AudioTranscriber {
 
         CoroutineScope(Dispatchers.IO).launch {
             try {
+                withContext(Dispatchers.Main) {
+                    onStatusUpdate?.invoke("Preparing whisper model...")
+                }
                 val modelPath = ensureModel()
                 if (modelPath == null) {
                     withContext(Dispatchers.Main) {
+                        onStatusUpdate?.invoke("Model download failed")
                         onError?.invoke(-1)
                         isListening = false
                     }
@@ -50,18 +56,25 @@ class WhisperTranscriber(private val context: Context) : AudioTranscriber {
                 }
 
                 // Initialize whisper context on the whisper thread
+                withContext(Dispatchers.Main) {
+                    onStatusUpdate?.invoke("Loading whisper model...")
+                }
                 whisperPtr = withContext(scope.coroutineContext) {
                     WhisperLib.initContext(modelPath)
                 }
                 if (whisperPtr == 0L) {
                     Log.e(tag, "Failed to initialize whisper context")
                     withContext(Dispatchers.Main) {
+                        onStatusUpdate?.invoke("Failed to load model")
                         onError?.invoke(-1)
                         isListening = false
                     }
                     return@launch
                 }
                 Log.i(tag, "Whisper context initialized")
+                withContext(Dispatchers.Main) {
+                    onStatusUpdate?.invoke("Listening...")
+                }
 
                 // Start recording
                 withContext(Dispatchers.Main) {
@@ -219,12 +232,34 @@ class WhisperTranscriber(private val context: Context) : AudioTranscriber {
         Log.i(tag, "Downloading whisper model ($MODEL_FILENAME)...")
         try {
             val url = URL(MODEL_URL)
-            url.openStream().use { input ->
+            val connection = url.openConnection()
+            val totalBytes = connection.contentLengthLong
+            connection.getInputStream().use { input ->
                 modelFile.outputStream().use { output ->
-                    input.copyTo(output)
+                    val buffer = ByteArray(8192)
+                    var downloaded = 0L
+                    var lastReportPercent = -1
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read == -1) break
+                        output.write(buffer, 0, read)
+                        downloaded += read
+                        if (totalBytes > 0) {
+                            val percent = (downloaded * 100 / totalBytes).toInt()
+                            if (percent != lastReportPercent && percent % 10 == 0) {
+                                lastReportPercent = percent
+                                withContext(Dispatchers.Main) {
+                                    onStatusUpdate?.invoke("Downloading model: $percent%")
+                                }
+                            }
+                        }
+                    }
                 }
             }
             Log.i(tag, "Model downloaded: ${modelFile.length()} bytes")
+            withContext(Dispatchers.Main) {
+                onStatusUpdate?.invoke("Model downloaded")
+            }
             modelFile.absolutePath
         } catch (e: Exception) {
             Log.e(tag, "Failed to download model", e)
