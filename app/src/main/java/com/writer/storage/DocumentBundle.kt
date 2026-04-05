@@ -75,6 +75,11 @@ object DocumentBundle {
                     }
                     entry.name.startsWith(AUDIO_PREFIX) && !entry.isDirectory -> {
                         val audioName = entry.name.removePrefix(AUDIO_PREFIX)
+                        if (audioName.contains("..") || audioName.contains("/")) {
+                            zip.closeEntry()
+                            entry = zip.nextEntry
+                            continue
+                        }
                         audioFiles[audioName] = zip.readBytes()
                     }
                 }

@@ -597,10 +597,11 @@ class WritingCoordinator(
         } else -1
         val lineIndex = maxOf(highestStrokeLine, highestTextBlockLine) + 1
 
-        // Compute how many ruled lines the text occupies when word-wrapped
-        val canvasWidth = inkCanvas.width.toFloat()
+        // Compute how many ruled lines the text occupies when word-wrapped.
+        // Use a sensible default if the canvas hasn't been laid out yet.
+        val canvasWidth = inkCanvas.width.toFloat().takeIf { it > 0 } ?: 800f
         val textLeftMargin = HandwritingCanvasView.LINE_SPACING * 0.3f
-        val textWidth = (canvasWidth - 2 * textLeftMargin).toInt().coerceAtLeast(1)
+        val textWidth = (canvasWidth - 2 * textLeftMargin).toInt().coerceAtLeast(100)
         val textPaint = android.text.TextPaint().apply {
             textSize = com.writer.view.ScreenMetrics.textBody
         }

@@ -50,7 +50,7 @@ object DocumentStorage {
         return File(docsDir(context), "$name.json")
     }
 
-    private fun mokkeFile(context: Context, name: String): File {
+    private fun mokFile(context: Context, name: String): File {
         return File(docsDir(context), "$name.$MOKKE_EXT")
     }
 
@@ -83,7 +83,7 @@ object DocumentStorage {
         audioFiles: Map<String, ByteArray> = emptyMap()
     ): Boolean {
         try {
-            val file = mokkeFile(context, name)
+            val file = mokFile(context, name)
             val atomicFile = AtomicFile(file)
 
             // AtomicFile handles tmp-write + rename atomically,
@@ -117,10 +117,10 @@ object DocumentStorage {
     fun loadBundle(context: Context, name: String): BundleResult? {
         // Try .mok first, then legacy .inkup, then legacy .json
         try {
-            val mokke = mokkeFile(context, name)
-            val mokkeBackup = File(mokke.parent, "${mokke.name}.new")
-            if (mokke.exists() || mokkeBackup.exists()) {
-                val bytes = AtomicFile(mokke).readFully()
+            val mok = mokFile(context, name)
+            val mokBackup = File(mok.parent, "${mok.name}.new")
+            if (mok.exists() || mokBackup.exists()) {
+                val bytes = AtomicFile(mok).readFully()
                 val result = DocumentBundle.read(bytes)
                 Log.i(TAG, "Loaded ${result.data.main.strokes.size} strokes from $name.$MOKKE_EXT")
                 return result
@@ -175,14 +175,14 @@ object DocumentStorage {
     data class SearchMatch(val lineIndex: Int, val text: String)
 
     fun delete(context: Context, name: String): Boolean {
-        val mokke = mokkeFile(context, name)
+        val mok = mokFile(context, name)
         val inkup = legacyInkupFile(context, name)
         val json = docFile(context, name)
         // AtomicFile.delete() removes the base file and its .new backup
-        AtomicFile(mokke).delete()
+        AtomicFile(mok).delete()
         AtomicFile(inkup).delete()
         val deletedJson = json.delete()
-        val deletedAny = !mokke.exists() || !inkup.exists() || deletedJson
+        val deletedAny = !mok.exists() || !inkup.exists() || deletedJson
         if (deletedAny) {
             GlobalScope.launch(Dispatchers.IO) {
                 SearchIndexManager.removeDocument(context, name)
@@ -193,10 +193,10 @@ object DocumentStorage {
 
     /** Check if a document exists in any format (.mok, .inkup, or .json). */
     private fun docExists(context: Context, name: String): Boolean {
-        val mokke = mokkeFile(context, name)
+        val mok = mokFile(context, name)
         val inkup = legacyInkupFile(context, name)
-        return mokke.exists() ||
-            File(mokke.parent, "${mokke.name}.new").exists() ||
+        return mok.exists() ||
+            File(mok.parent, "${mok.name}.new").exists() ||
             inkup.exists() ||
             File(inkup.parent, "${inkup.name}.new").exists() ||
             docFile(context, name).exists()
@@ -240,7 +240,7 @@ object DocumentStorage {
     /** Rename a document file on disk. Returns true on success. */
     fun rename(context: Context, oldName: String, newName: String): Boolean {
         // Rename .mok file if it exists, else .inkup, else .json
-        val oldMokke = mokkeFile(context, oldName)
+        val oldMokke = mokFile(context, oldName)
         val oldInkup = legacyInkupFile(context, oldName)
         val oldJson = docFile(context, oldName)
         val source = when {
@@ -276,12 +276,12 @@ object DocumentStorage {
             val folder = DocumentFile.fromTreeUri(context, syncFolderUri) ?: return
 
             // Write .mok file (ZIP bundle)
-            val mokkeFileName = "$name.$MOKKE_EXT"
-            val existingMokke = folder.findFile(mokkeFileName)
-            val mokkeSyncFile = existingMokke
-                ?: folder.createFile("application/octet-stream", mokkeFileName)
-            if (mokkeSyncFile != null) {
-                context.contentResolver.openOutputStream(mokkeSyncFile.uri, "wt")?.use { out ->
+            val mokFileName = "$name.$MOKKE_EXT"
+            val existingMokke = folder.findFile(mokFileName)
+            val mokSyncFile = existingMokke
+                ?: folder.createFile("application/octet-stream", mokFileName)
+            if (mokSyncFile != null) {
+                context.contentResolver.openOutputStream(mokSyncFile.uri, "wt")?.use { out ->
                     DocumentBundle.writeZip(out, data, audioFiles)
                 }
             }
