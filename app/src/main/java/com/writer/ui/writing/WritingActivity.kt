@@ -89,6 +89,8 @@ class WritingActivity : AppCompatActivity() {
     private lateinit var undoButton: ImageView
     private lateinit var redoButton: ImageView
     private lateinit var spaceInsertButton: ImageView
+    private lateinit var micButton: ImageView
+    private var audioTranscriber: com.writer.recognition.AudioTranscriber? = null
 
     /** True while the stylus is actively drawing — reject finger taps on gutter. */
     private fun isPenBusy(): Boolean =
@@ -171,6 +173,17 @@ class WritingActivity : AppCompatActivity() {
         inkCanvas.resumeRawDrawing()
     }
 
+    // Audio recording permission
+    private val requestAudioPermission = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            startVoiceMemo()
+        } else {
+            Toast.makeText(this, "Microphone permission required for voice memo", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -248,11 +261,12 @@ class WritingActivity : AppCompatActivity() {
         undoButton = findViewById(R.id.undoButton)
         redoButton = findViewById(R.id.redoButton)
         spaceInsertButton = findViewById(R.id.spaceInsertButton)
+        micButton = findViewById(R.id.micButton)
         viewToggleButton = findViewById(R.id.viewToggleButton)
         val rotateButton = findViewById<ImageView>(R.id.rotateButton)
         orientationManager = OrientationManager(this, rotateButton)
 
-        for (btn in listOf(menuButton, undoButton, redoButton, spaceInsertButton, viewToggleButton, rotateButton)) {
+        for (btn in listOf(menuButton, undoButton, redoButton, spaceInsertButton, micButton, viewToggleButton, rotateButton)) {
             btn.setOnTouchListener(palmGuard)
         }
 
@@ -262,6 +276,7 @@ class WritingActivity : AppCompatActivity() {
         undoButton.setOnClickListener { debounceUndoRedo { activeCoordinator?.undo(); updateUndoRedoButtons() } }
         redoButton.setOnClickListener { debounceUndoRedo { activeCoordinator?.redo(); updateUndoRedoButtons() } }
         spaceInsertButton.setOnClickListener { inkCanvas.spaceInsertMode = !inkCanvas.spaceInsertMode }
+        micButton.setOnClickListener { toggleVoiceMemo() }
         viewToggleButton.setOnClickListener { toggleNotesCues() }
         rotateButton.setOnClickListener { orientationManager.toggleOrientation() }
 
@@ -907,6 +922,52 @@ class WritingActivity : AppCompatActivity() {
             putExtra(SaveAsActivity.EXTRA_CURRENT_NAME, currentDocumentName)
         }
         renameLauncher.launch(intent)
+    }
+
+    // --- Voice Memo ---
+
+    private fun toggleVoiceMemo() {
+        val transcriber = audioTranscriber
+        if (transcriber != null && transcriber.isListening) {
+            transcriber.stop()
+            micButton.setImageResource(R.drawable.ic_mic)
+            return
+        }
+
+        // Check permission
+        if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)
+            != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            requestAudioPermission.launch(android.Manifest.permission.RECORD_AUDIO)
+            return
+        }
+
+        startVoiceMemo()
+    }
+
+    private fun startVoiceMemo() {
+        if (!com.writer.recognition.SystemSpeechTranscriber.isAvailable(this)) {
+            Toast.makeText(this, "Speech recognition not available", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val transcriber = com.writer.recognition.SystemSpeechTranscriber(this)
+        audioTranscriber = transcriber
+        micButton.setImageResource(R.drawable.ic_mic_active)
+
+        transcriber.onFinalResult = { text ->
+            micButton.setImageResource(R.drawable.ic_mic)
+            if (text.isNotBlank()) {
+                activeCoordinator?.insertTextBlock(text)
+            }
+            audioTranscriber = null
+        }
+
+        transcriber.onError = { _ ->
+            micButton.setImageResource(R.drawable.ic_mic)
+            audioTranscriber = null
+        }
+
+        transcriber.start("en-US")
     }
 
     // --- Menu ---
@@ -1726,5 +1787,7 @@ popupView.findViewById<android.view.View>(R.id.menuTutorial).setOnClickListener 
         coordinator?.stop()
         cueCoordinator?.stop()
         recognizer.close()
+        audioTranscriber?.close()
+        audioTranscriber = null
     }
 }

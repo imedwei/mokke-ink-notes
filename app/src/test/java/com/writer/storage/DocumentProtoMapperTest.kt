@@ -1,11 +1,13 @@
 package com.writer.storage
 
+import com.writer.model.AudioRecording
 import com.writer.model.ColumnData
 import com.writer.model.DiagramArea
 import com.writer.model.DocumentData
 import com.writer.model.InkStroke
 import com.writer.model.StrokePoint
 import com.writer.model.StrokeType
+import com.writer.model.TextBlock
 import com.writer.model.proto.DocumentProto
 import com.writer.view.ScreenMetrics
 import org.junit.Assert.assertEquals
@@ -364,5 +366,99 @@ class DocumentProtoMapperTest {
         assertEquals(77f, result.main.strokes[0].points[0].x, 0.001f)
         assertEquals(300f, result.main.strokes[0].points[0].y, 0.001f)
         assertEquals(100f, result.scrollOffsetY, 0.001f)
+    }
+
+    // ── TextBlock round-trip ────────────────────────────────────────────
+
+    @Test
+    fun textBlocks_surviveRoundTrip() {
+        val blocks = listOf(
+            TextBlock(id = "tb-1", startLineIndex = 2, heightInLines = 3,
+                text = "hello world", audioFile = "rec-001.opus",
+                audioStartMs = 1000L, audioEndMs = 5000L),
+            TextBlock(id = "tb-2", startLineIndex = 8, heightInLines = 1, text = "quick memo")
+        )
+        val data = DocumentData(main = ColumnData(textBlocks = blocks))
+        val result = roundTrip(data)
+        assertEquals(2, result.main.textBlocks.size)
+        with(result.main.textBlocks[0]) {
+            assertEquals("tb-1", id)
+            assertEquals(2, startLineIndex)
+            assertEquals(3, heightInLines)
+            assertEquals("hello world", text)
+            assertEquals("rec-001.opus", audioFile)
+            assertEquals(1000L, audioStartMs)
+            assertEquals(5000L, audioEndMs)
+        }
+        with(result.main.textBlocks[1]) {
+            assertEquals("tb-2", id)
+            assertEquals(8, startLineIndex)
+            assertEquals(1, heightInLines)
+            assertEquals("quick memo", text)
+            assertEquals("", audioFile)
+        }
+    }
+
+    @Test
+    fun emptyTextBlocks_backwardCompatible() {
+        val data = DocumentData(main = ColumnData(strokes = listOf(
+            InkStroke("s1", samplePoints(), 3f)
+        )))
+        val result = roundTrip(data)
+        assertEquals(0, result.main.textBlocks.size)
+        assertEquals(1, result.main.strokes.size)
+    }
+
+    // ── AudioRecording round-trip ───────────────────────────────────────
+
+    @Test
+    fun audioRecordings_surviveRoundTrip() {
+        val recordings = listOf(
+            AudioRecording(audioFile = "rec-001.opus", startTimeMs = 1700000000000L, durationMs = 60000L),
+            AudioRecording(audioFile = "rec-002.opus", startTimeMs = 1700000060000L, durationMs = 30000L)
+        )
+        val data = DocumentData(main = ColumnData(), audioRecordings = recordings)
+        val result = roundTrip(data)
+        assertEquals(2, result.audioRecordings.size)
+        with(result.audioRecordings[0]) {
+            assertEquals("rec-001.opus", audioFile)
+            assertEquals(1700000000000L, startTimeMs)
+            assertEquals(60000L, durationMs)
+        }
+        with(result.audioRecordings[1]) {
+            assertEquals("rec-002.opus", audioFile)
+            assertEquals(1700000060000L, startTimeMs)
+            assertEquals(30000L, durationMs)
+        }
+    }
+
+    @Test
+    fun emptyAudioRecordings_backwardCompatible() {
+        val data = DocumentData(main = ColumnData())
+        val result = roundTrip(data)
+        assertEquals(0, result.audioRecordings.size)
+    }
+
+    @Test
+    fun fullDocument_withTextBlocksAndRecordings() {
+        val data = DocumentData(
+            main = ColumnData(
+                strokes = listOf(InkStroke("s1", samplePoints(), 3f)),
+                lineTextCache = mapOf(0 to "written text"),
+                diagramAreas = listOf(DiagramArea(id = "d1", startLineIndex = 5, heightInLines = 3)),
+                textBlocks = listOf(TextBlock(id = "tb-1", startLineIndex = 10, heightInLines = 2, text = "transcribed"))
+            ),
+            audioRecordings = listOf(AudioRecording(audioFile = "rec-001.opus", startTimeMs = 1000L, durationMs = 5000L)),
+            scrollOffsetY = 50f,
+            userRenamed = true
+        )
+        val result = roundTrip(data)
+        assertEquals(1, result.main.strokes.size)
+        assertEquals(1, result.main.diagramAreas.size)
+        assertEquals(1, result.main.textBlocks.size)
+        assertEquals("transcribed", result.main.textBlocks[0].text)
+        assertEquals(1, result.audioRecordings.size)
+        assertEquals("rec-001.opus", result.audioRecordings[0].audioFile)
+        assertTrue(result.userRenamed)
     }
 }

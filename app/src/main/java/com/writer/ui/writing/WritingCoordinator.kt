@@ -8,6 +8,7 @@ import com.writer.model.DocumentModel
 import com.writer.model.InkStroke
 import com.writer.model.StrokePoint
 import com.writer.model.StrokeType
+import com.writer.model.TextBlock
 import com.writer.model.minX
 import com.writer.model.minY
 import com.writer.model.maxX
@@ -419,7 +420,7 @@ class WritingCoordinator(
 
     fun getMarkdownBlocks(): List<MarkdownExporter.MdBlock> = MarkdownExporter.buildBlocks(
         lineTextCache, columnModel.activeStrokes, columnModel.diagramAreas,
-        inkCanvas.width.toFloat(), paragraphBuilder, lineSegmenter,
+        columnModel.textBlocks, inkCanvas.width.toFloat(), paragraphBuilder, lineSegmenter,
         isDiagramLine = { diagramManager.isDiagramLine(it) }
     )
 
@@ -461,6 +462,8 @@ class WritingCoordinator(
         columnModel.activeStrokes.addAll(snapshot.strokes)
         columnModel.diagramAreas.clear()
         columnModel.diagramAreas.addAll(snapshot.diagramAreas)
+        columnModel.textBlocks.clear()
+        columnModel.textBlocks.addAll(snapshot.textBlocks)
         diagramManager.clearTextCache()
         rebuildDiagramNodes(snapshot.strokes)
         inkCanvas.diagramAreas = snapshot.diagramAreas
@@ -485,7 +488,8 @@ class WritingCoordinator(
         strokes = columnModel.activeStrokes.toList(),
         scrollOffsetY = inkCanvas.scrollOffsetY,
         lineTextCache = lineTextCache.toMap(),
-        diagramAreas = columnModel.diagramAreas.toList()
+        diagramAreas = columnModel.diagramAreas.toList(),
+        textBlocks = columnModel.textBlocks.toList()
     )
 
     fun canUndo(): Boolean = undoManager.canUndo()
@@ -556,7 +560,8 @@ class WritingCoordinator(
             strokes = inkCanvas.getStrokes(),
             lineTextCache = lineTextCache.toMap(),
             everHiddenLines = displayManager.getEverHiddenLinesSnapshot(),
-            diagramAreas = columnModel.diagramAreas.toList()
+            diagramAreas = columnModel.diagramAreas.toList(),
+            textBlocks = columnModel.textBlocks.toList()
         )
     }
 
@@ -577,12 +582,32 @@ class WritingCoordinator(
         userRenamed = data.userRenamed
     }
 
+    /** Insert a transcribed text block at the current line position. */
+    fun insertTextBlock(text: String, audioFile: String = "", startMs: Long = 0, endMs: Long = 0) {
+        val lineIndex = if (currentLineIndex >= 0) currentLineIndex else 0
+        val block = TextBlock(
+            startLineIndex = lineIndex,
+            heightInLines = 1,
+            text = text,
+            audioFile = audioFile,
+            audioStartMs = startMs,
+            audioEndMs = endMs
+        )
+        saveSnapshot(UndoCoalescer.ActionType.STROKE_ADDED, lineIndex)
+        columnModel.textBlocks.add(block)
+        lineTextCache[lineIndex] = text
+        displayManager.displayHiddenLines()
+        onUndoRedoStateChanged?.invoke()
+    }
+
     /** Restore state for this coordinator's column from a ColumnData snapshot. */
     fun restoreColumnState(col: ColumnData) {
         lineTextCache.putAll(col.lineTextCache)
         displayManager.addEverHiddenLines(col.everHiddenLines)
         columnModel.diagramAreas.clear()
         columnModel.diagramAreas.addAll(col.diagramAreas)
+        columnModel.textBlocks.clear()
+        columnModel.textBlocks.addAll(col.textBlocks)
         inkCanvas.diagramAreas = col.diagramAreas
         rebuildDiagramNodes(columnModel.activeStrokes)
         displayManager.displayHiddenLines()

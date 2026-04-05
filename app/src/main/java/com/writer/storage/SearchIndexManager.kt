@@ -187,9 +187,10 @@ object SearchIndexManager {
             val files = docsDir.listFiles() ?: return
             val seen = mutableSetOf<String>()
 
-            // Index .inkup files first (preferred format)
-            for (file in files.filter { it.extension == "inkup" }) {
+            // Index .mok files first (preferred), then legacy .inkup
+            for (file in files.filter { it.extension == "mok" || it.extension == "inkup" }) {
                 val name = file.nameWithoutExtension
+                if (name in seen) continue
                 seen.add(name)
                 val data = DocumentStorage.load(context, name) ?: continue
                 indexDocument(context, name, data)

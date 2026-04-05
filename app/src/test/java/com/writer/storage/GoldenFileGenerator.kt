@@ -1,11 +1,13 @@
 package com.writer.storage
 
+import com.writer.model.AudioRecording
 import com.writer.model.ColumnData
 import com.writer.model.DiagramArea
 import com.writer.model.DocumentData
 import com.writer.model.InkStroke
 import com.writer.model.StrokePoint
 import com.writer.model.StrokeType
+import com.writer.model.TextBlock
 import com.writer.model.proto.DocumentProto
 import com.writer.view.ScreenMetrics
 import org.junit.Assume
@@ -32,6 +34,9 @@ class GoldenFileGeneratorRunner {
         val bytes = when (version) {
             "v1" -> GoldenFileGenerator.buildV1Document().toProto().encode()
             "v2" -> GoldenFileGenerator.buildV2Proto().encode()
+            "v5" -> GoldenFileGenerator.buildV5Proto().encode()
+            // v3 and v4 golden files are fixed on disk — do not regenerate.
+            // The else branch uses the latest schema (currently v5).
             else -> GoldenFileGenerator.buildCurrentProto().encode()
         }
         val file = File(outputDir, "document_$version.inkup")
@@ -61,13 +66,21 @@ object GoldenFileGenerator {
     // document_v3.inkup is the backward-compatibility contract.
 
     /**
+     * v5: adds TextBlocks and AudioRecordings to the document.
+     */
+    fun buildV5Proto(): DocumentProto {
+        ScreenMetrics.init(1.875f, smallestWidthDp = 674, widthPixels = 1264, heightPixels = 1680)
+        return buildV5Document().toProto()
+    }
+
+    /**
      * Build a golden proto using the current schema. When adding a new schema
      * version, just update the proto definition — this generator always uses
      * the latest toProto() serialization.
      */
     fun buildCurrentProto(): DocumentProto {
         ScreenMetrics.init(1.875f, smallestWidthDp = 674, widthPixels = 1264, heightPixels = 1680)
-        return buildV1Document().toProto()
+        return buildV5Document().toProto()
     }
 
     fun buildV1Document() = DocumentData(
@@ -124,4 +137,36 @@ object GoldenFileGenerator {
         currentLineIndex = 5,
         userRenamed = true
     )
+
+    fun buildV5Document(): DocumentData {
+        val v1 = buildV1Document()
+        return v1.copy(
+            main = v1.main.copy(
+                textBlocks = listOf(
+                    TextBlock(
+                        id = "proto-text-block-1",
+                        startLineIndex = 10,
+                        heightInLines = 2,
+                        text = "transcribed lecture text",
+                        audioFile = "rec-001.opus",
+                        audioStartMs = 5000L,
+                        audioEndMs = 15000L
+                    ),
+                    TextBlock(
+                        id = "proto-text-block-2",
+                        startLineIndex = 15,
+                        heightInLines = 1,
+                        text = "quick voice memo"
+                    )
+                )
+            ),
+            audioRecordings = listOf(
+                AudioRecording(
+                    audioFile = "rec-001.opus",
+                    startTimeMs = 1700000000000L,
+                    durationMs = 60000L
+                )
+            )
+        )
+    }
 }

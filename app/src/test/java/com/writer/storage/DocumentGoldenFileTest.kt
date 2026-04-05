@@ -289,6 +289,66 @@ class DocumentGoldenFileTest {
         assertEquals(1000L, stroke.stroke_timestamp)
     }
 
+    // ── Protobuf v5 (.inkup) — TextBlocks and AudioRecordings ─────────────
+
+    @Test
+    fun protoV5_loadsAllData() {
+        val bytes = loadResource("document_v5.inkup")
+        val proto = DocumentProto.ADAPTER.decode(bytes)
+        val data = proto.toDomain()
+
+        // Existing v1 data still present
+        assertEquals(75.5f, data.scrollOffsetY, 0.5f)
+        assertEquals(3, data.main.strokes.size)
+        assertEquals("proto-stroke-1", data.main.strokes[0].strokeId)
+        assertEquals("proto hello", data.main.lineTextCache[0])
+        assertEquals(1, data.main.diagramAreas.size)
+        assertTrue(data.userRenamed)
+
+        // TextBlocks
+        assertEquals(2, data.main.textBlocks.size)
+        with(data.main.textBlocks[0]) {
+            assertEquals("proto-text-block-1", id)
+            assertEquals(10, startLineIndex)
+            assertEquals(2, heightInLines)
+            assertEquals("transcribed lecture text", text)
+            assertEquals("rec-001.opus", audioFile)
+            assertEquals(5000L, audioStartMs)
+            assertEquals(15000L, audioEndMs)
+        }
+        with(data.main.textBlocks[1]) {
+            assertEquals("proto-text-block-2", id)
+            assertEquals(15, startLineIndex)
+            assertEquals(1, heightInLines)
+            assertEquals("quick voice memo", text)
+            assertEquals("", audioFile)
+        }
+
+        // AudioRecordings
+        assertEquals(1, data.audioRecordings.size)
+        with(data.audioRecordings[0]) {
+            assertEquals("rec-001.opus", audioFile)
+            assertEquals(1700000000000L, startTimeMs)
+            assertEquals(60000L, durationMs)
+        }
+    }
+
+    @Test
+    fun protoV5_hasTextBlocksInProto() {
+        val bytes = loadResource("document_v5.inkup")
+        val proto = DocumentProto.ADAPTER.decode(bytes)
+        assertEquals(2, proto.main!!.text_blocks.size)
+        assertEquals("proto-text-block-1", proto.main!!.text_blocks[0].id)
+    }
+
+    @Test
+    fun protoV5_hasAudioRecordingsInProto() {
+        val bytes = loadResource("document_v5.inkup")
+        val proto = DocumentProto.ADAPTER.decode(bytes)
+        assertEquals(1, proto.audio_recordings.size)
+        assertEquals("rec-001.opus", proto.audio_recordings[0].audio_file)
+    }
+
     @Test
     fun protoV1_hasNoCoordinateSystem() {
         val bytes = loadResource("document_v1.inkup")

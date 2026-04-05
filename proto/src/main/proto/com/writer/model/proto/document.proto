@@ -67,11 +67,28 @@ message DiagramAreaProto {
     optional int32 height_in_lines = 3 [default = 1];
 }
 
+message TextBlockProto {
+    optional string id = 1 [default = ""];
+    optional int32 start_line_index = 2 [default = 0];
+    optional int32 height_in_lines = 3 [default = 1];
+    optional string text = 4 [default = ""];
+    optional string audio_file = 5 [default = ""];
+    optional int64 audio_start_ms = 6 [default = 0];
+    optional int64 audio_end_ms = 7 [default = 0];
+}
+
+message AudioRecordingProto {
+    optional string audio_file = 1 [default = ""];
+    optional int64 start_time_ms = 2 [default = 0];
+    optional int64 duration_ms = 3 [default = 0];
+}
+
 message ColumnDataProto {
     repeated InkStrokeProto strokes = 1;
     map<int32, string> line_text_cache = 2;
     repeated int32 ever_hidden_lines = 3;
     repeated DiagramAreaProto diagram_areas = 4;
+    repeated TextBlockProto text_blocks = 5;
 }
 
 message DocumentProto {
@@ -84,4 +101,5 @@ message DocumentProto {
     // 0 = legacy absolute pixels (no conversion on load)
     // 1 = normalized line-units (convert on load using device LINE_SPACING)
     optional int32 coordinate_system = 7 [default = 0];
+    repeated AudioRecordingProto audio_recordings = 8;
 }

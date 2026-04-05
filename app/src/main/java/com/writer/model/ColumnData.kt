@@ -8,5 +8,6 @@ data class ColumnData(
     val strokes: List<InkStroke> = emptyList(),
     val lineTextCache: Map<Int, String> = emptyMap(),
     val everHiddenLines: Set<Int> = emptySet(),
-    val diagramAreas: List<DiagramArea> = emptyList()
+    val diagramAreas: List<DiagramArea> = emptyList(),
+    val textBlocks: List<TextBlock> = emptyList()
 )

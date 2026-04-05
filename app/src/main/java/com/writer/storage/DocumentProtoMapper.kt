@@ -1,17 +1,21 @@
 package com.writer.storage
 
+import com.writer.model.AudioRecording
 import com.writer.model.ColumnData
 import com.writer.model.DiagramArea
 import com.writer.model.DocumentData
 import com.writer.model.InkStroke
 import com.writer.model.StrokePoint
 import com.writer.model.StrokeType
+import com.writer.model.TextBlock
+import com.writer.model.proto.AudioRecordingProto
 import com.writer.model.proto.ColumnDataProto
 import com.writer.model.proto.DiagramAreaProto
 import com.writer.model.proto.DocumentProto
 import com.writer.model.proto.InkStrokeProto
 import com.writer.model.proto.StrokePointProto
 import com.writer.model.proto.StrokeTypeProto
+import com.writer.model.proto.TextBlockProto
 import com.writer.view.ScreenMetrics
 
 // Coordinate system constants matching document.proto
@@ -25,12 +29,13 @@ fun DocumentData.toProto(): DocumentProto {
     return DocumentProto(
         main = main.toProto(ls),
         cue = if (cue.strokes.isNotEmpty() || cue.lineTextCache.isNotEmpty() ||
-            cue.diagramAreas.isNotEmpty()) cue.toProto(ls) else null,
+            cue.diagramAreas.isNotEmpty() || cue.textBlocks.isNotEmpty()) cue.toProto(ls) else null,
         scroll_offset_y = scrollOffsetY / ls,
         highest_line_index = highestLineIndex,
         current_line_index = currentLineIndex,
         user_renamed = userRenamed,
-        coordinate_system = COORD_SYSTEM_NORMALIZED
+        coordinate_system = COORD_SYSTEM_NORMALIZED,
+        audio_recordings = audioRecordings.map { it.toProto() }
     )
 }
 
@@ -38,7 +43,8 @@ private fun ColumnData.toProto(lineSpacing: Float): ColumnDataProto = ColumnData
     strokes = strokes.map { it.toProto(lineSpacing) },
     line_text_cache = lineTextCache,
     ever_hidden_lines = everHiddenLines.toList(),
-    diagram_areas = diagramAreas.map { it.toProto() }
+    diagram_areas = diagramAreas.map { it.toProto() },
+    text_blocks = textBlocks.map { it.toProto() }
 )
 
 private fun InkStroke.toProto(lineSpacing: Float): InkStrokeProto {
@@ -79,6 +85,22 @@ fun DiagramArea.toProto(): DiagramAreaProto = DiagramAreaProto(
     height_in_lines = heightInLines
 )
 
+fun TextBlock.toProto(): TextBlockProto = TextBlockProto(
+    id = id,
+    start_line_index = startLineIndex,
+    height_in_lines = heightInLines,
+    text = text,
+    audio_file = audioFile,
+    audio_start_ms = audioStartMs,
+    audio_end_ms = audioEndMs
+)
+
+fun AudioRecording.toProto(): AudioRecordingProto = AudioRecordingProto(
+    audio_file = audioFile,
+    start_time_ms = startTimeMs,
+    duration_ms = durationMs
+)
+
 fun StrokeType.toProto(): StrokeTypeProto = when (this) {
     StrokeType.FREEHAND -> StrokeTypeProto.FREEHAND
     StrokeType.LINE -> StrokeTypeProto.LINE
@@ -112,7 +134,8 @@ fun DocumentProto.toDomain(): DocumentData {
         scrollOffsetY = if (isNormalized) (scroll_offset_y ?: 0f) * ls else (scroll_offset_y ?: 0f),
         highestLineIndex = highest_line_index ?: 0,
         currentLineIndex = current_line_index ?: 0,
-        userRenamed = user_renamed ?: false
+        userRenamed = user_renamed ?: false,
+        audioRecordings = audio_recordings.map { it.toDomain() }
     )
 }
 
@@ -122,7 +145,8 @@ private fun ColumnDataProto.toDomain(
     strokes = strokes.map { it.toDomain(isNormalized, lineSpacing, topMargin) },
     lineTextCache = line_text_cache,
     everHiddenLines = ever_hidden_lines.toSet(),
-    diagramAreas = diagram_areas.map { it.toDomain() }
+    diagramAreas = diagram_areas.map { it.toDomain() },
+    textBlocks = text_blocks.map { it.toDomain() }
 )
 
 private fun InkStrokeProto.toDomain(
@@ -196,6 +220,22 @@ fun DiagramAreaProto.toDomain(): DiagramArea = DiagramArea(
     id = id ?: "",
     startLineIndex = start_line_index ?: 0,
     heightInLines = height_in_lines ?: 1
+)
+
+fun TextBlockProto.toDomain(): TextBlock = TextBlock(
+    id = id ?: "",
+    startLineIndex = start_line_index ?: 0,
+    heightInLines = height_in_lines ?: 1,
+    text = text ?: "",
+    audioFile = audio_file ?: "",
+    audioStartMs = audio_start_ms ?: 0,
+    audioEndMs = audio_end_ms ?: 0
+)
+
+fun AudioRecordingProto.toDomain(): AudioRecording = AudioRecording(
+    audioFile = audio_file ?: "",
+    startTimeMs = start_time_ms ?: 0,
+    durationMs = duration_ms ?: 0
 )
 
 fun StrokeTypeProto.toDomain(): StrokeType = when (this) {
