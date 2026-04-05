@@ -596,9 +596,23 @@ class WritingCoordinator(
             columnModel.textBlocks.maxOf { it.endLineIndex }
         } else -1
         val lineIndex = maxOf(highestStrokeLine, highestTextBlockLine, highestLineIndex) + 1
+
+        // Compute how many ruled lines the text occupies when word-wrapped
+        val canvasWidth = inkCanvas.width.toFloat()
+        val textLeftMargin = HandwritingCanvasView.LINE_SPACING * 0.3f
+        val textWidth = (canvasWidth - 2 * textLeftMargin).toInt().coerceAtLeast(1)
+        val textPaint = android.text.TextPaint().apply {
+            textSize = com.writer.view.ScreenMetrics.textBody
+        }
+        val layout = android.text.StaticLayout.Builder
+            .obtain(text, 0, text.length, textPaint, textWidth)
+            .setAlignment(android.text.Layout.Alignment.ALIGN_NORMAL)
+            .build()
+        val wrappedLineCount = layout.lineCount.coerceAtLeast(1)
+
         val block = TextBlock(
             startLineIndex = lineIndex,
-            heightInLines = 1,
+            heightInLines = wrappedLineCount,
             text = text,
             audioFile = audioFile,
             audioStartMs = startMs,
