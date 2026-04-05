@@ -1097,11 +1097,17 @@ class WritingActivity : AppCompatActivity() {
         }
 
         transcriber.onFinalResult = { text ->
-            if (text.isNotBlank() && lectureMode) {
-                android.util.Log.i("WritingActivity", "Whisper final: $text")
+            android.util.Log.i("WritingActivity", "Whisper final: $text")
+            if (text.isNotBlank()) {
                 activeCoordinator?.insertTextBlock(text)
                 updateCueIndicatorStrip()
             }
+            // Clean up after batch transcription
+            lectureMode = false
+            audioTranscriber?.close()
+            audioTranscriber = null
+            snapshotAndSaveBlocking()
+            Toast.makeText(this, "Lecture capture done", Toast.LENGTH_SHORT).show()
         }
 
         transcriber.onError = { _ ->
@@ -1116,22 +1122,16 @@ class WritingActivity : AppCompatActivity() {
 
     private fun stopLectureCapture() {
         if (!lectureMode) return
-        lectureMode = false
         micButton.setImageResource(R.drawable.ic_mic)
         inkCanvas.lectureRecording = false
 
-        // Stop speech recognition
-        audioTranscriber?.close()
-        audioTranscriber = null
+        // Stop recording and trigger batch transcription.
+        // Keep lectureMode=true until onFinalResult fires so the callback works.
+        audioTranscriber?.stop()
 
         // Stop foreground service
         val serviceIntent = android.content.Intent(this, com.writer.audio.AudioRecordingService::class.java)
         stopService(serviceIntent)
-
-        // Save document
-        snapshotAndSaveBlocking()
-
-        Toast.makeText(this, "Lecture capture stopped", Toast.LENGTH_SHORT).show()
     }
 
     // --- Menu ---
