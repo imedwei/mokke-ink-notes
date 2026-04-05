@@ -80,15 +80,26 @@ class CuePreviewView(context: Context) : View(context) {
         strokeMaxX = if (hasStrokes) strokes.maxOf { it.maxX } else 0f
         strokeMaxY = if (hasStrokes) strokes.maxOf { it.maxY } else 0f
 
-        // Expand bounds to include text blocks (use full canvas width for X)
+        // Expand bounds to include text blocks, measuring actual wrapped line widths
+        val measurePaint = android.text.TextPaint().apply { textSize = ScreenMetrics.textBody }
+        val textLeftMargin = ls * 0.3f
+        val wrapWidth = if (canvasWidth > 0) (canvasWidth - 2 * textLeftMargin).toInt().coerceAtLeast(1) else 9999
         for (tb in textBlocks) {
+            if (tb.text.isBlank()) continue
             val tbTop = tm + tb.startLineIndex * ls
             val tbBottom = tm + (tb.endLineIndex + 1) * ls
-            val textLeftMargin = ls * 0.3f
             strokeMinX = minOf(strokeMinX, textLeftMargin)
             strokeMinY = minOf(strokeMinY, tbTop)
             strokeMaxY = maxOf(strokeMaxY, tbBottom)
-            if (canvasWidth > 0) strokeMaxX = maxOf(strokeMaxX, canvasWidth)
+            // Measure each wrapped line to find the widest
+            val layout = android.text.StaticLayout.Builder
+                .obtain(tb.text, 0, tb.text.length, measurePaint, wrapWidth)
+                .setAlignment(android.text.Layout.Alignment.ALIGN_NORMAL)
+                .build()
+            for (i in 0 until layout.lineCount) {
+                val lineWidth = layout.getLineWidth(i)
+                strokeMaxX = maxOf(strokeMaxX, textLeftMargin + lineWidth)
+            }
         }
 
         val contentWidth = strokeMaxX - strokeMinX
