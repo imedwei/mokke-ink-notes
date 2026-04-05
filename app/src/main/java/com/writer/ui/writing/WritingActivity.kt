@@ -1051,8 +1051,20 @@ class WritingActivity : AppCompatActivity() {
             }
         }
 
+        var rmsLogCounter = 0
         transcriber.onRmsChanged = { rmsdB ->
             audioQualityMonitor.onRmsChanged(rmsdB)
+            rmsLogCounter++
+            if (rmsLogCounter % 20 == 0) {
+                android.util.Log.i("AudioQuality",
+                    "rms=%.1f noiseFloor=%.1f peakSpeech=%.1f snr=%.1f quality=%s".format(
+                        rmsdB,
+                        audioQualityMonitor.noiseFloorDb,
+                        audioQualityMonitor.peakSpeechDb,
+                        audioQualityMonitor.snr,
+                        audioQualityMonitor.quality.name
+                    ))
+            }
             if (audioQualityMonitor.shouldWarn && !audioQualityWarned) {
                 audioQualityWarned = true
                 Toast.makeText(this, audioQualityMonitor.qualityMessage, Toast.LENGTH_LONG).show()

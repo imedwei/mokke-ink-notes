@@ -37,6 +37,12 @@ class AudioQualityMonitor {
     /** Estimated SNR in dB (speech peak minus noise floor). */
     val snr: Float get() = (peakSpeech - noiseFloor).coerceAtLeast(0f)
 
+    /** Estimated noise floor in dB (averaged from quiet frames). */
+    val noiseFloorDb: Float get() = noiseFloor
+
+    /** Peak speech level observed in dB. */
+    val peakSpeechDb: Float get() = peakSpeech
+
     /** Current RMS level (smoothed over recent window). */
     val currentRms: Float get() = if (recentRms.isEmpty()) -2f else recentRms.average().toFloat()
 
