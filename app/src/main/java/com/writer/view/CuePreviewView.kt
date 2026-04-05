@@ -57,7 +57,11 @@ class CuePreviewView(context: Context) : View(context) {
     private var strokeMaxY = 0f
     private var scale = 1f
 
-    fun setStrokes(strokes: List<InkStroke>, previewWidth: Int, textBlocks: List<TextBlock> = emptyList()) {
+    fun setStrokes(
+        strokes: List<InkStroke>, previewWidth: Int,
+        textBlocks: List<TextBlock> = emptyList(),
+        canvasWidth: Float = 0f
+    ) {
         this.strokes = strokes
         this.textBlocks = textBlocks
 
@@ -74,13 +78,15 @@ class CuePreviewView(context: Context) : View(context) {
         strokeMaxX = if (hasStrokes) strokes.maxOf { it.maxX } else 0f
         strokeMaxY = if (hasStrokes) strokes.maxOf { it.maxY } else 0f
 
-        // Expand bounds to include text blocks
+        // Expand bounds to include text blocks (use full canvas width for X)
         for (tb in textBlocks) {
             val tbTop = tm + tb.startLineIndex * ls
             val tbBottom = tm + (tb.endLineIndex + 1) * ls
+            val textLeftMargin = ls * 0.3f
+            strokeMinX = minOf(strokeMinX, textLeftMargin)
             strokeMinY = minOf(strokeMinY, tbTop)
             strokeMaxY = maxOf(strokeMaxY, tbBottom)
-            strokeMaxX = maxOf(strokeMaxX, previewWidth.toFloat())
+            if (canvasWidth > 0) strokeMaxX = maxOf(strokeMaxX, canvasWidth)
         }
 
         val contentWidth = strokeMaxX - strokeMinX
@@ -130,19 +136,22 @@ class CuePreviewView(context: Context) : View(context) {
             CanvasTheme.drawStroke(canvas, stroke, path, strokePaint)
         }
 
-        // Render text blocks
+        // Render text blocks using word-wrapped lines aligned to ruled lines
         val ls = HandwritingCanvasView.LINE_SPACING
         val tm = HandwritingCanvasView.TOP_MARGIN
         val textLeftMargin = ls * 0.3f
         textBlockPaint.textSize = ScreenMetrics.textBody / scale
+        val textWidth = ((strokeMaxX - textLeftMargin).coerceAtLeast(1f)).toInt()
         for (block in textBlocks) {
             if (block.text.isBlank()) continue
-            for (i in 0 until block.heightInLines) {
+            val layout = android.text.StaticLayout.Builder
+                .obtain(block.text, 0, block.text.length, textBlockPaint, textWidth)
+                .setAlignment(android.text.Layout.Alignment.ALIGN_NORMAL)
+                .build()
+            for (i in 0 until layout.lineCount) {
+                val lineText = block.text.substring(layout.getLineStart(i), layout.getLineEnd(i)).trimEnd()
                 val baselineY = tm + (block.startLineIndex + i + 1) * ls
-                // Simple single-line render per height line; full text on first line
-                if (i == 0) {
-                    canvas.drawText(block.text, textLeftMargin, baselineY, textBlockPaint)
-                }
+                canvas.drawText(lineText, textLeftMargin, baselineY, textBlockPaint)
             }
         }
 

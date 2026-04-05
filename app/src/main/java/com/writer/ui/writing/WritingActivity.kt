@@ -1514,7 +1514,7 @@ popupView.findViewById<android.view.View>(R.id.menuTutorial).setOnClickListener 
 
         val previewWidth = (inkCanvas.width * 0.6f).toInt()
         val previewView = com.writer.view.CuePreviewView(this)
-        previewView.setStrokes(blockStrokes, previewWidth, blockTextBlocks)
+        previewView.setStrokes(blockStrokes, previewWidth, blockTextBlocks, inkCanvas.width.toFloat())
 
         previewView.measure(
             View.MeasureSpec.makeMeasureSpec(previewWidth, View.MeasureSpec.EXACTLY),
