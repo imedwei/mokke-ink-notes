@@ -1191,7 +1191,7 @@ class WritingActivity : AppCompatActivity() {
             val wavBytes = audioRecordCapture?.readRecordedBytes()
             audioRecordCapture = null
             if (wavBytes != null) {
-                val recordingName = "rec-${lectureRecordingStartMs}.wav"
+                val recordingName = "rec-${lectureRecordingStartMs}.m4a"
                 val snapshot = createSaveSnapshot()
                 if (snapshot != null) {
                     DocumentStorage.save(this, snapshot.name, snapshot.state, mapOf(recordingName to wavBytes))
