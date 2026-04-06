@@ -145,6 +145,23 @@ class HandwritingCanvasView @JvmOverloads constructor(
         drawToSurface()
     }
 
+    /** Line index where a recording placeholder should be shown (-1 = none). */
+    var recordingPlaceholderLine: Int = -1
+        set(value) { field = value; drawToSurface() }
+
+    private val placeholderBorderPaint = Paint().apply {
+        color = Color.GRAY
+        style = Paint.Style.STROKE
+        strokeWidth = ScreenMetrics.dp(1.5f)
+        pathEffect = DashPathEffect(floatArrayOf(ScreenMetrics.dp(8f), ScreenMetrics.dp(6f)), 0f)
+    }
+
+    private val placeholderTextPaint = Paint().apply {
+        color = Color.GRAY
+        textSize = ScreenMetrics.dp(13f)
+        isAntiAlias = true
+    }
+
     /** Transcription progress state for inline progress bar. */
     data class TranscriptionProgress(
         val lineIndex: Int,
@@ -1427,6 +1444,19 @@ class HandwritingCanvasView @JvmOverloads constructor(
                     }
                 }
             }
+        }
+
+        // Draw recording placeholder — dashed border showing where TextBlock will go
+        if (recordingPlaceholderLine >= 0 && transcriptionProgress == null) {
+            val phMargin = LINE_SPACING * 0.2f
+            val phTop = TOP_MARGIN + recordingPlaceholderLine * LINE_SPACING + phMargin
+            val phBottom = TOP_MARGIN + (recordingPlaceholderLine + 2) * LINE_SPACING - phMargin
+            canvas.drawRect(phMargin, phTop, canvasRight - phMargin, phBottom, placeholderBorderPaint)
+
+            // Mic icon (small triangle) + "Recording — transcription will appear here"
+            val labelX = LINE_SPACING * 0.4f
+            val labelY = TOP_MARGIN + recordingPlaceholderLine * LINE_SPACING + LINE_SPACING * 0.85f
+            canvas.drawText("\uD83C\uDFA4  Recording — transcription will appear here", labelX, labelY, placeholderTextPaint)
         }
 
         // Draw transcription progress bar at the line where TextBlock will appear

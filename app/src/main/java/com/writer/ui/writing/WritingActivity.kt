@@ -1115,6 +1115,14 @@ class WritingActivity : AppCompatActivity() {
         micButton.setImageResource(R.drawable.ic_mic_active)
         inkCanvas.lectureRecording = true
 
+        // Show placeholder at the line where TextBlocks will be inserted
+        val segmenter = com.writer.recognition.LineSegmenter()
+        val highestStroke = if (documentModel.main.activeStrokes.isNotEmpty())
+            documentModel.main.activeStrokes.maxOf { segmenter.getStrokeLineIndex(it) } else -1
+        val highestBlock = if (documentModel.main.textBlocks.isNotEmpty())
+            documentModel.main.textBlocks.maxOf { it.endLineIndex } else -1
+        inkCanvas.recordingPlaceholderLine = maxOf(highestStroke, highestBlock) + 1
+
         // Use whisper if enabled (better accuracy, but slower than realtime).
         // Default to Android SpeechRecognizer for real-time transcription.
         if (useWhisperTranscriber) {
@@ -1234,7 +1242,8 @@ class WritingActivity : AppCompatActivity() {
 
         transcriber.onFinalResult = { text ->
             android.util.Log.i("WritingActivity", "Whisper final: $text")
-            inkCanvas.transcriptionProgress = null // Clear progress bar
+            inkCanvas.transcriptionProgress = null
+            inkCanvas.recordingPlaceholderLine = -1
             val recordingName = "rec-${lectureRecordingStartMs}.wav"
             if (text.isNotBlank()) {
                 activeCoordinator?.insertTextBlock(text, audioFile = recordingName)
@@ -1271,6 +1280,7 @@ class WritingActivity : AppCompatActivity() {
         if (!lectureMode) return
         micButton.setImageResource(R.drawable.ic_mic)
         inkCanvas.lectureRecording = false
+        inkCanvas.recordingPlaceholderLine = -1
 
         if (audioTranscriber is com.writer.recognition.WhisperTranscriber) {
             // Whisper: stop() triggers batch transcription, cleanup in onFinalResult
