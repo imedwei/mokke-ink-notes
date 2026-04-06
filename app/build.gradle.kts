@@ -187,6 +187,10 @@ dependencies {
     // Google ML Kit Digital Ink Recognition
     implementation("com.google.mlkit:digital-ink-recognition:19.0.0")
 
+    // ML Kit GenAI Speech Recognition — NOT AVAILABLE for 3rd-party apps
+    // (1st-party Google allowlist only). Tested 2026-04-05, got PERMISSION_DENIED.
+    // implementation("com.google.mlkit:genai-speech-recognition:1.0.0-alpha1")
+
     // Room (persistence)
     implementation("androidx.room:room-runtime:2.6.1")
     implementation("androidx.room:room-ktx:2.6.1")
