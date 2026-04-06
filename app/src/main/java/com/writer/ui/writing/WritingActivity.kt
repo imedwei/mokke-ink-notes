@@ -93,6 +93,7 @@ class WritingActivity : AppCompatActivity() {
     private lateinit var micButton: ImageView
     private var audioTranscriber: com.writer.recognition.AudioTranscriber? = null
     private var audioCaptureManager: com.writer.audio.AudioCaptureManager? = null
+    private var audioRecordCapture: com.writer.audio.AudioRecordCapture? = null
     private val useWhisperTranscriber: Boolean
         get() = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
             .getBoolean(PREF_USE_WHISPER, false)
@@ -1047,6 +1048,14 @@ class WritingActivity : AppCompatActivity() {
         if (useWhisperTranscriber) {
             startWhisperLectureRecognition()
         } else {
+            // Start concurrent audio capture alongside SpeechRecognizer
+            val capture = com.writer.audio.AudioRecordCapture(cacheDir)
+            if (capture.start()) {
+                audioRecordCapture = capture
+                android.util.Log.i("WritingActivity", "Concurrent audio capture started")
+            } else {
+                android.util.Log.w("WritingActivity", "Concurrent audio capture unavailable")
+            }
             startLectureSpeechRecognition()
         }
     }
@@ -1176,7 +1185,21 @@ class WritingActivity : AppCompatActivity() {
             lectureMode = false
             audioTranscriber?.close()
             audioTranscriber = null
-            snapshotAndSaveBlocking()
+
+            // Save concurrent audio capture if available
+            audioRecordCapture?.stop()
+            val wavBytes = audioRecordCapture?.readRecordedBytes()
+            audioRecordCapture = null
+            if (wavBytes != null) {
+                val recordingName = "rec-${lectureRecordingStartMs}.wav"
+                val snapshot = createSaveSnapshot()
+                if (snapshot != null) {
+                    DocumentStorage.save(this, snapshot.name, snapshot.state, mapOf(recordingName to wavBytes))
+                }
+                android.util.Log.i("WritingActivity", "Saved ${wavBytes.size} bytes audio to bundle")
+            } else {
+                snapshotAndSaveBlocking()
+            }
             Toast.makeText(this, "Lecture capture stopped", Toast.LENGTH_SHORT).show()
         }
 
@@ -1985,5 +2008,7 @@ class WritingActivity : AppCompatActivity() {
         recognizer.close()
         audioTranscriber?.close()
         audioTranscriber = null
+        audioRecordCapture?.stop()
+        audioRecordCapture = null
     }
 }
