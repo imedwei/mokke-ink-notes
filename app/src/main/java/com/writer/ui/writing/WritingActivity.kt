@@ -1124,22 +1124,7 @@ class WritingActivity : AppCompatActivity() {
         if (useWhisperTranscriber) {
             startWhisperLectureRecognition()
         } else {
-            // Start SpeechRecognizer first, then try concurrent audio capture.
-            // Order matters: if AudioRecord grabs the mic first, SpeechRecognizer fails.
             startLectureSpeechRecognition()
-
-            // Delay concurrent capture slightly to let SpeechRecognizer claim the mic first
-            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                if (lectureMode) {
-                    val capture = com.writer.audio.AudioRecordCapture(cacheDir)
-                    if (capture.start()) {
-                        audioRecordCapture = capture
-                        android.util.Log.i("WritingActivity", "Concurrent audio capture started")
-                    } else {
-                        android.util.Log.w("WritingActivity", "Concurrent audio capture unavailable — transcription only")
-                    }
-                }
-            }, 500)
         }
     }
 
@@ -1149,6 +1134,17 @@ class WritingActivity : AppCompatActivity() {
 
         val transcriber = com.writer.recognition.SystemSpeechTranscriber(this)
         audioTranscriber = transcriber
+
+        // Start concurrent audio capture only after SpeechRecognizer has claimed the mic
+        transcriber.onReady = {
+            if (lectureMode && audioRecordCapture == null) {
+                val capture = com.writer.audio.AudioRecordCapture(cacheDir)
+                if (capture.start()) {
+                    audioRecordCapture = capture
+                    android.util.Log.i("WritingActivity", "Concurrent audio capture started after SpeechRecognizer ready")
+                }
+            }
+        }
 
         transcriber.onFinalResult = { text ->
             if (text.isNotBlank() && lectureMode) {

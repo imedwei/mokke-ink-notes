@@ -22,6 +22,8 @@ class SystemSpeechTranscriber(private val context: Context) : AudioTranscriber {
     override var onPartialResult: ((String) -> Unit)? = null
     override var onFinalResult: ((String) -> Unit)? = null
     override var onError: ((Int) -> Unit)? = null
+    /** Called when the recognizer is ready and has claimed the mic. */
+    var onReady: (() -> Unit)? = null
     /** Called with RMS dB level on each audio frame — use for quality monitoring. */
     var onRmsChanged: ((Float) -> Unit)? = null
     override var isListening: Boolean = false
@@ -36,6 +38,7 @@ class SystemSpeechTranscriber(private val context: Context) : AudioTranscriber {
         recognizer.setRecognitionListener(object : RecognitionListener {
             override fun onReadyForSpeech(params: Bundle?) {
                 Log.d(tag, "Ready for speech")
+                onReady?.invoke()
             }
 
             override fun onBeginningOfSpeech() {
