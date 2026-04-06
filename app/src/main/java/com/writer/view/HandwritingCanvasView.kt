@@ -150,16 +150,16 @@ class HandwritingCanvasView @JvmOverloads constructor(
         set(value) { field = value; drawToSurface() }
 
     private val placeholderBorderPaint = Paint().apply {
-        color = Color.GRAY
+        color = Color.DKGRAY
         style = Paint.Style.STROKE
         strokeWidth = ScreenMetrics.dp(1.5f)
         pathEffect = DashPathEffect(floatArrayOf(ScreenMetrics.dp(8f), ScreenMetrics.dp(6f)), 0f)
     }
 
     private val placeholderTextPaint = Paint().apply {
-        color = Color.GRAY
+        color = Color.BLACK
         textSize = ScreenMetrics.dp(13f)
-        isAntiAlias = true
+        isAntiAlias = false
     }
 
     /** Transcription progress state for inline progress bar. */
@@ -183,9 +183,9 @@ class HandwritingCanvasView @JvmOverloads constructor(
     }
 
     private val progressLabelPaint = Paint().apply {
-        color = Color.DKGRAY
+        color = Color.BLACK
         textSize = ScreenMetrics.dp(14f)
-        isAntiAlias = true
+        isAntiAlias = false
     }
 
     private val audioIconPaint = Paint().apply {
