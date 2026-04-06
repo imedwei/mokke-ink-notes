@@ -739,9 +739,9 @@ class WritingCoordinator(
             val currentText = block.text
             val match = gapRegex.find(currentText)
             if (match != null) {
-                currentText.substring(0, match.range.first) +
-                    recognized.trim() +
-                    currentText.substring(match.range.last + 1)
+                val before = currentText.substring(0, match.range.first).trimEnd()
+                val after = currentText.substring(match.range.last + 1).trimStart()
+                "$before ${recognized.trim()} $after"
             } else {
                 // Fallback: append
                 "${block.text} ${recognized.trim()}"
