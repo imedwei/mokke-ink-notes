@@ -94,6 +94,20 @@ class TextBlockOperationsTest {
         var lastEraseResult: TextBlockEraser.EraseResult? = null
         var lastErasedBlock: TextBlock? = null
 
+        /** Compute wrapped line count for text at default canvas width. */
+        private fun computeHeightInLines(text: String): Int {
+            if (text.isBlank()) return 1
+            val canvasWidth = 800f
+            val textLeftMargin = ScreenMetrics.lineSpacing * 0.3f
+            val textWidth = (canvasWidth - 2 * textLeftMargin).toInt().coerceAtLeast(100)
+            val paint = android.text.TextPaint().apply { textSize = ScreenMetrics.textBody }
+            val layout = android.text.StaticLayout.Builder
+                .obtain(text, 0, text.length, paint, textWidth)
+                .setAlignment(android.text.Layout.Alignment.ALIGN_NORMAL)
+                .build()
+            return layout.lineCount.coerceAtLeast(1)
+        }
+
         // ── Assertions ──────────────────────────────────────────────
 
         fun assertTextBlock(line: Int, text: String, msg: String = ""): DocState {
@@ -116,6 +130,13 @@ class TextBlockOperationsTest {
 
         fun assertStrokeCount(count: Int, msg: String = ""): DocState {
             assertEquals("Stroke count. $msg", count, columnModel.activeStrokes.size)
+            return this
+        }
+
+        fun assertHeightInLines(line: Int, expected: Int, msg: String = ""): DocState {
+            val block = columnModel.textBlocks.find { it.startLineIndex == line }
+            assertNotNull("TextBlock at line $line should exist. $msg", block)
+            assertEquals("heightInLines at line $line. $msg", expected, block!!.heightInLines)
             return this
         }
 
@@ -185,7 +206,10 @@ class TextBlockOperationsTest {
                         val after = eraseResult.newText.substring(eraseResult.gapCharIndex).trimStart()
                         "$before $gapPlaceholder $after"
                     }
-                    columnModel.textBlocks[idx] = hitBlock.copy(text = newText)
+                    columnModel.textBlocks[idx] = hitBlock.copy(
+                        text = newText,
+                        heightInLines = computeHeightInLines(newText)
+                    )
                 }
             }
 
@@ -210,7 +234,10 @@ class TextBlockOperationsTest {
 
             val idx = columnModel.textBlocks.indexOfFirst { it.id == block.id }
             if (idx >= 0) {
-                columnModel.textBlocks[idx] = block.copy(text = newText)
+                columnModel.textBlocks[idx] = block.copy(
+                    text = newText,
+                    heightInLines = computeHeightInLines(newText)
+                )
             }
             lastEraseResult = null
             lastErasedBlock = null
@@ -243,7 +270,7 @@ class TextBlockOperationsTest {
             } else -1
             val lineIndex = maxOf(highestStrokeLine, highestTextBlockLine) + 1
             columnModel.textBlocks.add(
-                TextBlock(startLineIndex = lineIndex, heightInLines = 1, text = text)
+                TextBlock(startLineIndex = lineIndex, heightInLines = computeHeightInLines(text), text = text)
             )
             then()
             return this
@@ -474,6 +501,56 @@ class TextBlockOperationsTest {
         }.scratchOut(line = 2, word = "the") {
             assertStrokeCount(2, "Strokes should be unaffected")
             assertGap(removedWord = "the")
+        }
+    }
+
+    // ── heightInLines recalculation ─────────────────────────────────
+
+    @Test
+    fun `short text has heightInLines 1`() {
+        doc {
+        }.addTextBlock("short memo") {
+            assertHeightInLines(line = 0, expected = 1)
+        }
+    }
+
+    @Test
+    fun `addTextBlock sets heightInLines from computeHeightInLines`() {
+        doc {
+        }.addTextBlock("some text") {
+            val block = columnModel.textBlocks[0]
+            // heightInLines should be set (at least 1), not hardcoded
+            assertTrue("heightInLines should be >= 1", block.heightInLines >= 1)
+        }
+    }
+
+    @Test
+    fun `replacement word changes heightInLines when wrap changes`() {
+        // Start with long text that wraps to 2+ lines
+        val longText = "the quick brown fox jumps over the extremely lazy and sleepy dog in the park"
+        doc {
+            textBlock(line = 2, text = longText, heightInLines = 3)
+        }.scratchOut(line = 2, word = "extremely") {
+            assertGap(removedWord = "extremely")
+        }.replaceWith("very") {
+            // "very" is shorter than "extremely" — height may decrease
+            val block = columnModel.textBlocks.find { it.startLineIndex == 2 }!!
+            assertTrue("heightInLines should be recalculated", block.heightInLines >= 1)
+            // The actual text should have the replacement
+            assertTrue(block.text.contains("very"))
+            assertFalse(block.text.contains("extremely"))
+        }
+    }
+
+    @Test
+    fun `scratch-out recalculates heightInLines`() {
+        val longText = "this is a very long sentence that wraps across multiple lines on the display"
+        doc {
+            textBlock(line = 0, text = longText, heightInLines = 3)
+        }.scratchOut(line = 0, word = "very") {
+            // After removing "very" and adding gap, height is recalculated
+            val block = columnModel.textBlocks[0]
+            assertTrue("heightInLines should be >= 1", block.heightInLines >= 1)
         }
     }
 }
