@@ -37,6 +37,11 @@
             android:windowSoftInputMode="stateHidden" />
 
         <activity
+            android:name=".ui.settings.SettingsActivity"
+            android:configChanges="orientation|screenSize|screenLayout"
+            android:windowSoftInputMode="stateHidden" />
+
+        <activity
             android:name=".ui.writing.SaveAsActivity"
             android:theme="@style/Theme.Writer.FullscreenDialog"
             android:configChanges="orientation|screenSize|screenLayout"

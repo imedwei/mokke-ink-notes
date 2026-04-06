@@ -51,7 +51,7 @@ class WritingActivity : AppCompatActivity() {
         private const val PREFS_NAME = "writer_prefs"
         private const val PREF_CURRENT_DOC = "current_document"
         private const val PREF_SYNC_FOLDER = "sync_folder_uri"
-        private const val PREF_USE_WHISPER = "use_whisper_transcriber"
+        private const val PREF_USE_WHISPER = com.writer.ui.settings.SettingsActivity.PREF_USE_WHISPER
         private const val UNDO_REDO_DEBOUNCE_MS = 300L
     }
 
@@ -180,6 +180,32 @@ class WritingActivity : AppCompatActivity() {
             }
         }
         inkCanvas.resumeRawDrawing()
+    }
+
+    // Settings activity result
+    private val settingsLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val data = result.data
+            if (data?.getBooleanExtra(com.writer.ui.settings.SettingsActivity.RESULT_SHOW_TUTORIAL, false) == true) {
+                showTutorial()
+                return@registerForActivityResult
+            }
+            if (data?.getBooleanExtra(com.writer.ui.settings.SettingsActivity.RESULT_DEBUG_RESET, false) == true) {
+                getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().clear().apply()
+                tutorialManager.resetSeen()
+                val docsDir = java.io.File(filesDir, "documents")
+                docsDir.listFiles()?.forEach { it.delete() }
+                Toast.makeText(this, "Reset to pristine state — restarting", Toast.LENGTH_SHORT).show()
+                val intent = packageManager.getLaunchIntentForPackage(packageName)
+                intent?.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK or Intent.FLAG_ACTIVITY_NEW_TASK)
+                startActivity(intent)
+                finish()
+                return@registerForActivityResult
+            }
+        }
+        inkCanvas.reopenRawDrawing()
     }
 
     // Audio recording permission
@@ -1190,47 +1216,13 @@ class WritingActivity : AppCompatActivity() {
             popup.dismiss()
             showRenameDialog()
         }
-        popupView.findViewById<android.view.View>(R.id.menuSyncFolder).setOnClickListener {
-            launchingSaf = true
-            popup.dismiss()
-            pickSyncFolder.launch(null)
-        }
-popupView.findViewById<android.view.View>(R.id.menuTutorial).setOnClickListener {
-            openingTutorial = true
-            popup.dismiss()
-            showTutorial()
-        }
         popupView.findViewById<android.view.View>(R.id.menuBugReport).setOnClickListener {
             popup.dismiss()
             generateAndShareBugReport()
         }
-        popupView.findViewById<android.view.View>(R.id.menuClose).setOnClickListener {
+        popupView.findViewById<android.view.View>(R.id.menuSettings).setOnClickListener {
             popup.dismiss()
-            snapshotAndSaveBlocking()
-            finish()
-        }
-        val whisperToggle = popupView.findViewById<android.widget.TextView>(R.id.menuWhisperToggle)
-        whisperToggle.text = if (useWhisperTranscriber) "Whisper: On" else "Whisper: Off"
-        whisperToggle.setOnClickListener {
-            val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-            val newValue = !useWhisperTranscriber
-            prefs.edit().putBoolean(PREF_USE_WHISPER, newValue).apply()
-            whisperToggle.text = if (newValue) "Whisper: On" else "Whisper: Off"
-            Toast.makeText(this, if (newValue) "Lecture mode: Whisper (slower, more accurate)" else "Lecture mode: System (real-time)", Toast.LENGTH_SHORT).show()
-        }
-        popupView.findViewById<android.view.View>(R.id.menuDebugReset).setOnClickListener {
-            popup.dismiss()
-            // Full pristine reset: clear all prefs, delete all local docs, restart
-            getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().clear().apply()
-            tutorialManager.resetSeen()
-            val docsDir = java.io.File(filesDir, "documents")
-            docsDir.listFiles()?.forEach { it.delete() }
-            Toast.makeText(this, "Reset to pristine state — restarting", Toast.LENGTH_SHORT).show()
-            // Restart the app from the launcher activity
-            val intent = packageManager.getLaunchIntentForPackage(packageName)
-            intent?.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK or Intent.FLAG_ACTIVITY_NEW_TASK)
-            startActivity(intent)
-            finish()
+            settingsLauncher.launch(android.content.Intent(this, com.writer.ui.settings.SettingsActivity::class.java))
         }
 
         // Position to the left of the menu button so it stays visible
