@@ -646,10 +646,20 @@ class WritingCoordinator(
             lineSegmenter.getStrokeLineIndex(it) == lineIdx
         }
 
+        // Compute pre-context from the TextBlock text (last 20 chars before stroke position)
+        val textLeftMargin = HandwritingCanvasView.LINE_SPACING * 0.3f
+        val strokeCenterX = (stroke.minX + stroke.maxX) / 2f
+        val relativeX = strokeCenterX - textLeftMargin
+        val charWidth = TextBlockEraser.estimateCharWidth(
+            block.text, inkCanvas.width.toFloat(), textLeftMargin
+        )
+        val approxCharPos = (relativeX / charWidth).toInt().coerceIn(0, block.text.length)
+        val preContext = block.text.take(approxCharPos).takeLast(20)
+
         scope.launch {
             val recognized = try {
                 val line = lineSegmenter.buildInkLine(lineStrokes, lineIdx)
-                recognizer.recognizeLine(line)
+                recognizer.recognizeLine(line, preContext)
             } catch (e: Exception) {
                 Log.w(TAG, "Recognition failed for replacement stroke", e)
                 ""
@@ -666,18 +676,10 @@ class WritingCoordinator(
                 return@launch
             }
 
-            // Insert recognized text at the position in the TextBlock
-            // corresponding to the stroke's X coordinate
-            val textLeftMargin = HandwritingCanvasView.LINE_SPACING * 0.3f
-            val strokeCenterX = (stroke.minX + stroke.maxX) / 2f
-            val relativeX = strokeCenterX - textLeftMargin
-
+            // Insert recognized text at the position matching the stroke's X
             val words = block.text.split(" ").toMutableList()
-            val charWidth = TextBlockEraser.estimateCharWidth(
-                block.text, inkCanvas.width.toFloat(), textLeftMargin
-            )
 
-            // Find insertion position by character offset
+            // Find insertion position by character offset (reusing pre-computed values)
             var charOffset = 0f
             var insertIdx = words.size
             for (i in words.indices) {
