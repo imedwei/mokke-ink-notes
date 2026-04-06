@@ -1029,7 +1029,25 @@ class HandwritingCanvasView @JvmOverloads constructor(
 
     /** Check if the completed stroke is a scratch-out erase gesture. */
     private fun checkPostStrokeScratchOut(): Boolean {
-        if (!ScratchOutDetection.isScratchOut(currentStrokePoints, completedStrokes, LINE_SPACING)) return false
+        // Standard scratch-out check against existing ink strokes
+        var isScratch = ScratchOutDetection.isScratchOut(currentStrokePoints, completedStrokes, LINE_SPACING)
+
+        // If not a scratch-out over strokes, check if the gesture shape is a scratch-out
+        // over a TextBlock (TextBlocks aren't strokes so the focus check doesn't apply)
+        if (!isScratch && textBlocks.isNotEmpty()) {
+            val xs = FloatArray(currentStrokePoints.size) { currentStrokePoints[it].x }
+            val yRange = currentStrokePoints.maxOf { it.y } - currentStrokePoints.minOf { it.y }
+            if (ScratchOutDetection.detect(xs, yRange, LINE_SPACING, false)) {
+                // Check if scratch bbox overlaps a TextBlock
+                val scratchCenterY = (strokeMinY + strokeMaxY) / 2
+                val scratchLine = ((scratchCenterY - TOP_MARGIN) / LINE_SPACING).toInt().coerceAtLeast(0)
+                if (textBlocks.any { it.containsLine(scratchLine) }) {
+                    isScratch = true
+                }
+            }
+        }
+
+        if (!isScratch) return false
 
         val scratchPoints = currentStrokePoints.toList()
         val left = strokeMinX; val top = strokeMinY
