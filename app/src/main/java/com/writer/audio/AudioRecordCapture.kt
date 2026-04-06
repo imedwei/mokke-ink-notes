@@ -3,7 +3,6 @@ package com.writer.audio
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaCodec
-import android.media.MediaCodecInfo
 import android.media.MediaFormat
 import android.media.MediaMuxer
 import android.media.MediaRecorder
@@ -11,12 +10,15 @@ import android.util.Log
 import java.io.File
 
 /**
- * Captures audio via [AudioRecord] and stream-compresses to AAC in an MP4
+ * Captures audio via [AudioRecord] and stream-compresses to Opus in a WebM
  * container via [MediaCodec] + [MediaMuxer].
  *
- * Opus encoding isn't supported by [MediaMuxer] (no OGG container), so we
- * use AAC-LC at 32kbps mono — roughly 240 KB/min, ~14 MB/hr. Good enough
- * for voice playback and re-transcription.
+ * Opus at 24kbps mono ≈ 180 KB/min (~11 MB/hr). Better voice quality than
+ * AAC at equivalent bitrate.
+ *
+ * WebM (Matroska-based) is crash-resilient: each cluster is self-contained,
+ * so a truncated file is playable up to the last complete cluster (~1-5s loss).
+ * MP4 would lose the entire file on crash because the moov atom is written last.
  *
  * Designed to run concurrently alongside SpeechRecognizer on Android 10+.
  */
@@ -65,19 +67,18 @@ class AudioRecordCapture(private val cacheDir: File) {
         // Set up output file
         val audioDir = File(cacheDir, "audio_recording")
         audioDir.mkdirs()
-        val file = File(audioDir, "rec-${System.currentTimeMillis()}.m4a")
+        val file = File(audioDir, "rec-${System.currentTimeMillis()}.webm")
         outputFile = file
 
-        // Set up AAC encoder
-        val format = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, SAMPLE_RATE, 1)
-        format.setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC)
+        // Set up Opus encoder
+        val format = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_OPUS, SAMPLE_RATE, 1)
         format.setInteger(MediaFormat.KEY_BIT_RATE, BIT_RATE)
         format.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, SAMPLE_RATE * 2) // 1 second
 
         val codec = try {
-            MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC)
+            MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_OPUS)
         } catch (e: Exception) {
-            Log.w(tag, "Failed to create AAC encoder", e)
+            Log.w(tag, "Failed to create Opus encoder", e)
             audioRecord.release()
             return false
         }
@@ -92,7 +93,7 @@ class AudioRecordCapture(private val cacheDir: File) {
         }
 
         val mux = try {
-            MediaMuxer(file.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+            MediaMuxer(file.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_WEBM)
         } catch (e: Exception) {
             Log.w(tag, "Failed to create MediaMuxer", e)
             codec.release()
@@ -212,6 +213,6 @@ class AudioRecordCapture(private val cacheDir: File) {
 
     companion object {
         const val SAMPLE_RATE = 16000
-        const val BIT_RATE = 32000 // 32 kbps — ~240 KB/min for voice
+        const val BIT_RATE = 24000 // 24 kbps Opus — ~180 KB/min for voice
     }
 }
