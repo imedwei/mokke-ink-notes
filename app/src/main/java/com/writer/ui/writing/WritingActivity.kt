@@ -1027,6 +1027,17 @@ class WritingActivity : AppCompatActivity() {
         return cacheFile
     }
 
+    /** Advance the recording placeholder past all current content. */
+    private fun updateRecordingPlaceholder() {
+        if (!lectureMode) return
+        val segmenter = com.writer.recognition.LineSegmenter()
+        val highestStroke = if (documentModel.main.activeStrokes.isNotEmpty())
+            documentModel.main.activeStrokes.maxOf { segmenter.getStrokeLineIndex(it) } else -1
+        val highestBlock = if (documentModel.main.textBlocks.isNotEmpty())
+            documentModel.main.textBlocks.maxOf { it.endLineIndex } else -1
+        inkCanvas.recordingPlaceholderLine = maxOf(highestStroke, highestBlock) + 1
+    }
+
     // --- Voice Memo ---
 
     private fun toggleVoiceMemo() {
@@ -1116,12 +1127,7 @@ class WritingActivity : AppCompatActivity() {
         inkCanvas.lectureRecording = true
 
         // Show placeholder at the line where TextBlocks will be inserted
-        val segmenter = com.writer.recognition.LineSegmenter()
-        val highestStroke = if (documentModel.main.activeStrokes.isNotEmpty())
-            documentModel.main.activeStrokes.maxOf { segmenter.getStrokeLineIndex(it) } else -1
-        val highestBlock = if (documentModel.main.textBlocks.isNotEmpty())
-            documentModel.main.textBlocks.maxOf { it.endLineIndex } else -1
-        inkCanvas.recordingPlaceholderLine = maxOf(highestStroke, highestBlock) + 1
+        updateRecordingPlaceholder()
 
         // Use whisper if enabled (better accuracy, but slower than realtime).
         // Default to Android SpeechRecognizer for real-time transcription.
@@ -1159,6 +1165,8 @@ class WritingActivity : AppCompatActivity() {
                     startMs = startMs.coerceAtLeast(0), endMs = endMs
                 )
                 updateCueIndicatorStrip()
+                // Advance placeholder past the newly inserted TextBlock
+                updateRecordingPlaceholder()
                 android.util.Log.i("WritingActivity", "Lecture transcribed: $text")
             }
             // Restart recognition for the next sentence (continuous mode)
