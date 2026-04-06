@@ -1030,6 +1030,7 @@ class WritingActivity : AppCompatActivity() {
     // --- Voice Memo ---
 
     private fun toggleVoiceMemo() {
+        android.util.Log.i("WritingActivity", "toggleVoiceMemo: lectureMode=$lectureMode audioTranscriber=${audioTranscriber != null} isListening=${audioTranscriber?.isListening}")
         // If in lecture mode, stop it
         if (lectureMode) {
             stopLectureCapture()
@@ -1062,8 +1063,10 @@ class WritingActivity : AppCompatActivity() {
         val transcriber = com.writer.recognition.SystemSpeechTranscriber(this)
         audioTranscriber = transcriber
         micButton.setImageResource(R.drawable.ic_mic_active)
+        android.util.Log.i("WritingActivity", "Voice memo starting, language=${documentModel.language}")
 
         transcriber.onFinalResult = { text ->
+            android.util.Log.i("WritingActivity", "Voice memo result: '$text'")
             micButton.setImageResource(R.drawable.ic_mic)
             if (text.isNotBlank()) {
                 activeCoordinator?.insertTextBlock(text)
@@ -1072,9 +1075,17 @@ class WritingActivity : AppCompatActivity() {
             audioTranscriber = null
         }
 
-        transcriber.onError = { _ ->
+        transcriber.onError = { errorCode ->
+            android.util.Log.w("WritingActivity", "Voice memo error: $errorCode")
             micButton.setImageResource(R.drawable.ic_mic)
             audioTranscriber = null
+            val msg = when (errorCode) {
+                android.speech.SpeechRecognizer.ERROR_NO_MATCH -> "No speech detected"
+                android.speech.SpeechRecognizer.ERROR_SERVER -> "Server error — try again"
+                android.speech.SpeechRecognizer.ERROR_NETWORK -> "Network error"
+                else -> "Recognition error ($errorCode)"
+            }
+            Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
         }
 
         transcriber.start(documentModel.language)
@@ -1113,15 +1124,22 @@ class WritingActivity : AppCompatActivity() {
         if (useWhisperTranscriber) {
             startWhisperLectureRecognition()
         } else {
-            // Start concurrent audio capture alongside SpeechRecognizer
-            val capture = com.writer.audio.AudioRecordCapture(cacheDir)
-            if (capture.start()) {
-                audioRecordCapture = capture
-                android.util.Log.i("WritingActivity", "Concurrent audio capture started")
-            } else {
-                android.util.Log.w("WritingActivity", "Concurrent audio capture unavailable")
-            }
+            // Start SpeechRecognizer first, then try concurrent audio capture.
+            // Order matters: if AudioRecord grabs the mic first, SpeechRecognizer fails.
             startLectureSpeechRecognition()
+
+            // Delay concurrent capture slightly to let SpeechRecognizer claim the mic first
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                if (lectureMode) {
+                    val capture = com.writer.audio.AudioRecordCapture(cacheDir)
+                    if (capture.start()) {
+                        audioRecordCapture = capture
+                        android.util.Log.i("WritingActivity", "Concurrent audio capture started")
+                    } else {
+                        android.util.Log.w("WritingActivity", "Concurrent audio capture unavailable — transcription only")
+                    }
+                }
+            }, 500)
         }
     }
 
