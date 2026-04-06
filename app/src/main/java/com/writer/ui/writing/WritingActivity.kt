@@ -971,10 +971,17 @@ class WritingActivity : AppCompatActivity() {
     private fun handleTextBlockTap(block: com.writer.model.TextBlock, wordStartMs: Long? = null) {
         if (block.audioFile.isEmpty()) return
 
-        // If tapping the currently playing block → toggle pause/resume
+        // If tapping the currently playing block:
+        // - With a word target → seek to that word
+        // - Without → toggle pause/resume
         if (playingBlockId == block.id && audioPlayer != null) {
             val player = audioPlayer!!
-            if (player.isPlaying) {
+            if (wordStartMs != null) {
+                // Seek to the tapped word
+                player.seekTo(wordStartMs)
+                if (!player.isPlaying) player.resume()
+                inkCanvas.playingTextBlockId = block.id
+            } else if (player.isPlaying) {
                 player.pause()
                 inkCanvas.playingTextBlockId = null
             } else {
