@@ -660,7 +660,9 @@ class WritingCoordinator(
             inkCanvas.removeStrokes(setOf(stroke.strokeId))
 
             if (recognized.isBlank()) {
+                inkCanvas.pauseRawDrawing()
                 inkCanvas.drawToSurface()
+                inkCanvas.resumeRawDrawing()
                 return@launch
             }
 
@@ -696,7 +698,10 @@ class WritingCoordinator(
             }
 
             inkCanvas.textBlocks = columnModel.textBlocks.toList()
+            // Force e-ink refresh by pausing/resuming raw drawing
+            inkCanvas.pauseRawDrawing()
             inkCanvas.drawToSurface()
+            inkCanvas.resumeRawDrawing()
             displayManager.displayHiddenLines()
             onUndoRedoStateChanged?.invoke()
             Log.i(TAG, "TextBlock replacement: inserted '$recognized' → '$newText'")
