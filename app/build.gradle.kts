@@ -187,8 +187,11 @@ dependencies {
     // Google ML Kit Digital Ink Recognition
     implementation("com.google.mlkit:digital-ink-recognition:19.0.0")
 
-    // ML Kit GenAI Speech Recognition — NOT AVAILABLE for 3rd-party apps
-    // (1st-party Google allowlist only). Tested 2026-04-05, got PERMISSION_DENIED.
+    // ML Kit GenAI Speech Recognition — NOT AVAILABLE (alpha, requires AICore).
+    // Tested 2026-04-05 on Boox Palma 2 Pro (AICore not installable) and
+    // Pixel 7 Pro. Both fail: PERMISSION_DENIED "Rejected by (1st-party only
+    // Allowlist) security policy. Not google-signed." API is 1.0.0-alpha1 and
+    // appears restricted to Google-signed apps only at this stage.
     // implementation("com.google.mlkit:genai-speech-recognition:1.0.0-alpha1")
 
     // Room (persistence)
