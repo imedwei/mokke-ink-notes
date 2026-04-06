@@ -54,7 +54,7 @@ Java_com_writer_recognition_WhisperLib_00024Companion_fullTranscribe(
     params.single_segment = false;
     params.greedy.best_of = 1;        // Single greedy pass (default 5)
     params.temperature_inc = 0.0f;    // No temperature fallback retries
-    params.no_timestamps = true;      // Skip timestamp token prediction
+    params.token_timestamps = true;   // Enable per-token timestamps + probabilities
 
     // Enable VAD if model path is provided
     const char *vad_path = NULL;
@@ -108,4 +108,48 @@ Java_com_writer_recognition_WhisperLib_00024Companion_getTextSegmentT1(
     (void)env; (void)thiz;
     return whisper_full_get_segment_t1(
         (struct whisper_context *)context_ptr, index);
+}
+
+// ── Token-level API ──────────────────────────────────────────────────
+
+JNIEXPORT jint JNICALL
+Java_com_writer_recognition_WhisperLib_00024Companion_getTokenCount(
+        JNIEnv *env, jobject thiz, jlong context_ptr, jint segment_index) {
+    (void)env; (void)thiz;
+    return whisper_full_n_tokens((struct whisper_context *)context_ptr, segment_index);
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_writer_recognition_WhisperLib_00024Companion_getTokenText(
+        JNIEnv *env, jobject thiz, jlong context_ptr, jint segment_index, jint token_index) {
+    (void)thiz;
+    const char *text = whisper_full_get_token_text(
+        (struct whisper_context *)context_ptr, segment_index, token_index);
+    return (*env)->NewStringUTF(env, text ? text : "");
+}
+
+JNIEXPORT jfloat JNICALL
+Java_com_writer_recognition_WhisperLib_00024Companion_getTokenProbability(
+        JNIEnv *env, jobject thiz, jlong context_ptr, jint segment_index, jint token_index) {
+    (void)env; (void)thiz;
+    return whisper_full_get_token_p(
+        (struct whisper_context *)context_ptr, segment_index, token_index);
+}
+
+JNIEXPORT jlong JNICALL
+Java_com_writer_recognition_WhisperLib_00024Companion_getTokenT0(
+        JNIEnv *env, jobject thiz, jlong context_ptr, jint segment_index, jint token_index) {
+    (void)env; (void)thiz;
+    whisper_token_data data = whisper_full_get_token_data(
+        (struct whisper_context *)context_ptr, segment_index, token_index);
+    return data.t0;
+}
+
+JNIEXPORT jlong JNICALL
+Java_com_writer_recognition_WhisperLib_00024Companion_getTokenT1(
+        JNIEnv *env, jobject thiz, jlong context_ptr, jint segment_index, jint token_index) {
+    (void)env; (void)thiz;
+    whisper_token_data data = whisper_full_get_token_data(
+        (struct whisper_context *)context_ptr, segment_index, token_index);
+    return data.t1;
 }

@@ -67,6 +67,13 @@ message DiagramAreaProto {
     optional int32 height_in_lines = 3 [default = 1];
 }
 
+message WordInfoProto {
+    optional string text = 1 [default = ""];
+    optional float confidence = 2 [default = 1.0];
+    optional int64 start_ms = 3 [default = 0];
+    optional int64 end_ms = 4 [default = 0];
+}
+
 message TextBlockProto {
     optional string id = 1 [default = ""];
     optional int32 start_line_index = 2 [default = 0];
@@ -75,6 +82,7 @@ message TextBlockProto {
     optional string audio_file = 5 [default = ""];
     optional int64 audio_start_ms = 6 [default = 0];
     optional int64 audio_end_ms = 7 [default = 0];
+    repeated WordInfoProto words = 8;
 }
 
 message AudioRecordingProto {

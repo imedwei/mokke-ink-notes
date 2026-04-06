@@ -320,7 +320,7 @@ class WritingActivity : AppCompatActivity() {
         viewToggleButton.setOnClickListener { toggleNotesCues() }
         rotateButton.setOnClickListener { orientationManager.toggleOrientation() }
 
-        inkCanvas.onTextBlockTap = { block -> handleTextBlockTap(block) }
+        inkCanvas.onTextBlockTap = { block, wordStartMs -> handleTextBlockTap(block, wordStartMs) }
         inkCanvas.onSpaceInsert = { anchorLine, lines ->
             if (lines > 0) {
                 coordinator?.insertSpace(anchorLine, lines)
@@ -968,7 +968,7 @@ class WritingActivity : AppCompatActivity() {
 
     // --- Audio Playback ---
 
-    private fun handleTextBlockTap(block: com.writer.model.TextBlock) {
+    private fun handleTextBlockTap(block: com.writer.model.TextBlock, wordStartMs: Long? = null) {
         if (block.audioFile.isEmpty()) return
 
         // If tapping the currently playing block → toggle pause/resume
@@ -1010,7 +1010,7 @@ class WritingActivity : AppCompatActivity() {
             inkCanvas.playingTextBlockId = null
         }
 
-        player.play(audioFile, block.audioStartMs)
+        player.play(audioFile, wordStartMs ?: block.audioStartMs)
     }
 
     /** Extract audio file from the document bundle to a temp file for MediaPlayer. */
@@ -1248,13 +1248,13 @@ class WritingActivity : AppCompatActivity() {
             }
         }
 
-        transcriber.onFinalResult = { text ->
-            android.util.Log.i("WritingActivity", "Whisper final: $text")
+        transcriber.onFinalResultWithWords = { text, words ->
+            android.util.Log.i("WritingActivity", "Whisper final: $text (${words.size} words)")
             inkCanvas.transcriptionProgress = null
             inkCanvas.recordingPlaceholderLine = -1
             val recordingName = "rec-${lectureRecordingStartMs}.wav"
             if (text.isNotBlank()) {
-                activeCoordinator?.insertTextBlock(text, audioFile = recordingName)
+                activeCoordinator?.insertTextBlock(text, audioFile = recordingName, words = words)
                 updateCueIndicatorStrip()
             }
             // Save audio to document bundle

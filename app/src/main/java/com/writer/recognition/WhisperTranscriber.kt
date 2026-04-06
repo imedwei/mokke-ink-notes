@@ -35,6 +35,8 @@ class WhisperTranscriber(private val context: Context) : AudioTranscriber {
     var onStatusUpdate: ((String) -> Unit)? = null
     /** Progress updates during transcription (0.0 to 1.0, audioDurationSec). */
     var onTranscriptionProgress: ((progress: Float, audioDurationSec: Float) -> Unit)? = null
+    /** Final result with per-word data (confidence + timestamps). */
+    var onFinalResultWithWords: ((String, List<com.writer.model.WordInfo>) -> Unit)? = null
     override var isListening: Boolean = false
         private set
 
@@ -137,13 +139,13 @@ class WhisperTranscriber(private val context: Context) : AudioTranscriber {
             samples = audioBuffer.toFloatArray()
         }
 
-        val text = withContext(scope.coroutineContext) {
+        val result = withContext(scope.coroutineContext) {
             transcribe(samples)
         }
 
-        if (text.isNotBlank()) {
+        if (result.text.isNotBlank()) {
             withContext(Dispatchers.Main) {
-                onPartialResult?.invoke(text.trim())
+                onPartialResult?.invoke(result.text.trim())
             }
         }
     }
@@ -189,14 +191,15 @@ class WhisperTranscriber(private val context: Context) : AudioTranscriber {
                     }
                 }
 
-                val text = withContext(scope.coroutineContext) {
+                val result = withContext(scope.coroutineContext) {
                     transcribe(samples)
                 }
 
                 progressJob.cancel()
                 withContext(Dispatchers.Main) {
                     onTranscriptionProgress?.invoke(1f, durationSec)
-                    onFinalResult?.invoke(text.trim())
+                    onFinalResultWithWords?.invoke(result.text.trim(), result.words)
+                    onFinalResult?.invoke(result.text.trim())
                 }
             } else {
                 withContext(Dispatchers.Main) {
@@ -261,32 +264,73 @@ class WhisperTranscriber(private val context: Context) : AudioTranscriber {
                 .edit().putFloat(PREF_REALTIME_FACTOR, value).apply()
         }
 
-    private fun transcribe(samples: FloatArray): String {
-        if (whisperPtr == 0L) return ""
+    data class TranscribeResult(val text: String, val words: List<com.writer.model.WordInfo>)
+
+    private fun transcribe(samples: FloatArray): TranscribeResult {
+        if (whisperPtr == 0L) return TranscribeResult("", emptyList())
         val threads = Runtime.getRuntime().availableProcessors().coerceIn(2, 4)
         val startMs = System.currentTimeMillis()
         WhisperLib.fullTranscribe(whisperPtr, threads, samples, vadModelPath)
         val elapsedMs = System.currentTimeMillis() - startMs
         val segmentCount = WhisperLib.getTextSegmentCount(whisperPtr)
-        val result = buildString {
-            for (i in 0 until segmentCount) {
-                append(WhisperLib.getTextSegment(whisperPtr, i))
+
+        val allWords = mutableListOf<com.writer.model.WordInfo>()
+        val fullText = buildString {
+            for (seg in 0 until segmentCount) {
+                append(WhisperLib.getTextSegment(whisperPtr, seg))
+
+                // Collect per-token data and group into words
+                val tokenCount = WhisperLib.getTokenCount(whisperPtr, seg)
+                var currentWord = StringBuilder()
+                var wordMinConfidence = 1f
+                var wordT0 = 0L
+                var wordT1 = 0L
+
+                for (tok in 0 until tokenCount) {
+                    val tokText = WhisperLib.getTokenText(whisperPtr, seg, tok)
+                    val tokProb = WhisperLib.getTokenProbability(whisperPtr, seg, tok)
+                    val tokT0 = WhisperLib.getTokenT0(whisperPtr, seg, tok) * 10 // centiseconds → ms
+                    val tokT1 = WhisperLib.getTokenT1(whisperPtr, seg, tok) * 10
+
+                    // Skip special tokens (timestamps, etc.)
+                    if (tokText.isEmpty() || tokText.startsWith("[") || tokText.startsWith("<")) continue
+
+                    // New word starts with a space
+                    if (tokText.startsWith(" ") && currentWord.isNotEmpty()) {
+                        val word = currentWord.toString().trim()
+                        if (word.isNotEmpty()) {
+                            allWords.add(com.writer.model.WordInfo(word, wordMinConfidence, wordT0, wordT1))
+                        }
+                        currentWord = StringBuilder()
+                        wordMinConfidence = 1f
+                        wordT0 = tokT0
+                    }
+                    if (currentWord.isEmpty()) wordT0 = tokT0
+                    currentWord.append(tokText)
+                    wordMinConfidence = minOf(wordMinConfidence, tokProb)
+                    wordT1 = tokT1
+                }
+                // Flush last word
+                val lastWord = currentWord.toString().trim()
+                if (lastWord.isNotEmpty()) {
+                    allWords.add(com.writer.model.WordInfo(lastWord, wordMinConfidence, wordT0, wordT1))
+                }
             }
         }
+
         val audioDurationSec = samples.size / WHISPER_SAMPLE_RATE.toFloat()
         val measuredFactor = elapsedMs / 1000f / audioDurationSec
-        Log.i(tag, "Transcribed %.1fs audio in %dms (%.1fx realtime): %d segments, \"%s\"".format(
-            audioDurationSec, elapsedMs, measuredFactor, segmentCount, result.take(80)
+        Log.i(tag, "Transcribed %.1fs audio in %dms (%.1fx realtime): %d segments, %d words, \"%s\"".format(
+            audioDurationSec, elapsedMs, measuredFactor, segmentCount, allWords.size, fullText.take(80)
         ))
+        for (w in allWords) {
+            Log.d(tag, "  word: '${w.text}' conf=%.2f t=[%d-%d]ms".format(w.confidence, w.startMs, w.endMs))
+        }
 
-        // Update calibrated factor with exponential moving average (α=0.3)
         val prev = calibratedRealtimeFactor
         calibratedRealtimeFactor = prev * 0.7f + measuredFactor * 0.3f
-        Log.i(tag, "Realtime factor: measured=%.1fx, calibrated=%.1fx (was %.1fx)".format(
-            measuredFactor, calibratedRealtimeFactor, prev
-        ))
 
-        return result
+        return TranscribeResult(fullText, allWords)
     }
 
     /** Download the whisper model if not already cached. Returns the file path. */

@@ -8,6 +8,7 @@ import com.writer.model.InkStroke
 import com.writer.model.StrokePoint
 import com.writer.model.StrokeType
 import com.writer.model.TextBlock
+import com.writer.model.WordInfo
 import com.writer.model.proto.AudioRecordingProto
 import com.writer.model.proto.ColumnDataProto
 import com.writer.model.proto.DiagramAreaProto
@@ -16,6 +17,7 @@ import com.writer.model.proto.InkStrokeProto
 import com.writer.model.proto.StrokePointProto
 import com.writer.model.proto.StrokeTypeProto
 import com.writer.model.proto.TextBlockProto
+import com.writer.model.proto.WordInfoProto
 import com.writer.view.ScreenMetrics
 
 // Coordinate system constants matching document.proto
@@ -92,7 +94,15 @@ fun TextBlock.toProto(): TextBlockProto = TextBlockProto(
     text = text,
     audio_file = audioFile,
     audio_start_ms = audioStartMs,
-    audio_end_ms = audioEndMs
+    audio_end_ms = audioEndMs,
+    words = words.map { it.toProto() }
+)
+
+fun WordInfo.toProto(): WordInfoProto = WordInfoProto(
+    text = text,
+    confidence = confidence,
+    start_ms = startMs,
+    end_ms = endMs
 )
 
 fun AudioRecording.toProto(): AudioRecordingProto = AudioRecordingProto(
@@ -229,7 +239,15 @@ fun TextBlockProto.toDomain(): TextBlock = TextBlock(
     text = text ?: "",
     audioFile = audio_file ?: "",
     audioStartMs = audio_start_ms ?: 0,
-    audioEndMs = audio_end_ms ?: 0
+    audioEndMs = audio_end_ms ?: 0,
+    words = words.map { it.toDomain() }
+)
+
+fun WordInfoProto.toDomain(): WordInfo = WordInfo(
+    text = text ?: "",
+    confidence = confidence ?: 1f,
+    startMs = start_ms ?: 0,
+    endMs = end_ms ?: 0
 )
 
 fun AudioRecordingProto.toDomain(): AudioRecording = AudioRecording(

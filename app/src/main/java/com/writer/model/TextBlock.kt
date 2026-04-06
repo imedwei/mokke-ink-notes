@@ -9,7 +9,8 @@ data class TextBlock(
     val text: String = "",
     val audioFile: String = "",
     val audioStartMs: Long = 0,
-    val audioEndMs: Long = 0
+    val audioEndMs: Long = 0,
+    val words: List<WordInfo> = emptyList()
 ) {
     val endLineIndex: Int get() = startLineIndex + heightInLines - 1
     fun containsLine(lineIndex: Int) = lineIndex in startLineIndex..endLineIndex

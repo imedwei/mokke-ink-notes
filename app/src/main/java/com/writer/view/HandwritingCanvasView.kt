@@ -92,8 +92,8 @@ class HandwritingCanvasView @JvmOverloads constructor(
     /** Text blocks (transcribed audio) in the current document. */
     var textBlocks: List<TextBlock> = emptyList()
 
-    /** Called when user finger-taps a TextBlock with linked audio. */
-    var onTextBlockTap: ((TextBlock) -> Unit)? = null
+    /** Called when user finger-taps a TextBlock with linked audio. Second param is word-level startMs if available. */
+    var onTextBlockTap: ((TextBlock, Long?) -> Unit)? = null
 
     /** ID of the TextBlock currently playing audio (for visual indicator). */
     var playingTextBlockId: String? = null
@@ -187,6 +187,14 @@ class HandwritingCanvasView @JvmOverloads constructor(
         textSize = ScreenMetrics.dp(14f)
         isAntiAlias = false
     }
+
+    private val squigglePaint = Paint().apply {
+        color = 0xFFD32F2F.toInt() // Material Red 700 — visible on Kaleido 3 color e-ink
+        style = Paint.Style.STROKE
+        strokeWidth = ScreenMetrics.dp(1.5f)
+        isAntiAlias = false // sharper on e-ink
+    }
+    private val confidenceThreshold = 0.5f
 
     private val audioIconPaint = Paint().apply {
         color = Color.GRAY
@@ -662,7 +670,23 @@ class HandwritingCanvasView @JvmOverloads constructor(
                     }
                     if (tappedBlock != null) {
                         if (!tutorialMode) resumeRawDrawing()
-                        onTextBlockTap?.invoke(tappedBlock)
+                        // Map tap X to a specific word for word-level audio seek
+                        val tapDocX = event.x
+                        var wordStartMs: Long? = null
+                        if (tappedBlock.words.isNotEmpty()) {
+                            val margin = LINE_SPACING * 0.3f
+                            val spW = textBlockPaint.measureText(" ")
+                            var wx = margin
+                            for (word in tappedBlock.words) {
+                                val ww = textBlockPaint.measureText(word.text)
+                                if (tapDocX >= wx && tapDocX <= wx + ww) {
+                                    wordStartMs = word.startMs
+                                    break
+                                }
+                                wx += ww + spW
+                            }
+                        }
+                        onTextBlockTap?.invoke(tappedBlock, wordStartMs)
                         return true
                     }
                 }
@@ -1357,6 +1381,36 @@ class HandwritingCanvasView @JvmOverloads constructor(
                 val ruledLineIndex = block.startLineIndex + i
                 val baselineY = TOP_MARGIN + (ruledLineIndex + 1) * LINE_SPACING + blockShift
                 canvas.drawText(lineText, textLeftMargin, baselineY, textBlockPaint)
+            }
+
+            // Draw red squiggly underline on low-confidence words
+            if (block.words.isNotEmpty()) {
+                val spaceW = textBlockPaint.measureText(" ")
+                var wordX = textLeftMargin
+                for (word in block.words) {
+                    val wordWidth = textBlockPaint.measureText(word.text)
+                    if (word.confidence < confidenceThreshold) {
+                        // Find which ruled line this word is on (approximate by X overflow)
+                        val wordLine = block.startLineIndex // simplified: first line
+                        val baselineY = TOP_MARGIN + (wordLine + 1) * LINE_SPACING + blockShift
+                        val squiggleY = baselineY + ScreenMetrics.dp(2f)
+                        val amplitude = ScreenMetrics.dp(2f)
+                        val period = ScreenMetrics.dp(6f)
+                        val squigglePath = android.graphics.Path()
+                        squigglePath.moveTo(wordX, squiggleY)
+                        var sx = wordX
+                        var phase = 0
+                        while (sx < wordX + wordWidth) {
+                            val nextX = (sx + period / 2).coerceAtMost(wordX + wordWidth)
+                            val dy = if (phase % 2 == 0) amplitude else -amplitude
+                            squigglePath.lineTo(nextX, squiggleY + dy)
+                            sx = nextX
+                            phase++
+                        }
+                        canvas.drawPath(squigglePath, squigglePaint)
+                    }
+                    wordX += wordWidth + spaceW
+                }
             }
 
             // Draw audio indicators

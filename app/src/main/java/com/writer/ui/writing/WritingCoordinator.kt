@@ -803,7 +803,7 @@ class WritingCoordinator(
     }
 
     /** Insert a transcribed text block after all existing content. */
-    fun insertTextBlock(text: String, audioFile: String = "", startMs: Long = 0, endMs: Long = 0) {
+    fun insertTextBlock(text: String, audioFile: String = "", startMs: Long = 0, endMs: Long = 0, words: List<com.writer.model.WordInfo> = emptyList()) {
         // Place after the highest stroke or text block content
         val highestStrokeLine = if (columnModel.activeStrokes.isNotEmpty()) {
             columnModel.activeStrokes.maxOf { lineSegmenter.getStrokeLineIndex(it) }
@@ -819,7 +819,8 @@ class WritingCoordinator(
             text = text,
             audioFile = audioFile,
             audioStartMs = startMs,
-            audioEndMs = endMs
+            audioEndMs = endMs,
+            words = words
         )
         saveSnapshot(UndoCoalescer.ActionType.STROKE_ADDED, lineIndex)
         columnModel.textBlocks.add(block)
