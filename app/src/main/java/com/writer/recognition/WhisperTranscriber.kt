@@ -172,7 +172,7 @@ class WhisperTranscriber(private val context: Context) : AudioTranscriber {
 
             if (samples.size >= WHISPER_SAMPLE_RATE) {
                 val durationSec = samples.size / WHISPER_SAMPLE_RATE.toFloat()
-                val estimatedMs = (durationSec * ESTIMATED_REALTIME_FACTOR * 1000).toLong()
+                val estimatedMs = (durationSec * calibratedRealtimeFactor * 1000).toLong()
                 withContext(Dispatchers.Main) {
                     onStatusUpdate?.invoke("Transcribing %.0fs of audio...".format(durationSec))
                     onTranscriptionProgress?.invoke(0f, durationSec)
@@ -252,6 +252,15 @@ class WhisperTranscriber(private val context: Context) : AudioTranscriber {
 
     private var vadModelPath: String? = null
 
+    /** Calibrated realtime factor — updated after each transcription via EMA. */
+    var calibratedRealtimeFactor: Float
+        get() = context.getSharedPreferences(PREFS_NAME, android.content.Context.MODE_PRIVATE)
+            .getFloat(PREF_REALTIME_FACTOR, ESTIMATED_REALTIME_FACTOR)
+        private set(value) {
+            context.getSharedPreferences(PREFS_NAME, android.content.Context.MODE_PRIVATE)
+                .edit().putFloat(PREF_REALTIME_FACTOR, value).apply()
+        }
+
     private fun transcribe(samples: FloatArray): String {
         if (whisperPtr == 0L) return ""
         val threads = Runtime.getRuntime().availableProcessors().coerceIn(2, 4)
@@ -265,10 +274,18 @@ class WhisperTranscriber(private val context: Context) : AudioTranscriber {
             }
         }
         val audioDurationSec = samples.size / WHISPER_SAMPLE_RATE.toFloat()
+        val measuredFactor = elapsedMs / 1000f / audioDurationSec
         Log.i(tag, "Transcribed %.1fs audio in %dms (%.1fx realtime): %d segments, \"%s\"".format(
-            audioDurationSec, elapsedMs, elapsedMs / 1000f / audioDurationSec,
-            segmentCount, result.take(80)
+            audioDurationSec, elapsedMs, measuredFactor, segmentCount, result.take(80)
         ))
+
+        // Update calibrated factor with exponential moving average (α=0.3)
+        val prev = calibratedRealtimeFactor
+        calibratedRealtimeFactor = prev * 0.7f + measuredFactor * 0.3f
+        Log.i(tag, "Realtime factor: measured=%.1fx, calibrated=%.1fx (was %.1fx)".format(
+            measuredFactor, calibratedRealtimeFactor, prev
+        ))
+
         return result
     }
 
@@ -358,8 +375,10 @@ class WhisperTranscriber(private val context: Context) : AudioTranscriber {
     companion object {
         private const val WHISPER_SAMPLE_RATE = 16000
         private const val CHUNK_SECONDS = 10
-        private const val ESTIMATED_REALTIME_FACTOR = 5f // ~5x realtime on Snapdragon 690
+        private const val ESTIMATED_REALTIME_FACTOR = 5f // initial guess, calibrated over time
         private const val PROGRESS_UPDATE_INTERVAL_MS = 3000L
+        private const val PREFS_NAME = "whisper_prefs"
+        private const val PREF_REALTIME_FACTOR = "realtime_factor"
 
         // ggml-tiny.en f16 (~75 MB) — fastest on Snapdragon 690 (q5_1 is slower due to dequant overhead)
         private const val MODEL_FILENAME = "ggml-tiny.en.bin"

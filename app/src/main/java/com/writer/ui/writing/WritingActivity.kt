@@ -1216,11 +1216,13 @@ class WritingActivity : AppCompatActivity() {
         }
 
         transcriber.onTranscriptionProgress = { progress, audioDurationSec ->
+            val factor = (transcriber as? com.writer.recognition.WhisperTranscriber)?.calibratedRealtimeFactor ?: 5f
             inkCanvas.transcriptionProgress = com.writer.view.HandwritingCanvasView.TranscriptionProgress(
                 lineIndex = progressLineIndex,
                 audioDurationSec = audioDurationSec,
                 progress = progress,
-                label = "Transcribing %.0fs of audio... %d%%".format(audioDurationSec, (progress * 100).toInt())
+                label = "Transcribing %.0fs of audio... %d%% (~%.1fx realtime)".format(
+                    audioDurationSec, (progress * 100).toInt(), factor)
             )
         }
 

@@ -167,7 +167,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
 
     private val progressLabelPaint = Paint().apply {
         color = Color.DKGRAY
-        textSize = ScreenMetrics.dp(11f)
+        textSize = ScreenMetrics.dp(14f)
         isAntiAlias = true
     }
 
@@ -1430,18 +1430,25 @@ class HandwritingCanvasView @JvmOverloads constructor(
         }
 
         // Draw transcription progress bar at the line where TextBlock will appear
+        // Spans two ruled lines: bar on first line, label on second line
         transcriptionProgress?.let { prog ->
             val barLeftMargin = LINE_SPACING * 0.3f
-            val barY = TOP_MARGIN + prog.lineIndex * LINE_SPACING + LINE_SPACING * 0.3f
+            val barY = TOP_MARGIN + prog.lineIndex * LINE_SPACING + LINE_SPACING * 0.35f
             val barWidth = canvasRight - 2 * barLeftMargin
-            val barHeight = ScreenMetrics.dp(6f)
+            val barHeight = ScreenMetrics.dp(10f)
 
             // Background track
             canvas.drawRect(barLeftMargin, barY, barLeftMargin + barWidth, barY + barHeight, progressBgPaint)
             // Filled portion
             canvas.drawRect(barLeftMargin, barY, barLeftMargin + barWidth * prog.progress, barY + barHeight, progressFillPaint)
-            // Label below
-            val labelY = barY + barHeight + ScreenMetrics.dp(14f)
+
+            // Percentage text right-aligned on the bar
+            val pctText = "%d%%".format((prog.progress * 100).toInt())
+            val pctWidth = progressLabelPaint.measureText(pctText)
+            canvas.drawText(pctText, barLeftMargin + barWidth - pctWidth, barY - ScreenMetrics.dp(3f), progressLabelPaint)
+
+            // Label on the next line
+            val labelY = TOP_MARGIN + (prog.lineIndex + 1) * LINE_SPACING + LINE_SPACING * 0.5f
             canvas.drawText(prog.label, barLeftMargin, labelY, progressLabelPaint)
         }
 
