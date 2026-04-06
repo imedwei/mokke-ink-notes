@@ -197,11 +197,13 @@ class WhisperTranscriber(private val context: Context) : AudioTranscriber {
         }
     }
 
+    private var vadModelPath: String? = null
+
     private fun transcribe(samples: FloatArray): String {
         if (whisperPtr == 0L) return ""
         val threads = Runtime.getRuntime().availableProcessors().coerceIn(2, 4)
         val startMs = System.currentTimeMillis()
-        WhisperLib.fullTranscribe(whisperPtr, threads, samples)
+        WhisperLib.fullTranscribe(whisperPtr, threads, samples, vadModelPath)
         val elapsedMs = System.currentTimeMillis() - startMs
         val segmentCount = WhisperLib.getTextSegmentCount(whisperPtr)
         val result = buildString {
@@ -225,6 +227,8 @@ class WhisperTranscriber(private val context: Context) : AudioTranscriber {
 
         if (modelFile.exists() && modelFile.length() > 0) {
             Log.i(tag, "Model already downloaded: ${modelFile.absolutePath}")
+            val vadFile = File(modelDir, VAD_MODEL_FILENAME)
+            if (vadFile.exists()) vadModelPath = vadFile.absolutePath
             withContext(Dispatchers.Main) {
                 onStatusUpdate?.invoke("Loading whisper model...")
             }
@@ -274,6 +278,22 @@ class WhisperTranscriber(private val context: Context) : AudioTranscriber {
             withContext(Dispatchers.Main) {
                 onStatusUpdate?.invoke("Model downloaded")
             }
+
+            // Also download VAD model if not cached
+            val vadFile = File(modelDir, VAD_MODEL_FILENAME)
+            if (!vadFile.exists() || vadFile.length() == 0L) {
+                Log.i(tag, "Downloading VAD model...")
+                try {
+                    URL(VAD_MODEL_URL).openStream().use { input ->
+                        vadFile.outputStream().use { output -> input.copyTo(output) }
+                    }
+                    Log.i(tag, "VAD model downloaded: ${vadFile.length()} bytes")
+                } catch (e: Exception) {
+                    Log.w(tag, "Failed to download VAD model — continuing without VAD", e)
+                }
+            }
+            if (vadFile.exists()) vadModelPath = vadFile.absolutePath
+
             modelFile.absolutePath
         } catch (e: Exception) {
             Log.e(tag, "Failed to download model", e)
@@ -286,10 +306,15 @@ class WhisperTranscriber(private val context: Context) : AudioTranscriber {
         private const val WHISPER_SAMPLE_RATE = 16000
         private const val CHUNK_SECONDS = 10 // Transcribe every N seconds
 
-        // ggml-tiny.en model (~39 MB) — fastest model, suitable for e-ink tablet CPUs
+        // ggml-tiny.en f16 (~75 MB) — fastest on Snapdragon 690 (q5_1 is slower due to dequant overhead)
         private const val MODEL_FILENAME = "ggml-tiny.en.bin"
         private const val MODEL_URL =
             "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin"
+
+        // Silero VAD model (~2 MB) — skips silent segments for faster transcription
+        private const val VAD_MODEL_FILENAME = "ggml-silero-v5.1.2.bin"
+        private const val VAD_MODEL_URL =
+            "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin?download=true"
 
         fun isAvailable(): Boolean = try {
             WhisperLib // Triggers native library load
