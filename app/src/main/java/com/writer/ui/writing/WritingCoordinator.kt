@@ -630,25 +630,50 @@ class WritingCoordinator(
         audioRecordings.add(recording)
     }
 
+    // Debounce timer for TextBlock replacement recognition
+    private var textBlockReplaceJob: kotlinx.coroutines.Job? = null
+    private var pendingReplaceBlock: TextBlock? = null
+    private var pendingReplaceLineIdx: Int = -1
+    private val REPLACE_DEBOUNCE_MS = 800L
+
     /**
-     * Handle a stroke written on a TextBlock line — recognize it and insert
-     * the recognized text into the TextBlock at the stroke's X position.
+     * Handle a stroke written on a TextBlock line — accumulate strokes and
+     * debounce recognition until the user pauses writing.
      */
     private fun onTextBlockReplacementStroke(
         stroke: InkStroke, block: TextBlock, lineIdx: Int, elapsedMs: Long
     ) {
         saveSnapshot(UndoCoalescer.ActionType.STROKE_ADDED, lineIdx)
-
-        // Temporarily add stroke so recognition can use it, then remove after
         columnModel.activeStrokes.add(stroke)
+        pendingReplaceBlock = block
+        pendingReplaceLineIdx = lineIdx
+
+        // Cancel previous debounce and restart
+        textBlockReplaceJob?.cancel()
+        textBlockReplaceJob = scope.launch {
+            kotlinx.coroutines.delay(REPLACE_DEBOUNCE_MS)
+            commitTextBlockReplacement()
+        }
+
+        eventLog.recordEvent(lastStrokeIndex, StrokeEventLog.EventType.ADDED,
+            "textblock_replace line=$lineIdx", elapsedMs = elapsedMs)
+    }
+
+    private suspend fun commitTextBlockReplacement() {
+        val block = pendingReplaceBlock ?: return
+        val lineIdx = pendingReplaceLineIdx
+        pendingReplaceBlock = null
 
         val lineStrokes = columnModel.activeStrokes.filter {
             lineSegmenter.getStrokeLineIndex(it) == lineIdx
         }
+        if (lineStrokes.isEmpty()) return
 
-        // Compute pre-context from the TextBlock text (last 20 chars before stroke position)
+        // Compute pre-context from the TextBlock text
         val textLeftMargin = HandwritingCanvasView.LINE_SPACING * 0.3f
-        val strokeCenterX = (stroke.minX + stroke.maxX) / 2f
+        val strokeMinX = lineStrokes.minOf { it.minX }
+        val strokeMaxX = lineStrokes.maxOf { it.maxX }
+        val strokeCenterX = (strokeMinX + strokeMaxX) / 2f
         val relativeX = strokeCenterX - textLeftMargin
         val charWidth = TextBlockEraser.estimateCharWidth(
             block.text, inkCanvas.width.toFloat(), textLeftMargin
@@ -656,61 +681,54 @@ class WritingCoordinator(
         val approxCharPos = (relativeX / charWidth).toInt().coerceIn(0, block.text.length)
         val preContext = block.text.take(approxCharPos).takeLast(20)
 
-        scope.launch {
-            val recognized = try {
-                val line = lineSegmenter.buildInkLine(lineStrokes, lineIdx)
-                recognizer.recognizeLine(line, preContext)
-            } catch (e: Exception) {
-                Log.w(TAG, "Recognition failed for replacement stroke", e)
-                ""
-            }
+        val recognized = try {
+            val line = lineSegmenter.buildInkLine(lineStrokes, lineIdx)
+            recognizer.recognizeLine(line, preContext)
+        } catch (e: Exception) {
+            Log.w(TAG, "Recognition failed for replacement stroke", e)
+            ""
+        }
 
-            // Remove the ink stroke — it's been absorbed into the TextBlock
-            columnModel.activeStrokes.removeAll { it.strokeId == stroke.strokeId }
-            inkCanvas.removeStrokes(setOf(stroke.strokeId))
+        // Remove all replacement strokes from the canvas
+        val idsToRemove = lineStrokes.map { it.strokeId }.toSet()
+        columnModel.activeStrokes.removeAll { it.strokeId in idsToRemove }
+        inkCanvas.removeStrokes(idsToRemove)
 
-            if (recognized.isBlank()) {
-                inkCanvas.pauseRawDrawing()
-                inkCanvas.drawToSurface()
-                inkCanvas.resumeRawDrawing()
-                return@launch
-            }
-
-            // Insert recognized text at the position matching the stroke's X
-            val words = block.text.split(" ").toMutableList()
-
-            // Find insertion position by character offset (reusing pre-computed values)
-            var charOffset = 0f
-            var insertIdx = words.size
-            for (i in words.indices) {
-                val wordEnd = charOffset + words[i].length * charWidth
-                if (relativeX < wordEnd) {
-                    insertIdx = i
-                    break
-                }
-                charOffset = wordEnd + charWidth
-            }
-
-            words.add(insertIdx, recognized.trim())
-            val newText = words.joinToString(" ")
-
-            val idx = columnModel.textBlocks.indexOf(block)
-            if (idx >= 0) {
-                columnModel.textBlocks[idx] = block.copy(text = newText)
-            }
-
-            inkCanvas.textBlocks = columnModel.textBlocks.toList()
-            // Force e-ink refresh by pausing/resuming raw drawing
+        if (recognized.isBlank()) {
             inkCanvas.pauseRawDrawing()
             inkCanvas.drawToSurface()
             inkCanvas.resumeRawDrawing()
-            displayManager.displayHiddenLines()
-            onUndoRedoStateChanged?.invoke()
-            Log.i(TAG, "TextBlock replacement: inserted '$recognized' → '$newText'")
+            return
         }
 
-        eventLog.recordEvent(lastStrokeIndex, StrokeEventLog.EventType.ADDED,
-            "textblock_replace line=$lineIdx", elapsedMs = elapsedMs)
+        // Insert recognized text at the position matching the strokes' X
+        val words = block.text.split(" ").toMutableList()
+        var charOffset = 0f
+        var insertIdx = words.size
+        for (i in words.indices) {
+            val wordEnd = charOffset + words[i].length * charWidth
+            if (relativeX < wordEnd) {
+                insertIdx = i
+                break
+            }
+            charOffset = wordEnd + charWidth
+        }
+
+        words.add(insertIdx, recognized.trim())
+        val newText = words.joinToString(" ")
+
+        val idx = columnModel.textBlocks.indexOf(block)
+        if (idx >= 0) {
+            columnModel.textBlocks[idx] = block.copy(text = newText)
+        }
+
+        inkCanvas.textBlocks = columnModel.textBlocks.toList()
+        inkCanvas.pauseRawDrawing()
+        inkCanvas.drawToSurface()
+        inkCanvas.resumeRawDrawing()
+        displayManager.displayHiddenLines()
+        onUndoRedoStateChanged?.invoke()
+        Log.i(TAG, "TextBlock replacement: inserted '$recognized' → '$newText'")
     }
 
     /** Insert a transcribed text block after all existing content. */
