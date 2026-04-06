@@ -92,6 +92,13 @@ class HandwritingCanvasView @JvmOverloads constructor(
     /** Text blocks (transcribed audio) in the current document. */
     var textBlocks: List<TextBlock> = emptyList()
 
+    /** Called when user finger-taps a TextBlock with linked audio. */
+    var onTextBlockTap: ((TextBlock) -> Unit)? = null
+
+    /** ID of the TextBlock currently playing audio (for visual indicator). */
+    var playingTextBlockId: String? = null
+        set(value) { field = value; drawToSurface() }
+
     private val textBlockPaint = TextPaint().apply {
         color = Color.BLACK
         textSize = ScreenMetrics.textBody
@@ -136,6 +143,18 @@ class HandwritingCanvasView @JvmOverloads constructor(
     private fun stopRecordingIndicator() {
         handler.removeCallbacks(recordingBlinkRunnable)
         drawToSurface()
+    }
+
+    private val audioIconPaint = Paint().apply {
+        color = Color.GRAY
+        style = Paint.Style.FILL
+        isAntiAlias = true
+    }
+
+    private val playbackAccentPaint = Paint().apply {
+        color = Color.DKGRAY
+        style = Paint.Style.FILL
+        strokeWidth = ScreenMetrics.dp(3f)
     }
 
     /** Column model reference for magnetic snap access. */
@@ -590,6 +609,21 @@ class HandwritingCanvasView @JvmOverloads constructor(
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 if (!fingerScrollActive) return false
                 fingerScrollActive = false
+
+                // Detect tap (no scroll movement) on a TextBlock with audio
+                if (event.action == MotionEvent.ACTION_UP && tf != null && !tf.hasMovedPastSlop()) {
+                    val docY = event.y + scrollOffsetY
+                    val tapLine = ((docY - TOP_MARGIN) / LINE_SPACING).toInt().coerceAtLeast(0)
+                    val tappedBlock = textBlocks.find {
+                        it.containsLine(tapLine) && it.audioFile.isNotEmpty()
+                    }
+                    if (tappedBlock != null) {
+                        if (!tutorialMode) resumeRawDrawing()
+                        onTextBlockTap?.invoke(tappedBlock)
+                        return true
+                    }
+                }
+
                 if (textOverscroll == 0f) {
                     scrollOffsetY = snapToLine(scrollOffsetY)
                 }
@@ -1280,6 +1314,36 @@ class HandwritingCanvasView @JvmOverloads constructor(
                 val ruledLineIndex = block.startLineIndex + i
                 val baselineY = TOP_MARGIN + (ruledLineIndex + 1) * LINE_SPACING + blockShift
                 canvas.drawText(lineText, textLeftMargin, baselineY, textBlockPaint)
+            }
+
+            // Draw audio indicators
+            if (block.audioFile.isNotEmpty()) {
+                val iconSize = LINE_SPACING * 0.25f
+                val iconX = textLeftMargin * 0.15f
+                val iconCenterY = TOP_MARGIN + block.startLineIndex * LINE_SPACING + LINE_SPACING * 0.5f + blockShift
+                val isPlaying = block.id == playingTextBlockId
+
+                if (isPlaying) {
+                    // Pause icon (two vertical bars)
+                    val barW = iconSize * 0.25f
+                    val barH = iconSize * 0.8f
+                    canvas.drawRect(iconX, iconCenterY - barH / 2, iconX + barW, iconCenterY + barH / 2, audioIconPaint)
+                    canvas.drawRect(iconX + barW * 2, iconCenterY - barH / 2, iconX + barW * 3, iconCenterY + barH / 2, audioIconPaint)
+
+                    // Accent bar on left edge
+                    val topY = TOP_MARGIN + block.startLineIndex * LINE_SPACING + blockShift
+                    val bottomY = TOP_MARGIN + (block.endLineIndex + 1) * LINE_SPACING + blockShift
+                    canvas.drawRect(0f, topY, ScreenMetrics.dp(3f), bottomY, playbackAccentPaint)
+                } else {
+                    // Speaker icon (triangle + arcs approximated as a simple triangle)
+                    val path = android.graphics.Path()
+                    path.moveTo(iconX, iconCenterY - iconSize * 0.3f)
+                    path.lineTo(iconX + iconSize * 0.6f, iconCenterY - iconSize * 0.5f)
+                    path.lineTo(iconX + iconSize * 0.6f, iconCenterY + iconSize * 0.5f)
+                    path.lineTo(iconX, iconCenterY + iconSize * 0.3f)
+                    path.close()
+                    canvas.drawPath(path, audioIconPaint)
+                }
             }
         }
 
