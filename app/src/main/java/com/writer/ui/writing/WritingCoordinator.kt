@@ -324,17 +324,34 @@ class WritingCoordinator(
                 saveSnapshot(UndoCoalescer.ActionType.SCRATCH_OUT)
                 if (eraseResult.deleteBlock) {
                     columnModel.textBlocks.remove(block)
+                    activeGap = null
                 } else {
                     val idx = columnModel.textBlocks.indexOf(block)
                     if (idx >= 0) {
-                        columnModel.textBlocks[idx] = block.copy(text = eraseResult.newText)
+                        // Insert placeholder spaces for the gap so the user can write in it
+                        val gapPlaceholder = " ".repeat(eraseResult.removedWords.length.coerceAtLeast(4))
+                        val newText = if (eraseResult.gapCharIndex <= 0) {
+                            "$gapPlaceholder ${eraseResult.newText}"
+                        } else if (eraseResult.gapCharIndex >= eraseResult.newText.length) {
+                            "${eraseResult.newText} $gapPlaceholder"
+                        } else {
+                            val before = eraseResult.newText.substring(0, eraseResult.gapCharIndex).trimEnd()
+                            val after = eraseResult.newText.substring(eraseResult.gapCharIndex).trimStart()
+                            "$before $gapPlaceholder $after"
+                        }
+                        columnModel.textBlocks[idx] = block.copy(text = newText)
+                        activeGap = TextBlockGap(
+                            blockId = block.id,
+                            gapCharIndex = eraseResult.gapCharIndex,
+                            removedWord = eraseResult.removedWords
+                        )
                     }
                 }
                 inkCanvas.textBlocks = columnModel.textBlocks.toList()
                 inkCanvas.drawToSurface()
                 displayManager.displayHiddenLines()
                 onUndoRedoStateChanged?.invoke()
-                Log.i(TAG, "Scratch-out on TextBlock: ${if (eraseResult.deleteBlock) "deleted" else "edited to '${eraseResult.newText}'"}")
+                Log.i(TAG, "Scratch-out on TextBlock: ${if (eraseResult.deleteBlock) "deleted" else "gap for '${eraseResult.removedWords}'"}")
             }
             return
         }
@@ -637,6 +654,17 @@ class WritingCoordinator(
     private val REPLACE_DEBOUNCE_MS = 800L
 
     /**
+     * Active gap in a TextBlock from scratch-out, awaiting replacement strokes.
+     * The gap is rendered as blank space on the canvas so the user can write in it.
+     */
+    data class TextBlockGap(
+        val blockId: String,
+        val gapCharIndex: Int,
+        val removedWord: String
+    )
+    private var activeGap: TextBlockGap? = null
+
+    /**
      * Handle a stroke written on a TextBlock line — accumulate strokes and
      * debounce recognition until the user pauses writing.
      */
@@ -701,25 +729,41 @@ class WritingCoordinator(
             return
         }
 
-        // Insert recognized text at the position matching the strokes' X
-        val words = block.text.split(" ").toMutableList()
-        var charOffset = 0f
-        var insertIdx = words.size
-        for (i in words.indices) {
-            val wordEnd = charOffset + words[i].length * charWidth
-            if (relativeX < wordEnd) {
-                insertIdx = i
-                break
+        // Replace the gap placeholder with the recognized text.
+        // The gap is a run of spaces inserted during scratch-out.
+        val newText = if (activeGap != null && activeGap!!.blockId == block.id) {
+            // Find and replace the gap placeholder (run of spaces) with recognized text
+            val gapRegex = Regex("  +") // 2+ consecutive spaces = gap placeholder
+            val currentText = block.text
+            val match = gapRegex.find(currentText)
+            if (match != null) {
+                currentText.substring(0, match.range.first) +
+                    recognized.trim() +
+                    currentText.substring(match.range.last + 1)
+            } else {
+                // Fallback: append
+                "${block.text} ${recognized.trim()}"
             }
-            charOffset = wordEnd + charWidth
+        } else {
+            // No active gap — insert at X position
+            val words = block.text.split(" ").toMutableList()
+            var charOffset = 0f
+            var insertIdx = words.size
+            for (i in words.indices) {
+                val wordEnd = charOffset + words[i].length * charWidth
+                if (relativeX < wordEnd) { insertIdx = i; break }
+                charOffset = wordEnd + charWidth
+            }
+            words.add(insertIdx, recognized.trim())
+            words.joinToString(" ")
         }
 
-        words.add(insertIdx, recognized.trim())
-        val newText = words.joinToString(" ")
+        // Clean up gap state
+        activeGap = null
 
         val idx = columnModel.textBlocks.indexOf(block)
         if (idx >= 0) {
-            columnModel.textBlocks[idx] = block.copy(text = newText)
+            columnModel.textBlocks[idx] = block.copy(text = newText.replace(Regex("  +"), " ").trim())
         }
 
         inkCanvas.textBlocks = columnModel.textBlocks.toList()

@@ -19,7 +19,11 @@ object TextBlockEraser {
         /** The modified text (with words removed), or empty if block should be deleted. */
         val newText: String,
         /** True if the entire TextBlock should be removed. */
-        val deleteBlock: Boolean
+        val deleteBlock: Boolean,
+        /** Character index in the NEW text where the gap is (for replacement insertion). */
+        val gapCharIndex: Int = 0,
+        /** The word(s) that were removed. */
+        val removedWords: String = ""
     )
 
     /**
@@ -62,22 +66,34 @@ object TextBlockEraser {
         val scratchEndX = scratchRight - textLeftMargin
 
         val surviving = mutableListOf<String>()
+        val removed = mutableListOf<String>()
         var charOffset = 0f
+        var gapCharIndex = 0
+        var foundGap = false
         for (word in words) {
             val wordStart = charOffset
             val wordEnd = charOffset + word.length * charWidth
-            // Keep the word if it doesn't overlap the scratch
             val overlaps = wordEnd > scratchStartX && wordStart < scratchEndX
             if (!overlaps) {
+                if (!foundGap) gapCharIndex = surviving.joinToString(" ").length + if (surviving.isNotEmpty()) 1 else 0
                 surviving.add(word)
+            } else {
+                if (!foundGap) {
+                    gapCharIndex = surviving.joinToString(" ").length + if (surviving.isNotEmpty()) 1 else 0
+                    foundGap = true
+                }
+                removed.add(word)
             }
-            charOffset = wordEnd + charWidth // space between words
+            charOffset = wordEnd + charWidth
         }
 
         val newText = surviving.joinToString(" ").trim()
+        val removedText = removed.joinToString(" ")
         return block to EraseResult(
             newText = newText,
-            deleteBlock = newText.isEmpty()
+            deleteBlock = newText.isEmpty(),
+            gapCharIndex = gapCharIndex,
+            removedWords = removedText
         )
     }
 
