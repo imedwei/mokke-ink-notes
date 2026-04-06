@@ -619,7 +619,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
                 spaceInsertDragActive = true
 
                 // If anchor is inside a diagram, scan from the diagram's top edge
-                val scanFrom = SpaceInsertMode.effectiveShiftLine(lineIndex, diagramAreas)
+                val scanFrom = SpaceInsertMode.effectiveShiftLine(lineIndex, diagramAreas, textBlocks)
 
                 // Compute max allowed upward shift by counting empty lines above scanFrom
                 val occupiedLines = completedStrokes.map { s ->
@@ -630,6 +630,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
                     val checkLine = scanFrom - i
                     if (checkLine in occupiedLines) break
                     if (diagramAreas.any { it.containsLine(checkLine) }) break
+                    if (textBlocks.any { it.containsLine(checkLine) }) break
                     emptyAbove++
                 }
                 spaceInsertMaxUpPx = emptyAbove * LINE_SPACING
@@ -1191,7 +1192,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
         // If anchor is inside a diagram, shift from the diagram's top edge so all
         // strokes in the diagram preview-shift together (mirrors SpaceInsertMode logic).
         val shiftFromLine = if (spaceInsertAnchorLine >= 0) {
-            SpaceInsertMode.effectiveShiftLine(spaceInsertAnchorLine, diagramAreas)
+            SpaceInsertMode.effectiveShiftLine(spaceInsertAnchorLine, diagramAreas, textBlocks)
         } else Int.MAX_VALUE
         val anchorY = if (shiftFromLine < Int.MAX_VALUE) {
             TOP_MARGIN + shiftFromLine * LINE_SPACING
@@ -1286,7 +1287,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
                 // When clamped at content, highlight the barrier line and blocking strokes
                 if (isClamped) {
                     val emptyAbove = (spaceInsertMaxUpPx / LINE_SPACING).toInt()
-                    val barrierLine = SpaceInsertMode.barrierLine(spaceInsertAnchorLine, diagramAreas, emptyAbove)
+                    val barrierLine = SpaceInsertMode.barrierLine(spaceInsertAnchorLine, diagramAreas, emptyAbove, textBlocks)
                     if (barrierLine >= 0) {
                         val barrierY = TOP_MARGIN + (barrierLine + 1) * LINE_SPACING
                         canvas.drawLine(0f, barrierY, canvasRight, barrierY, spaceInsertBarrierPaint)

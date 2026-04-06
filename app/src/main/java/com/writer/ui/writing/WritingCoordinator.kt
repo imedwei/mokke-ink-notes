@@ -302,7 +302,34 @@ class WritingCoordinator(
         val overlapping = StrokeEraser.findOverlappingStrokes(
             scratchPoints, columnModel.activeStrokes, left, top, right, bottom, radius
         )
-        if (overlapping.isEmpty()) return
+
+        // Check if scratch-out hits a TextBlock (even if no strokes overlap)
+        if (overlapping.isEmpty()) {
+            val tbResult = TextBlockEraser.findAndErase(
+                left, top, right, bottom,
+                columnModel.textBlocks,
+                HandwritingCanvasView.LINE_SPACING,
+                HandwritingCanvasView.TOP_MARGIN
+            )
+            if (tbResult != null) {
+                val (block, eraseResult) = tbResult
+                saveSnapshot(UndoCoalescer.ActionType.SCRATCH_OUT)
+                if (eraseResult.deleteBlock) {
+                    columnModel.textBlocks.remove(block)
+                } else {
+                    val idx = columnModel.textBlocks.indexOf(block)
+                    if (idx >= 0) {
+                        columnModel.textBlocks[idx] = block.copy(text = eraseResult.newText)
+                    }
+                }
+                inkCanvas.textBlocks = columnModel.textBlocks.toList()
+                inkCanvas.drawToSurface()
+                displayManager.displayHiddenLines()
+                onUndoRedoStateChanged?.invoke()
+                Log.i(TAG, "Scratch-out on TextBlock: ${if (eraseResult.deleteBlock) "deleted" else "edited to '${eraseResult.newText}'"}")
+            }
+            return
+        }
 
         val expanded = StrokeEraser.expandToConnectedWord(
             overlapping, columnModel.activeStrokes,

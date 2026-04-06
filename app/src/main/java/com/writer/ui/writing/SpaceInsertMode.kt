@@ -2,6 +2,7 @@ package com.writer.ui.writing
 
 import com.writer.model.DiagramArea
 import com.writer.model.ColumnModel
+import com.writer.model.TextBlock
 import com.writer.model.shiftY
 import com.writer.recognition.LineSegmenter
 import com.writer.view.HandwritingCanvasView
@@ -21,17 +22,20 @@ object SpaceInsertMode {
      * When [anchorLine] is inside a diagram, returns the diagram's start line
      * so the entire diagram moves as a unit. Otherwise returns [anchorLine].
      */
-    fun effectiveShiftLine(anchorLine: Int, diagramAreas: List<DiagramArea>): Int {
+    fun effectiveShiftLine(anchorLine: Int, diagramAreas: List<DiagramArea>, textBlocks: List<TextBlock> = emptyList()): Int {
         val containingArea = diagramAreas.find { it.containsLine(anchorLine) }
-        return containingArea?.startLineIndex ?: anchorLine
+        if (containingArea != null) return containingArea.startLineIndex
+        val containingBlock = textBlocks.find { it.containsLine(anchorLine) }
+        if (containingBlock != null) return containingBlock.startLineIndex
+        return anchorLine
     }
 
     /**
      * Compute the barrier line index — the line containing blocking content
      * that prevents further upward drag. Returns -1 if no barrier exists.
      */
-    fun barrierLine(anchorLine: Int, diagramAreas: List<DiagramArea>, emptyAbove: Int): Int {
-        val shiftFrom = effectiveShiftLine(anchorLine, diagramAreas)
+    fun barrierLine(anchorLine: Int, diagramAreas: List<DiagramArea>, emptyAbove: Int, textBlocks: List<TextBlock> = emptyList()): Int {
+        val shiftFrom = effectiveShiftLine(anchorLine, diagramAreas, textBlocks)
         val barrier = shiftFrom - emptyAbove - 1
         return if (barrier >= 0) barrier else -1
     }
@@ -49,9 +53,8 @@ object SpaceInsertMode {
         if (linesToInsert <= 0) return
         val shiftPx = linesToInsert * HandwritingCanvasView.LINE_SPACING
 
-        // If anchor is inside a diagram, shift from the diagram's top edge
-        // so all strokes in the diagram move as a unit (same pattern as removeSpace).
-        val shiftFrom = effectiveShiftLine(anchorLine, columnModel.diagramAreas)
+        // If anchor is inside a diagram or text block, shift from the start edge
+        val shiftFrom = effectiveShiftLine(anchorLine, columnModel.diagramAreas, columnModel.textBlocks)
 
         // Shift strokes at or below shiftFrom
         val shifted = columnModel.activeStrokes.map { stroke ->
@@ -74,6 +77,17 @@ object SpaceInsertMode {
         }
         columnModel.diagramAreas.clear()
         columnModel.diagramAreas.addAll(shiftedAreas)
+
+        // Shift text blocks at or below the anchor line down
+        val shiftedBlocks = columnModel.textBlocks.map { block ->
+            if (block.startLineIndex >= anchorLine || block.containsLine(anchorLine)) {
+                block.copy(startLineIndex = block.startLineIndex + linesToInsert)
+            } else {
+                block
+            }
+        }
+        columnModel.textBlocks.clear()
+        columnModel.textBlocks.addAll(shiftedBlocks)
     }
 
     /**
@@ -96,6 +110,7 @@ object SpaceInsertMode {
             if (checkLine < 0) break
             if (checkLine in occupiedLines) break
             if (columnModel.diagramAreas.any { it.containsLine(checkLine) }) break
+            if (columnModel.textBlocks.any { it.containsLine(checkLine) }) break
             count++
         }
         return count
@@ -117,8 +132,8 @@ object SpaceInsertMode {
     ): Int {
         if (linesToRemove <= 0 || anchorLine <= 0) return 0
 
-        // If anchor is inside a diagram, scan from the diagram's top edge instead
-        val scanFrom = effectiveShiftLine(anchorLine, columnModel.diagramAreas)
+        // If anchor is inside a diagram or text block, scan from its top edge
+        val scanFrom = effectiveShiftLine(anchorLine, columnModel.diagramAreas, columnModel.textBlocks)
 
         if (scanFrom <= 0) return 0
 
@@ -134,6 +149,7 @@ object SpaceInsertMode {
             if (checkLine < 0) break
             if (checkLine in occupiedLines) break
             if (columnModel.diagramAreas.any { it.containsLine(checkLine) }) break
+            if (columnModel.textBlocks.any { it.containsLine(checkLine) }) break
             emptyCount++
         }
 
@@ -164,6 +180,17 @@ object SpaceInsertMode {
         }
         columnModel.diagramAreas.clear()
         columnModel.diagramAreas.addAll(shiftedAreas)
+
+        // Shift text blocks at/below scanFrom up
+        val shiftedBlocks = columnModel.textBlocks.map { block ->
+            if (block.startLineIndex >= scanFrom) {
+                block.copy(startLineIndex = block.startLineIndex - emptyCount)
+            } else {
+                block
+            }
+        }
+        columnModel.textBlocks.clear()
+        columnModel.textBlocks.addAll(shiftedBlocks)
 
         return emptyCount
     }
