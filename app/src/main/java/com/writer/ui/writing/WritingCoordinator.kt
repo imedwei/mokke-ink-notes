@@ -688,9 +688,11 @@ class WritingCoordinator(
     }
 
     private suspend fun commitTextBlockReplacement() {
-        val block = pendingReplaceBlock ?: return
+        val savedBlock = pendingReplaceBlock ?: return
         val lineIdx = pendingReplaceLineIdx
         pendingReplaceBlock = null
+        // Look up the current version of the block (may have been modified by scratch-out gap insertion)
+        val block = columnModel.textBlocks.find { it.id == savedBlock.id } ?: return
 
         val lineStrokes = columnModel.activeStrokes.filter {
             lineSegmenter.getStrokeLineIndex(it) == lineIdx
@@ -745,14 +747,16 @@ class WritingCoordinator(
                 "${block.text} ${recognized.trim()}"
             }
         } else {
-            // No active gap — insert at X position
-            val words = block.text.split(" ").toMutableList()
-            var charOffset = 0f
+            // No active gap — insert at X position using measured word widths
+            val paint = android.text.TextPaint().apply { textSize = com.writer.view.ScreenMetrics.textBody }
+            val spaceW = paint.measureText(" ")
+            val words = block.text.split(" ").filter { it.isNotEmpty() }.toMutableList()
+            var xPos = 0f
             var insertIdx = words.size
             for (i in words.indices) {
-                val wordEnd = charOffset + words[i].length * charWidth
+                val wordEnd = xPos + paint.measureText(words[i])
                 if (relativeX < wordEnd) { insertIdx = i; break }
-                charOffset = wordEnd + charWidth
+                xPos = wordEnd + spaceW
             }
             words.add(insertIdx, recognized.trim())
             words.joinToString(" ")
