@@ -33,6 +33,8 @@ class WhisperTranscriber(private val context: Context) : AudioTranscriber {
     override var onError: ((Int) -> Unit)? = null
     /** Status updates for model download progress, initialization, etc. */
     var onStatusUpdate: ((String) -> Unit)? = null
+    /** Progress updates during transcription (0.0 to 1.0, audioDurationSec). */
+    var onTranscriptionProgress: ((progress: Float, audioDurationSec: Float) -> Unit)? = null
     override var isListening: Boolean = false
         private set
 
@@ -170,13 +172,30 @@ class WhisperTranscriber(private val context: Context) : AudioTranscriber {
 
             if (samples.size >= WHISPER_SAMPLE_RATE) {
                 val durationSec = samples.size / WHISPER_SAMPLE_RATE.toFloat()
+                val estimatedMs = (durationSec * ESTIMATED_REALTIME_FACTOR * 1000).toLong()
                 withContext(Dispatchers.Main) {
                     onStatusUpdate?.invoke("Transcribing %.0fs of audio...".format(durationSec))
+                    onTranscriptionProgress?.invoke(0f, durationSec)
                 }
+
+                // Run progress ticker on main thread while transcription runs on whisper thread
+                val startTime = System.currentTimeMillis()
+                val progressJob = CoroutineScope(Dispatchers.Main).launch {
+                    while (true) {
+                        kotlinx.coroutines.delay(PROGRESS_UPDATE_INTERVAL_MS)
+                        val elapsed = System.currentTimeMillis() - startTime
+                        val progress = (elapsed.toFloat() / estimatedMs).coerceIn(0f, 0.95f)
+                        onTranscriptionProgress?.invoke(progress, durationSec)
+                    }
+                }
+
                 val text = withContext(scope.coroutineContext) {
                     transcribe(samples)
                 }
+
+                progressJob.cancel()
                 withContext(Dispatchers.Main) {
+                    onTranscriptionProgress?.invoke(1f, durationSec)
                     onFinalResult?.invoke(text.trim())
                 }
             } else {
@@ -338,7 +357,9 @@ class WhisperTranscriber(private val context: Context) : AudioTranscriber {
 
     companion object {
         private const val WHISPER_SAMPLE_RATE = 16000
-        private const val CHUNK_SECONDS = 10 // Transcribe every N seconds
+        private const val CHUNK_SECONDS = 10
+        private const val ESTIMATED_REALTIME_FACTOR = 5f // ~5x realtime on Snapdragon 690
+        private const val PROGRESS_UPDATE_INTERVAL_MS = 3000L
 
         // ggml-tiny.en f16 (~75 MB) — fastest on Snapdragon 690 (q5_1 is slower due to dequant overhead)
         private const val MODEL_FILENAME = "ggml-tiny.en.bin"

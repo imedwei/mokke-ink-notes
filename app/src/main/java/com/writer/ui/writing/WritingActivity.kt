@@ -1205,6 +1205,25 @@ class WritingActivity : AppCompatActivity() {
             Toast.makeText(this, status, Toast.LENGTH_SHORT).show()
         }
 
+        // Compute where the TextBlock will be inserted for progress display
+        val progressLineIndex = run {
+            val segmenter = com.writer.recognition.LineSegmenter()
+            val highestStroke = if (documentModel.main.activeStrokes.isNotEmpty())
+                documentModel.main.activeStrokes.maxOf { segmenter.getStrokeLineIndex(it) } else -1
+            val highestBlock = if (documentModel.main.textBlocks.isNotEmpty())
+                documentModel.main.textBlocks.maxOf { it.endLineIndex } else -1
+            maxOf(highestStroke, highestBlock) + 1
+        }
+
+        transcriber.onTranscriptionProgress = { progress, audioDurationSec ->
+            inkCanvas.transcriptionProgress = com.writer.view.HandwritingCanvasView.TranscriptionProgress(
+                lineIndex = progressLineIndex,
+                audioDurationSec = audioDurationSec,
+                progress = progress,
+                label = "Transcribing %.0fs of audio... %d%%".format(audioDurationSec, (progress * 100).toInt())
+            )
+        }
+
         transcriber.onPartialResult = { text ->
             if (text.isNotBlank() && lectureMode) {
                 android.util.Log.i("WritingActivity", "Whisper partial: $text")
@@ -1213,6 +1232,7 @@ class WritingActivity : AppCompatActivity() {
 
         transcriber.onFinalResult = { text ->
             android.util.Log.i("WritingActivity", "Whisper final: $text")
+            inkCanvas.transcriptionProgress = null // Clear progress bar
             val recordingName = "rec-${lectureRecordingStartMs}.wav"
             if (text.isNotBlank()) {
                 activeCoordinator?.insertTextBlock(text, audioFile = recordingName)

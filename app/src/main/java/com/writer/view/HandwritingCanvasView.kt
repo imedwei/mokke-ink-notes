@@ -145,6 +145,32 @@ class HandwritingCanvasView @JvmOverloads constructor(
         drawToSurface()
     }
 
+    /** Transcription progress state for inline progress bar. */
+    data class TranscriptionProgress(
+        val lineIndex: Int,
+        val audioDurationSec: Float,
+        val progress: Float, // 0.0 to 1.0
+        val label: String
+    )
+    var transcriptionProgress: TranscriptionProgress? = null
+        set(value) { field = value; drawToSurface() }
+
+    private val progressBgPaint = Paint().apply {
+        color = Color.LTGRAY
+        style = Paint.Style.FILL
+    }
+
+    private val progressFillPaint = Paint().apply {
+        color = Color.DKGRAY
+        style = Paint.Style.FILL
+    }
+
+    private val progressLabelPaint = Paint().apply {
+        color = Color.DKGRAY
+        textSize = ScreenMetrics.dp(11f)
+        isAntiAlias = true
+    }
+
     private val audioIconPaint = Paint().apply {
         color = Color.GRAY
         style = Paint.Style.FILL
@@ -1401,6 +1427,22 @@ class HandwritingCanvasView @JvmOverloads constructor(
                     }
                 }
             }
+        }
+
+        // Draw transcription progress bar at the line where TextBlock will appear
+        transcriptionProgress?.let { prog ->
+            val barLeftMargin = LINE_SPACING * 0.3f
+            val barY = TOP_MARGIN + prog.lineIndex * LINE_SPACING + LINE_SPACING * 0.3f
+            val barWidth = canvasRight - 2 * barLeftMargin
+            val barHeight = ScreenMetrics.dp(6f)
+
+            // Background track
+            canvas.drawRect(barLeftMargin, barY, barLeftMargin + barWidth, barY + barHeight, progressBgPaint)
+            // Filled portion
+            canvas.drawRect(barLeftMargin, barY, barLeftMargin + barWidth * prog.progress, barY + barHeight, progressFillPaint)
+            // Label below
+            val labelY = barY + barHeight + ScreenMetrics.dp(14f)
+            canvas.drawText(prog.label, barLeftMargin, labelY, progressLabelPaint)
         }
 
         canvas.restore()
