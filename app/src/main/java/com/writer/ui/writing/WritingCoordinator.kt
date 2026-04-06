@@ -339,7 +339,7 @@ class WritingCoordinator(
                             val after = eraseResult.newText.substring(eraseResult.gapCharIndex).trimStart()
                             "$before $gapPlaceholder $after"
                         }
-                        columnModel.textBlocks[idx] = block.copy(text = newText)
+                        updateTextBlockText(idx, newText)
                         activeGap = TextBlockGap(
                             blockId = block.id,
                             gapCharIndex = eraseResult.gapCharIndex,
@@ -765,9 +765,9 @@ class WritingCoordinator(
         // Clean up gap state
         activeGap = null
 
-        val idx = columnModel.textBlocks.indexOf(block)
+        val idx = columnModel.textBlocks.indexOfFirst { it.id == block.id }
         if (idx >= 0) {
-            columnModel.textBlocks[idx] = block.copy(text = newText.replace(Regex("  +"), " ").trim())
+            updateTextBlockText(idx, newText.replace(Regex("  +"), " ").trim())
         }
 
         inkCanvas.textBlocks = columnModel.textBlocks.toList()
@@ -777,6 +777,29 @@ class WritingCoordinator(
         displayManager.displayHiddenLines()
         onUndoRedoStateChanged?.invoke()
         Log.i(TAG, "TextBlock replacement: inserted '$recognized' → '$newText'")
+    }
+
+    /** Compute the number of wrapped lines for [text] at the current canvas width. */
+    private fun computeHeightInLines(text: String): Int {
+        if (text.isBlank()) return 1
+        val canvasWidth = inkCanvas.width.toFloat().takeIf { it > 0 } ?: 800f
+        val textLeftMargin = HandwritingCanvasView.LINE_SPACING * 0.3f
+        val textWidth = (canvasWidth - 2 * textLeftMargin).toInt().coerceAtLeast(100)
+        val paint = android.text.TextPaint().apply { textSize = com.writer.view.ScreenMetrics.textBody }
+        val layout = android.text.StaticLayout.Builder
+            .obtain(text, 0, text.length, paint, textWidth)
+            .setAlignment(android.text.Layout.Alignment.ALIGN_NORMAL)
+            .build()
+        return layout.lineCount.coerceAtLeast(1)
+    }
+
+    /** Update a TextBlock's text and recalculate its heightInLines. */
+    private fun updateTextBlockText(index: Int, newText: String) {
+        val block = columnModel.textBlocks[index]
+        columnModel.textBlocks[index] = block.copy(
+            text = newText,
+            heightInLines = computeHeightInLines(newText)
+        )
     }
 
     /** Insert a transcribed text block after all existing content. */
@@ -790,23 +813,9 @@ class WritingCoordinator(
         } else -1
         val lineIndex = maxOf(highestStrokeLine, highestTextBlockLine) + 1
 
-        // Compute how many ruled lines the text occupies when word-wrapped.
-        // Use a sensible default if the canvas hasn't been laid out yet.
-        val canvasWidth = inkCanvas.width.toFloat().takeIf { it > 0 } ?: 800f
-        val textLeftMargin = HandwritingCanvasView.LINE_SPACING * 0.3f
-        val textWidth = (canvasWidth - 2 * textLeftMargin).toInt().coerceAtLeast(100)
-        val textPaint = android.text.TextPaint().apply {
-            textSize = com.writer.view.ScreenMetrics.textBody
-        }
-        val layout = android.text.StaticLayout.Builder
-            .obtain(text, 0, text.length, textPaint, textWidth)
-            .setAlignment(android.text.Layout.Alignment.ALIGN_NORMAL)
-            .build()
-        val wrappedLineCount = layout.lineCount.coerceAtLeast(1)
-
         val block = TextBlock(
             startLineIndex = lineIndex,
-            heightInLines = wrappedLineCount,
+            heightInLines = computeHeightInLines(text),
             text = text,
             audioFile = audioFile,
             audioStartMs = startMs,

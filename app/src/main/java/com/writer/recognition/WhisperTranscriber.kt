@@ -160,6 +160,11 @@ class WhisperTranscriber(private val context: Context) : AudioTranscriber {
             val samples: FloatArray
             synchronized(audioBuffer) {
                 samples = audioBuffer.toFloatArray()
+                // Save for getRecordedWavBytes()
+                synchronized(lastRecordedSamples) {
+                    lastRecordedSamples.clear()
+                    lastRecordedSamples.addAll(audioBuffer)
+                }
                 audioBuffer.clear()
             }
 
@@ -180,6 +185,35 @@ class WhisperTranscriber(private val context: Context) : AudioTranscriber {
                 }
             }
         }
+    }
+
+    /** Get the last recorded audio as WAV bytes. Available after stop(). */
+    fun getRecordedWavBytes(): ByteArray? {
+        synchronized(lastRecordedSamples) {
+            if (lastRecordedSamples.isEmpty()) return null
+            return encodeWav(lastRecordedSamples.toFloatArray(), WHISPER_SAMPLE_RATE)
+        }
+    }
+    private val lastRecordedSamples = mutableListOf<Float>()
+
+    private fun encodeWav(samples: FloatArray, sampleRate: Int): ByteArray {
+        val pcm = ByteArray(samples.size * 2)
+        for (i in samples.indices) {
+            val s = (samples[i] * 32767f).toInt().coerceIn(-32768, 32767).toShort()
+            pcm[i * 2] = (s.toInt() and 0xFF).toByte()
+            pcm[i * 2 + 1] = (s.toInt() shr 8 and 0xFF).toByte()
+        }
+        val dataSize = pcm.size
+        val fileSize = 36 + dataSize
+        val header = java.io.ByteArrayOutputStream(44)
+        fun writeInt(v: Int) { header.write(v and 0xFF); header.write(v shr 8 and 0xFF); header.write(v shr 16 and 0xFF); header.write(v shr 24 and 0xFF) }
+        fun writeShort(v: Int) { header.write(v and 0xFF); header.write(v shr 8 and 0xFF) }
+        header.write("RIFF".toByteArray()); writeInt(fileSize)
+        header.write("WAVE".toByteArray())
+        header.write("fmt ".toByteArray()); writeInt(16); writeShort(1) // PCM
+        writeShort(1); writeInt(sampleRate); writeInt(sampleRate * 2); writeShort(2); writeShort(16)
+        header.write("data".toByteArray()); writeInt(dataSize)
+        return header.toByteArray() + pcm
     }
 
     override fun close() {

@@ -45,7 +45,7 @@ class SaveAsActivity : AppCompatActivity() {
         lifecycleScope.launch {
             val rec = TextRecognizerFactory.create(this@SaveAsActivity)
             try {
-                rec.initialize("en-US")
+                rec.initialize(java.util.Locale.getDefault().toLanguageTag())
                 recognizer = rec
             } catch (e: Exception) {
                 rec.close()

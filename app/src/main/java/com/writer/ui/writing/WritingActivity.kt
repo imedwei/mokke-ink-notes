@@ -1011,7 +1011,7 @@ class WritingActivity : AppCompatActivity() {
             audioTranscriber = null
         }
 
-        transcriber.start("en-US")
+        transcriber.start(documentModel.language)
     }
 
     // --- Lecture Capture ---
@@ -1112,7 +1112,7 @@ class WritingActivity : AppCompatActivity() {
             }
         }
 
-        transcriber.start("en-US")
+        transcriber.start(documentModel.language)
     }
 
     private fun startWhisperLectureRecognition() {
@@ -1131,15 +1131,25 @@ class WritingActivity : AppCompatActivity() {
 
         transcriber.onFinalResult = { text ->
             android.util.Log.i("WritingActivity", "Whisper final: $text")
+            val recordingName = "rec-${lectureRecordingStartMs}.wav"
             if (text.isNotBlank()) {
-                activeCoordinator?.insertTextBlock(text)
+                activeCoordinator?.insertTextBlock(text, audioFile = recordingName)
                 updateCueIndicatorStrip()
             }
+            // Save audio to document bundle
+            val wavBytes = transcriber.getRecordedWavBytes()
+            val audioFiles = if (wavBytes != null) mapOf(recordingName to wavBytes) else emptyMap()
+
             // Clean up after batch transcription
             lectureMode = false
             audioTranscriber?.close()
             audioTranscriber = null
-            snapshotAndSaveBlocking()
+
+            // Save document with audio
+            val snapshot = createSaveSnapshot()
+            if (snapshot != null) {
+                DocumentStorage.save(this, snapshot.name, snapshot.state, audioFiles)
+            }
             Toast.makeText(this, "Lecture capture done", Toast.LENGTH_SHORT).show()
         }
 
@@ -1150,7 +1160,7 @@ class WritingActivity : AppCompatActivity() {
             }
         }
 
-        transcriber.start("en-US")
+        transcriber.start(documentModel.language)
     }
 
     private fun stopLectureCapture() {
