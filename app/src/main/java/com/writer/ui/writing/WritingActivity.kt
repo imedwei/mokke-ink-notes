@@ -1259,6 +1259,7 @@ class WritingActivity : AppCompatActivity() {
             }
             // Save audio to document bundle
             val wavBytes = transcriber.getRecordedWavBytes()
+            android.util.Log.i("WritingActivity", "Audio bytes: ${wavBytes?.size ?: "null"}")
             val audioFiles = if (wavBytes != null) mapOf(recordingName to wavBytes) else emptyMap()
 
             // Clean up after batch transcription
