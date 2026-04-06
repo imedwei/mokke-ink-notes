@@ -677,9 +677,13 @@ class HandwritingCanvasView @JvmOverloads constructor(
                             val margin = LINE_SPACING * 0.3f
                             val spW = textBlockPaint.measureText(" ")
                             var wx = margin
+                            android.util.Log.d("TextBlockTap", "tapX=$tapDocX margin=$margin spW=$spW words=${tappedBlock.words.size}")
                             for (word in tappedBlock.words) {
                                 val ww = textBlockPaint.measureText(word.text)
-                                if (tapDocX >= wx && tapDocX <= wx + ww) {
+                                // Extend hit area to include half the space on each side
+                                val hitLeft = wx - spW / 2
+                                val hitRight = wx + ww + spW / 2
+                                if (tapDocX >= hitLeft && tapDocX <= hitRight) {
                                     wordStartMs = word.startMs
                                     break
                                 }
