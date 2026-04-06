@@ -675,19 +675,22 @@ class HandwritingCanvasView @JvmOverloads constructor(
                         var wordStartMs: Long? = null
                         if (tappedBlock.words.isNotEmpty()) {
                             val margin = LINE_SPACING * 0.3f
-                            val spW = textBlockPaint.measureText(" ")
-                            var wx = margin
-                            android.util.Log.d("TextBlockTap", "tapX=$tapDocX margin=$margin spW=$spW words=${tappedBlock.words.size}")
+                            // Find each word's position by searching in the full text
+                            val fullText = tappedBlock.text
+                            var searchFrom = 0
                             for (word in tappedBlock.words) {
-                                val ww = textBlockPaint.measureText(word.text)
-                                // Extend hit area to include half the space on each side
-                                val hitLeft = wx - spW / 2
-                                val hitRight = wx + ww + spW / 2
+                                val idx = fullText.indexOf(word.text, searchFrom)
+                                if (idx < 0) continue
+                                val beforeWidth = textBlockPaint.measureText(fullText, 0, idx)
+                                val wordWidth = textBlockPaint.measureText(word.text)
+                                val wx = margin + beforeWidth
+                                val hitLeft = wx - wordWidth * 0.1f
+                                val hitRight = wx + wordWidth + wordWidth * 0.1f
                                 if (tapDocX >= hitLeft && tapDocX <= hitRight) {
                                     wordStartMs = word.startMs
                                     break
                                 }
-                                wx += ww + spW
+                                searchFrom = idx + word.text.length
                             }
                         }
                         onTextBlockTap?.invoke(tappedBlock, wordStartMs)
@@ -1389,31 +1392,37 @@ class HandwritingCanvasView @JvmOverloads constructor(
 
             // Draw red squiggly underline on low-confidence words
             if (block.words.isNotEmpty()) {
-                val spaceW = textBlockPaint.measureText(" ")
-                var wordX = textLeftMargin
+                val fullText = block.text
+                var searchFrom = 0
                 for (word in block.words) {
-                    val wordWidth = textBlockPaint.measureText(word.text)
-                    if (word.confidence < confidenceThreshold) {
-                        // Find which ruled line this word is on (approximate by X overflow)
-                        val wordLine = block.startLineIndex // simplified: first line
-                        val baselineY = TOP_MARGIN + (wordLine + 1) * LINE_SPACING + blockShift
-                        val squiggleY = baselineY + ScreenMetrics.dp(2f)
-                        val amplitude = ScreenMetrics.dp(2f)
-                        val period = ScreenMetrics.dp(6f)
-                        val squigglePath = android.graphics.Path()
-                        squigglePath.moveTo(wordX, squiggleY)
-                        var sx = wordX
-                        var phase = 0
-                        while (sx < wordX + wordWidth) {
-                            val nextX = (sx + period / 2).coerceAtMost(wordX + wordWidth)
-                            val dy = if (phase % 2 == 0) amplitude else -amplitude
-                            squigglePath.lineTo(nextX, squiggleY + dy)
-                            sx = nextX
-                            phase++
-                        }
-                        canvas.drawPath(squigglePath, squigglePaint)
+                    if (word.confidence >= confidenceThreshold) {
+                        searchFrom = fullText.indexOf(word.text, searchFrom).let { if (it >= 0) it + word.text.length else searchFrom }
+                        continue
                     }
-                    wordX += wordWidth + spaceW
+                    val idx = fullText.indexOf(word.text, searchFrom)
+                    if (idx < 0) continue
+                    val beforeWidth = textBlockPaint.measureText(fullText, 0, idx)
+                    val wordWidth = textBlockPaint.measureText(word.text)
+                    val wordX = textLeftMargin + beforeWidth
+
+                    val wordLine = block.startLineIndex // simplified: first line
+                    val baselineY = TOP_MARGIN + (wordLine + 1) * LINE_SPACING + blockShift
+                    val squiggleY = baselineY + ScreenMetrics.dp(2f)
+                    val amplitude = ScreenMetrics.dp(2f)
+                    val period = ScreenMetrics.dp(6f)
+                    val squigglePath = android.graphics.Path()
+                    squigglePath.moveTo(wordX, squiggleY)
+                    var sx = wordX
+                    var phase = 0
+                    while (sx < wordX + wordWidth) {
+                        val nextX = (sx + period / 2).coerceAtMost(wordX + wordWidth)
+                        val dy = if (phase % 2 == 0) amplitude else -amplitude
+                        squigglePath.lineTo(nextX, squiggleY + dy)
+                        sx = nextX
+                        phase++
+                    }
+                    canvas.drawPath(squigglePath, squigglePaint)
+                    searchFrom = idx + word.text.length
                 }
             }
 
