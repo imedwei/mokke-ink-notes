@@ -1136,19 +1136,9 @@ class WritingActivity : AppCompatActivity() {
         val transcriber = com.writer.recognition.SystemSpeechTranscriber(this)
         audioTranscriber = transcriber
 
-        // Start concurrent audio capture only after SpeechRecognizer has claimed the mic.
-        // Uses VOICE_RECOGNITION audio source (same as SpeechRecognizer) for sharing.
-        transcriber.onReady = {
-            if (lectureMode && audioRecordCapture == null) {
-                val capture = com.writer.audio.AudioRecordCapture(cacheDir)
-                if (capture.start()) {
-                    audioRecordCapture = capture
-                    android.util.Log.i("WritingActivity", "Concurrent audio capture started")
-                } else {
-                    android.util.Log.w("WritingActivity", "Concurrent audio capture failed — transcription only")
-                }
-            }
-        }
+        // No concurrent AudioRecord in SpeechRecognizer mode — it steals audio data
+        // from the recognizer on this device, causing zero transcription results.
+        // Audio recording is only available in Whisper mode.
 
         transcriber.onFinalResult = { text ->
             if (text.isNotBlank() && lectureMode) {
@@ -1265,29 +1255,11 @@ class WritingActivity : AppCompatActivity() {
             audioTranscriber?.stop()
         } else {
             // SpeechRecognizer: close immediately, text blocks already inserted per-sentence
+            // No audio saved — concurrent AudioRecord not possible on this device
             lectureMode = false
             audioTranscriber?.close()
             audioTranscriber = null
-
-            // Save concurrent audio capture if available
-            val capture = audioRecordCapture
-            audioRecordCapture = null
-            if (capture != null) {
-                capture.stop()
-                val audioBytes = capture.readRecordedBytes()
-                if (audioBytes != null) {
-                    val recordingName = "rec-${lectureRecordingStartMs}.webm"
-                    val snapshot = createSaveSnapshot()
-                    if (snapshot != null) {
-                        DocumentStorage.save(this, snapshot.name, snapshot.state, mapOf(recordingName to audioBytes))
-                    }
-                    android.util.Log.i("WritingActivity", "Saved ${audioBytes.size} bytes audio to bundle")
-                } else {
-                    snapshotAndSaveBlocking()
-                }
-            } else {
-                snapshotAndSaveBlocking()
-            }
+            snapshotAndSaveBlocking()
             Toast.makeText(this, "Lecture capture stopped", Toast.LENGTH_SHORT).show()
         }
 
