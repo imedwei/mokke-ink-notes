@@ -51,6 +51,7 @@ class WritingActivity : AppCompatActivity() {
         private const val PREFS_NAME = "writer_prefs"
         private const val PREF_CURRENT_DOC = "current_document"
         private const val PREF_SYNC_FOLDER = "sync_folder_uri"
+        private const val PREF_USE_WHISPER = "use_whisper_transcriber"
         private const val UNDO_REDO_DEBOUNCE_MS = 300L
     }
 
@@ -92,6 +93,9 @@ class WritingActivity : AppCompatActivity() {
     private lateinit var micButton: ImageView
     private var audioTranscriber: com.writer.recognition.AudioTranscriber? = null
     private var audioCaptureManager: com.writer.audio.AudioCaptureManager? = null
+    private val useWhisperTranscriber: Boolean
+        get() = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            .getBoolean(PREF_USE_WHISPER, false)
     private var lectureMode = false
     private var lectureRecordingStartMs = 0L
     private val audioQualityMonitor = com.writer.audio.AudioQualityMonitor()
@@ -1012,10 +1016,13 @@ class WritingActivity : AppCompatActivity() {
         val serviceIntent = android.content.Intent(this, com.writer.audio.AudioRecordingService::class.java)
         startForegroundService(serviceIntent)
 
-        // Note: MediaRecorder is NOT started here because it would conflict
-        // with SpeechRecognizer for microphone access. Audio file recording
-        // Use WhisperTranscriber for lecture mode (better accuracy than SpeechRecognizer)
-        startWhisperLectureRecognition()
+        // Use whisper if enabled (better accuracy, but slower than realtime).
+        // Default to Android SpeechRecognizer for real-time transcription.
+        if (useWhisperTranscriber) {
+            startWhisperLectureRecognition()
+        } else {
+            startLectureSpeechRecognition()
+        }
     }
 
     private fun startLectureSpeechRecognition() {
@@ -1125,9 +1132,17 @@ class WritingActivity : AppCompatActivity() {
         micButton.setImageResource(R.drawable.ic_mic)
         inkCanvas.lectureRecording = false
 
-        // Stop recording and trigger batch transcription.
-        // Keep lectureMode=true until onFinalResult fires so the callback works.
-        audioTranscriber?.stop()
+        if (audioTranscriber is com.writer.recognition.WhisperTranscriber) {
+            // Whisper: stop() triggers batch transcription, cleanup in onFinalResult
+            audioTranscriber?.stop()
+        } else {
+            // SpeechRecognizer: close immediately, text blocks already inserted per-sentence
+            lectureMode = false
+            audioTranscriber?.close()
+            audioTranscriber = null
+            snapshotAndSaveBlocking()
+            Toast.makeText(this, "Lecture capture stopped", Toast.LENGTH_SHORT).show()
+        }
 
         // Stop foreground service
         val serviceIntent = android.content.Intent(this, com.writer.audio.AudioRecordingService::class.java)
@@ -1193,6 +1208,15 @@ popupView.findViewById<android.view.View>(R.id.menuTutorial).setOnClickListener 
             popup.dismiss()
             snapshotAndSaveBlocking()
             finish()
+        }
+        val whisperToggle = popupView.findViewById<android.widget.TextView>(R.id.menuWhisperToggle)
+        whisperToggle.text = if (useWhisperTranscriber) "Whisper: On" else "Whisper: Off"
+        whisperToggle.setOnClickListener {
+            val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            val newValue = !useWhisperTranscriber
+            prefs.edit().putBoolean(PREF_USE_WHISPER, newValue).apply()
+            whisperToggle.text = if (newValue) "Whisper: On" else "Whisper: Off"
+            Toast.makeText(this, if (newValue) "Lecture mode: Whisper (slower, more accurate)" else "Lecture mode: System (real-time)", Toast.LENGTH_SHORT).show()
         }
         popupView.findViewById<android.view.View>(R.id.menuDebugReset).setOnClickListener {
             popup.dismiss()

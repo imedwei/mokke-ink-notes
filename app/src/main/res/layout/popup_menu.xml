@@ -148,6 +148,26 @@
         android:layout_marginEnd="16dp" />
 
     <TextView
+        android:id="@+id/menuWhisperToggle"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Whisper: Off"
+        android:textSize="18sp"
+        android:textColor="#888888"
+        android:paddingStart="24dp"
+        android:paddingEnd="24dp"
+        android:paddingTop="12dp"
+        android:paddingBottom="12dp"
+        android:background="?attr/selectableItemBackground" />
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="#AAAAAA"
+        android:layout_marginStart="16dp"
+        android:layout_marginEnd="16dp" />
+
+    <TextView
         android:id="@+id/menuDebugReset"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
