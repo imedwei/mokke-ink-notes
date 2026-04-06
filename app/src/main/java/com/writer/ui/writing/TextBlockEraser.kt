@@ -1,7 +1,9 @@
 package com.writer.ui.writing
 
+import android.text.TextPaint
 import com.writer.model.TextBlock
 import com.writer.view.HandwritingCanvasView
+import com.writer.view.ScreenMetrics
 
 /**
  * Handles scratch-out gestures over TextBlocks.
@@ -52,27 +54,27 @@ object TextBlockEraser {
 
         val block = textBlocks.find { it.containsLine(scratchLineIndex) } ?: return null
 
-        // Map scratch horizontal span to words
+        // Map scratch horizontal span to words using actual text measurement
         val words = block.text.split(" ").filter { it.isNotEmpty() }
         if (words.isEmpty()) return block to EraseResult("", deleteBlock = true)
 
-        // Approximate character positions using uniform character width
         val textLeftMargin = lineSpacing * 0.3f
-        val textAreaWidth = scratchRight.coerceAtLeast(scratchLeft + 1) // avoid div by zero
-        val charWidth = estimateCharWidth(block.text, textAreaWidth, textLeftMargin)
+        val paint = TextPaint().apply { textSize = ScreenMetrics.textBody }
+        val spaceWidth = paint.measureText(" ")
 
         // Find which words overlap the scratch horizontal span
-        val scratchStartX = scratchLeft - textLeftMargin
-        val scratchEndX = scratchRight - textLeftMargin
+        val scratchStartX = scratchLeft
+        val scratchEndX = scratchRight
 
         val surviving = mutableListOf<String>()
         val removed = mutableListOf<String>()
-        var charOffset = 0f
+        var xPos = textLeftMargin
         var gapCharIndex = 0
         var foundGap = false
         for (word in words) {
-            val wordStart = charOffset
-            val wordEnd = charOffset + word.length * charWidth
+            val wordWidth = paint.measureText(word)
+            val wordStart = xPos
+            val wordEnd = xPos + wordWidth
             val overlaps = wordEnd > scratchStartX && wordStart < scratchEndX
             if (!overlaps) {
                 if (!foundGap) gapCharIndex = surviving.joinToString(" ").length + if (surviving.isNotEmpty()) 1 else 0
@@ -84,7 +86,7 @@ object TextBlockEraser {
                 }
                 removed.add(word)
             }
-            charOffset = wordEnd + charWidth
+            xPos = wordEnd + spaceWidth
         }
 
         val newText = surviving.joinToString(" ").trim()

@@ -1,5 +1,6 @@
 package com.writer.ui.writing
 
+import android.app.Application
 import com.writer.model.TextBlock
 import com.writer.view.ScreenMetrics
 import org.junit.Assert.assertEquals
@@ -8,7 +9,12 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34], application = Application::class)
 class TextBlockEraserTest {
 
     private val ls get() = ScreenMetrics.lineSpacing
@@ -76,13 +82,14 @@ class TextBlockEraserTest {
         val block = blockAt(3, "hello beautiful world")
         val centerY = tm + 3 * ls + ls / 2
         val textLeft = ls * 0.3f
-        // Narrow scratch on the left side — should remove "hello" but keep later words
+        // Measure "hello" width to scratch exactly over it
+        val paint = android.text.TextPaint().apply { textSize = ScreenMetrics.textBody }
+        val helloWidth = paint.measureText("hello")
         val result = TextBlockEraser.findAndErase(
-            textLeft, centerY - 10f, textLeft + 40f, centerY + 10f,
+            textLeft, centerY - 10f, textLeft + helloWidth, centerY + 10f,
             listOf(block), ls, tm
         )
         assertNotNull(result)
-        // At least some words should survive
         assertTrue("Some text should remain", result!!.second.newText.isNotEmpty())
         assertTrue("Remaining text should not start with 'hello'",
             !result.second.newText.startsWith("hello"))
