@@ -38,6 +38,8 @@ class VoskTranscriber(private val context: Context) : AudioTranscriber {
     override var onFinalResult: ((String) -> Unit)? = null
     override var onError: ((Int) -> Unit)? = null
     var onStatusUpdate: ((String) -> Unit)? = null
+    /** Called with RMS dB level computed from raw PCM — use for quality monitoring. */
+    var onRmsChanged: ((Float) -> Unit)? = null
     override var isListening: Boolean = false
         private set
 
@@ -77,7 +79,7 @@ class VoskTranscriber(private val context: Context) : AudioTranscriber {
 
         val recorder = try {
             AudioRecord(
-                MediaRecorder.AudioSource.VOICE_RECOGNITION,
+                MediaRecorder.AudioSource.MIC,
                 SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO,
                 AudioFormat.ENCODING_PCM_16BIT, bufferSize
             )
@@ -112,6 +114,13 @@ class VoskTranscriber(private val context: Context) : AudioTranscriber {
                 if (read > 0) {
                     // Tee PCM to both Vosk recognizer and audio encoder
                     audioCapture?.feedPcm(buffer, read)
+
+                    // Compute RMS dB from 16-bit PCM for audio quality monitoring
+                    rmsFrameCount++
+                    if (rmsFrameCount % RMS_REPORT_INTERVAL == 0) {
+                        val rmsDb = computeRmsDb(buffer, read)
+                        postMain { onRmsChanged?.invoke(rmsDb) }
+                    }
 
                     if (rec.acceptWaveForm(buffer, read)) {
                         val result = rec.finalResult
@@ -170,6 +179,23 @@ class VoskTranscriber(private val context: Context) : AudioTranscriber {
 
     /** Read the compressed audio bytes after stop(). */
     fun readRecordedBytes(): ByteArray? = audioCapture?.readRecordedBytes()
+
+    private var rmsFrameCount = 0
+
+    /** Compute RMS in dB from 16-bit PCM buffer (same scale as SpeechRecognizer). */
+    private fun computeRmsDb(buffer: ByteArray, length: Int): Float {
+        var sumSq = 0.0
+        val samples = length / 2
+        for (i in 0 until samples) {
+            val lo = buffer[i * 2].toInt() and 0xFF
+            val hi = buffer[i * 2 + 1].toInt()
+            val sample = (hi shl 8 or lo).toShort().toFloat()
+            sumSq += sample * sample
+        }
+        val rms = kotlin.math.sqrt(sumSq / samples)
+        // Convert to dB scale similar to SpeechRecognizer's onRmsChanged range (-2 to 10)
+        return if (rms > 0) (20 * kotlin.math.log10(rms / 32768.0) + 90).toFloat().coerceIn(-2f, 10f) else -2f
+    }
 
     private fun parseVoskResult(json: String): String {
         return try {
@@ -249,6 +275,7 @@ class VoskTranscriber(private val context: Context) : AudioTranscriber {
     companion object {
         private const val SAMPLE_RATE = 16000
         private const val BUFFER_SIZE = 4000 // ~0.125s at 16kHz 16-bit mono — responsive streaming
+        private const val RMS_REPORT_INTERVAL = 8 // Report RMS every 8 buffers (~1 second)
         private const val MODEL_DIR_NAME = "vosk-model-small-en-us-0.15"
         private const val MODEL_URL =
             "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip"

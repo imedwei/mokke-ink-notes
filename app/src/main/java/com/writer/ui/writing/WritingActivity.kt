@@ -1244,6 +1244,14 @@ class WritingActivity : AppCompatActivity() {
             Toast.makeText(this, status, Toast.LENGTH_SHORT).show()
         }
 
+        transcriber.onRmsChanged = { rmsdB ->
+            audioQualityMonitor.onRmsChanged(rmsdB)
+            if (audioQualityMonitor.shouldWarn && !audioQualityWarned) {
+                audioQualityWarned = true
+                Toast.makeText(this, audioQualityMonitor.qualityMessage, Toast.LENGTH_LONG).show()
+            }
+        }
+
         transcriber.onFinalResult = { text ->
             if (text.isNotBlank() && lectureMode) {
                 val now = System.currentTimeMillis()
