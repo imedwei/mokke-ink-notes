@@ -86,7 +86,7 @@ class AudioRecordCapture(private val cacheDir: File) {
         try {
             codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
         } catch (e: Exception) {
-            Log.w(tag, "Failed to configure AAC encoder", e)
+            Log.w(tag, "Failed to configure Opus encoder", e)
             codec.release()
             audioRecord.release()
             return false
@@ -123,7 +123,7 @@ class AudioRecordCapture(private val cacheDir: File) {
             encodeLoop(audioRecord, codec, mux)
         }, "AudioRecordCapture").also { it.start() }
 
-        Log.i(tag, "Recording started (AAC compressed)")
+        Log.i(tag, "Recording started (Opus/WebM compressed)")
         return true
     }
 

@@ -75,7 +75,7 @@ object DocumentBundle {
                     }
                     entry.name.startsWith(AUDIO_PREFIX) && !entry.isDirectory -> {
                         val audioName = entry.name.removePrefix(AUDIO_PREFIX)
-                        if (audioName.contains("..") || audioName.contains("/")) {
+                        if (audioName.contains("..") || audioName.contains("/") || audioName.contains("\\") || java.io.File(audioName).name != audioName) {
                             zip.closeEntry()
                             entry = zip.nextEntry
                             continue

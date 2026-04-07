@@ -418,7 +418,6 @@ class WhisperTranscriber(private val context: Context) : AudioTranscriber {
 
     companion object {
         private const val WHISPER_SAMPLE_RATE = 16000
-        private const val CHUNK_SECONDS = 10
         private const val ESTIMATED_REALTIME_FACTOR = 5f // initial guess, calibrated over time
         private const val PROGRESS_UPDATE_INTERVAL_MS = 3000L
         private const val PREFS_NAME = "whisper_prefs"

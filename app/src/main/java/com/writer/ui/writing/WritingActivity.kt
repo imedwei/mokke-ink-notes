@@ -2128,6 +2128,7 @@ class WritingActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         if (lectureMode) stopLectureCapture()
+        recordingBackCallback.isEnabled = false
         unregisterReceiver(bugReportReceiver)
         closeDualCanvasOnyx()
         coordinator?.stop()  // releases audioPlayer, audioTranscriber, lectureMode
