@@ -59,15 +59,23 @@ class AudioPlayer(context: Context) {
      */
     fun play(file: File, startMs: Long = 0) {
         val mediaItem = MediaItem.fromUri(file.toURI().toString())
-        player.setMediaItem(mediaItem)
+        player.setMediaItem(mediaItem, startMs)
         player.prepare()
-        if (startMs > 0) {
-            player.seekTo(startMs)
-        }
-        player.play()
+        player.playWhenReady = true
         isPlaying = true
         startPositionUpdates()
         Log.i(tag, "Playing ${file.name} from ${startMs}ms")
+
+        // Debug: log actual position after a short delay
+        handler.postDelayed({
+            val actualPos = player.currentPosition
+            val duration = player.duration
+            Log.i(tag, "After seek: requested=${startMs}ms actual=${actualPos}ms duration=${duration}ms")
+            try {
+                val debugFile = java.io.File(file.parentFile, "playback_debug.txt")
+                debugFile.appendText("play: file=${file.name} requested=${startMs}ms actual=${actualPos}ms duration=${duration}ms\n")
+            } catch (_: Exception) {}
+        }, 500)
     }
 
     fun pause() {

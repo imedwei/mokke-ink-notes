@@ -33,6 +33,7 @@ class AudioRecordCapture(private val cacheDir: File) {
     private var outputFile: File? = null
     private var trackIndex = -1
     private var muxerStarted = false
+    private var startTimeUs = 0L
     var isRecording: Boolean = false
         private set
 
@@ -106,6 +107,7 @@ class AudioRecordCapture(private val cacheDir: File) {
         muxer = mux
         trackIndex = -1
         muxerStarted = false
+        startTimeUs = System.nanoTime() / 1000
         recording = true
         isRecording = true
 
@@ -142,7 +144,7 @@ class AudioRecordCapture(private val cacheDir: File) {
                     for (i in 0 until read) {
                         inputBuffer.putShort(pcmBuffer[i])
                     }
-                    codec.queueInputBuffer(inputIndex, 0, read * 2, System.nanoTime() / 1000, 0)
+                    codec.queueInputBuffer(inputIndex, 0, read * 2, System.nanoTime() / 1000 - startTimeUs, 0)
                 } else {
                     codec.queueInputBuffer(inputIndex, 0, 0, 0, 0)
                 }
@@ -248,6 +250,7 @@ class AudioRecordCapture(private val cacheDir: File) {
         muxer = mux
         trackIndex = -1
         muxerStarted = false
+        startTimeUs = System.nanoTime() / 1000
         isRecording = true
         codec.start()
         Log.i(tag, "Encoder-only mode started")
@@ -268,7 +271,7 @@ class AudioRecordCapture(private val cacheDir: File) {
             val inputBuffer = codec.getInputBuffer(inputIndex) ?: return
             inputBuffer.clear()
             inputBuffer.put(buffer, 0, length)
-            codec.queueInputBuffer(inputIndex, 0, length, System.nanoTime() / 1000, 0)
+            codec.queueInputBuffer(inputIndex, 0, length, System.nanoTime() / 1000 - startTimeUs, 0)
         }
 
         drainEncoder(codec, mux, bufferInfo, false)
