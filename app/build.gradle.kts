@@ -184,6 +184,9 @@ dependencies {
     // Bypass hidden API restrictions (needed for Onyx SDK on Android 14+)
     implementation("org.lsposed.hiddenapibypass:hiddenapibypass:4.3")
 
+    // Media3 ExoPlayer for audio playback (supports seeking in WebM/Opus)
+    implementation("androidx.media3:media3-exoplayer:1.6.0")
+
     // Vosk offline speech recognition (real-time streaming with owned AudioRecord)
     implementation("com.alphacephei:vosk-android:0.3.75@aar")
     implementation("net.java.dev.jna:jna:5.18.1@aar")

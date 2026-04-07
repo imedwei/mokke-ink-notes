@@ -1,23 +1,37 @@
 package com.writer.audio
 
-import android.media.MediaPlayer
+import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
+import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.extractor.DefaultExtractorsFactory
 import java.io.File
 
 /**
- * Simple audio player wrapping [MediaPlayer] for TextBlock audio playback.
+ * Audio player using Media3 ExoPlayer for TextBlock playback.
  *
- * Supports play from a timestamp, pause/resume, seek, and periodic
- * position callbacks for tracking which TextBlock is active.
+ * ExoPlayer supports seeking in WebM/Opus files via constant-bitrate
+ * seeking, unlike MediaPlayer which requires Cues in the container.
  */
-class AudioPlayer {
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+class AudioPlayer(context: Context) {
 
     private val tag = "AudioPlayer"
-    private var player: MediaPlayer? = null
     private val handler = Handler(Looper.getMainLooper())
     private var positionRunnable: Runnable? = null
+
+    private val player: ExoPlayer = run {
+        val extractorsFactory = DefaultExtractorsFactory()
+            .setConstantBitrateSeekingEnabled(true)
+        ExoPlayer.Builder(context)
+            .setMediaSourceFactory(DefaultMediaSourceFactory(context, extractorsFactory))
+            .build()
+    }
 
     var isPlaying: Boolean = false
         private set
@@ -28,75 +42,60 @@ class AudioPlayer {
     /** Called when playback reaches the end. */
     var onCompleted: (() -> Unit)? = null
 
+    init {
+        player.addListener(object : Player.Listener {
+            override fun onPlaybackStateChanged(state: Int) {
+                if (state == Player.STATE_ENDED) {
+                    isPlaying = false
+                    stopPositionUpdates()
+                    onCompleted?.invoke()
+                }
+            }
+        })
+    }
+
     /**
      * Start playback from [startMs] in the given audio [file].
-     * If already playing a different file, stops first.
      */
     fun play(file: File, startMs: Long = 0) {
-        stop()
-
-        val mp = MediaPlayer()
-        try {
-            mp.setDataSource(file.absolutePath)
-            mp.setOnCompletionListener {
-                isPlaying = false
-                stopPositionUpdates()
-                onCompleted?.invoke()
-            }
-            mp.prepare()
-            if (startMs > 0) {
-                // Seek before start using SEEK_CLOSEST for precise positioning (API 26+)
-                mp.seekTo(startMs, MediaPlayer.SEEK_CLOSEST)
-                // Wait for seek to complete before starting playback
-                mp.setOnSeekCompleteListener { seekMp ->
-                    seekMp.setOnSeekCompleteListener(null)
-                    seekMp.start()
-                    player = seekMp
-                    isPlaying = true
-                    startPositionUpdates()
-                    Log.i(tag, "Playing ${file.name} from ${startMs}ms (seeked, duration=${seekMp.duration}ms)")
-                }
-            } else {
-                mp.start()
-                player = mp
-                isPlaying = true
-                startPositionUpdates()
-                Log.i(tag, "Playing ${file.name} from 0ms (duration=${mp.duration}ms)")
-            }
-        } catch (e: Exception) {
-            Log.e(tag, "Failed to play ${file.name}", e)
-            mp.release()
+        val mediaItem = MediaItem.fromUri(file.toURI().toString())
+        player.setMediaItem(mediaItem)
+        player.prepare()
+        if (startMs > 0) {
+            player.seekTo(startMs)
         }
+        player.play()
+        isPlaying = true
+        startPositionUpdates()
+        Log.i(tag, "Playing ${file.name} from ${startMs}ms")
     }
 
     fun pause() {
-        player?.pause()
+        player.pause()
         isPlaying = false
         stopPositionUpdates()
     }
 
     fun resume() {
-        player?.start()
+        player.play()
         isPlaying = true
         startPositionUpdates()
     }
 
     fun seekTo(ms: Long) {
-        player?.seekTo(ms.toInt())
+        player.seekTo(ms)
         onPositionChanged?.invoke(ms)
     }
 
     fun stop() {
         stopPositionUpdates()
-        player?.stop()
-        player?.release()
-        player = null
+        player.stop()
         isPlaying = false
     }
 
     /** Current playback position in ms, or 0 if not playing. */
     val currentPositionMs: Long
-        get() = try { player?.currentPosition?.toLong() ?: 0L } catch (_: Exception) { 0L }
+        get() = try { player.currentPosition } catch (_: Exception) { 0L }
 
     private fun startPositionUpdates() {
         stopPositionUpdates()
@@ -119,6 +118,7 @@ class AudioPlayer {
 
     fun release() {
         stop()
+        player.release()
         onPositionChanged = null
         onCompleted = null
     }

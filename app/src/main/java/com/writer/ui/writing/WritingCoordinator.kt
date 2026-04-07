@@ -68,7 +68,7 @@ class WritingCoordinator(
     // Audio recordings associated with this document
     private val audioRecordings = mutableListOf<com.writer.model.AudioRecording>()
     /** Audio player for TextBlock playback — lifecycle tied to document. */
-    val audioPlayer = com.writer.audio.AudioPlayer()
+    val audioPlayer = com.writer.audio.AudioPlayer(inkCanvas.context)
 
     /** Lecture capture state — document-scoped. */
     var audioTranscriber: com.writer.recognition.AudioTranscriber? = null
