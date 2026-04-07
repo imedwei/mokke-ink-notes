@@ -101,9 +101,7 @@ class WritingActivity : AppCompatActivity() {
     private var lectureRecordingStartMs = 0L
     private val audioQualityMonitor = com.writer.audio.AudioQualityMonitor()
     private var audioQualityWarned = false
-    private var audioPlayer: com.writer.audio.AudioPlayer? = null
     private var audioPlaybackFile: java.io.File? = null
-    private var playingBlockId: String? = null
 
     /** True while the stylus is actively drawing — reject finger taps on gutter. */
     private fun isPenBusy(): Boolean =
@@ -970,37 +968,34 @@ class WritingActivity : AppCompatActivity() {
 
     private fun handleTextBlockTap(block: com.writer.model.TextBlock, wordStartMs: Long? = null) {
         if (block.audioFile.isEmpty()) return
+        val coord = activeCoordinator ?: return
+        val player = coord.audioPlayer
 
-        // If currently playing any block → pause
-        if (audioPlayer != null && audioPlayer!!.isPlaying) {
-            audioPlayer!!.pause()
+        // If currently playing → pause
+        if (player.isPlaying) {
+            player.pause()
             inkCanvas.playingTextBlockId = null
             return
         }
 
-        // Tapping a different block → seek or start new playback
+        // Play from tapped word
         val audioFile = ensureAudioFile(block.audioFile)
         if (audioFile == null) {
             Toast.makeText(this, "Audio file not found", Toast.LENGTH_SHORT).show()
             return
         }
 
-        val player = audioPlayer ?: com.writer.audio.AudioPlayer().also { audioPlayer = it }
-        playingBlockId = block.id
         inkCanvas.playingTextBlockId = block.id
 
         player.onPositionChanged = { posMs ->
-            // Advance highlight to the TextBlock covering this position
             val allBlocks = documentModel.main.textBlocks.filter { it.audioFile.isNotEmpty() }
             val activeBlock = allBlocks.find { posMs >= it.audioStartMs && posMs < it.audioEndMs }
-            if (activeBlock != null && activeBlock.id != playingBlockId) {
-                playingBlockId = activeBlock.id
+            if (activeBlock != null && activeBlock.id != inkCanvas.playingTextBlockId) {
                 inkCanvas.playingTextBlockId = activeBlock.id
             }
         }
 
         player.onCompleted = {
-            playingBlockId = null
             inkCanvas.playingTextBlockId = null
         }
 
@@ -2105,7 +2100,5 @@ class WritingActivity : AppCompatActivity() {
         audioTranscriber = null
         audioRecordCapture?.stop()
         audioRecordCapture = null
-        audioPlayer?.release()
-        audioPlayer = null
     }
 }

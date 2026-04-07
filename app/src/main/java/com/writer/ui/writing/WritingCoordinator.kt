@@ -67,6 +67,9 @@ class WritingCoordinator(
     private var currentLineIndex = -1
     // Audio recordings associated with this document
     private val audioRecordings = mutableListOf<com.writer.model.AudioRecording>()
+    /** Audio player for TextBlock playback — lifecycle tied to coordinator/document. */
+    val audioPlayer = com.writer.audio.AudioPlayer()
+
     // Whether the user has manually renamed this document
     var userRenamed = false
     // Callback to notify activity when heading-based rename should happen
@@ -191,6 +194,7 @@ class WritingCoordinator(
     }
 
     fun stop() {
+        audioPlayer.release()
         displayManager.stop()
         diagramManager.stop()
         inkCanvas.onStrokeCompleted = null
