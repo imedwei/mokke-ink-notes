@@ -129,16 +129,6 @@ class VoskTranscriber(private val context: Context) : AudioTranscriber {
                         val text = parseVoskResult(result)
                         if (text.isNotBlank()) {
                             val words = parseVoskWords(result)
-                            // Write debug to file since logcat is unreliable on this device
-                            try {
-                                val debugFile = java.io.File(context.cacheDir, "vosk_debug.txt")
-                                debugFile.appendText("RESULT: '$text' words=${words.size}\n")
-                                debugFile.appendText("RAW: ${result.take(500)}\n")
-                                for (w in words) {
-                                    debugFile.appendText("  WORD: '${w.text}' conf=%.2f t=[${w.startMs}-${w.endMs}]ms\n".format(w.confidence))
-                                }
-                                debugFile.appendText("---\n")
-                            } catch (_: Exception) {}
                             postMain {
                                 onFinalResultWithWords?.invoke(text, words)
                                 onFinalResult?.invoke(text)
