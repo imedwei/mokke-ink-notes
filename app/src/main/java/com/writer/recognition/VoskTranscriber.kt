@@ -56,7 +56,10 @@ class VoskTranscriber(private val context: Context) : AudioTranscriber {
 
                 postMain { onStatusUpdate?.invoke("Loading Vosk model...") }
                 model = Model(modelPath)
-                recognizer = Recognizer(model, SAMPLE_RATE.toFloat())
+                val rec = Recognizer(model, SAMPLE_RATE.toFloat())
+                rec.setWords(true) // Enable word-level timestamps
+                rec.setPartialWords(true)
+                recognizer = rec
 
                 postMain { onStatusUpdate?.invoke("Lecture mode started") }
                 postMain { startRecording() }
@@ -100,7 +103,7 @@ class VoskTranscriber(private val context: Context) : AudioTranscriber {
         recorder.startRecording()
 
         recordingThread = Thread({
-            val buffer = ByteArray(SAMPLE_RATE * 2) // 1 second of 16-bit mono
+            val buffer = ByteArray(BUFFER_SIZE) // ~0.25s chunks for responsive streaming
             val rec = recognizer ?: return@Thread
 
             while (recording) {
@@ -230,6 +233,7 @@ class VoskTranscriber(private val context: Context) : AudioTranscriber {
 
     companion object {
         private const val SAMPLE_RATE = 16000
+        private const val BUFFER_SIZE = 4000 // ~0.125s at 16kHz 16-bit mono — responsive streaming
         private const val MODEL_DIR_NAME = "vosk-model-small-en-us-0.15"
         private const val MODEL_URL =
             "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip"
