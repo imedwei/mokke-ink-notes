@@ -675,21 +675,43 @@ class HandwritingCanvasView @JvmOverloads constructor(
                         var wordStartMs: Long? = null
                         if (tappedBlock.words.isNotEmpty()) {
                             val margin = LINE_SPACING * 0.3f
-                            // Reconstruct word positions by measuring cumulative text
                             val fullText = tappedBlock.text.trimStart()
-                            val wordsInText = fullText.split(" ").filter { it.isNotEmpty() }
-                            var charPos = 0
-                            for ((i, wordText) in wordsInText.withIndex()) {
-                                if (i >= tappedBlock.words.size) break
-                                val wx = margin + textBlockPaint.measureText(fullText, 0, charPos)
-                                val ww = textBlockPaint.measureText(wordText)
-                                val hitLeft = wx - ww * 0.15f
-                                val hitRight = wx + ww * 1.15f
-                                if (tapDocX >= hitLeft && tapDocX <= hitRight) {
-                                    wordStartMs = tappedBlock.words[i].startMs
-                                    break
+                            val textW = (width.toFloat() - 2 * margin).toInt().coerceAtLeast(1)
+
+                            // Use StaticLayout to find which wrapped line the tap is on
+                            val layout = android.text.StaticLayout.Builder
+                                .obtain(fullText, 0, fullText.length, textBlockPaint, textW)
+                                .setAlignment(android.text.Layout.Alignment.ALIGN_NORMAL)
+                                .build()
+
+                            // Which wrapped line did the user tap?
+                            val tappedWrappedLine = tapLine - tappedBlock.startLineIndex
+                            if (tappedWrappedLine in 0 until layout.lineCount) {
+                                val lineStart = layout.getLineStart(tappedWrappedLine)
+                                val lineEnd = layout.getLineEnd(tappedWrappedLine)
+                                val lineText = fullText.substring(lineStart, lineEnd).trimEnd()
+                                val lineLeftOffset = layout.getLineLeft(tappedWrappedLine)
+
+                                // Map tap X to a word on this wrapped line
+                                val tapXInLine = tapDocX - margin - lineLeftOffset
+                                val lineWords = lineText.split(" ").filter { it.isNotEmpty() }
+
+                                // Count words before this line to index into block.words
+                                val wordsBefore = fullText.substring(0, lineStart)
+                                    .split(" ").filter { it.isNotEmpty() }.size
+
+                                var charInLine = 0
+                                for ((j, wordText) in lineWords.withIndex()) {
+                                    val wordIdx = wordsBefore + j
+                                    if (wordIdx >= tappedBlock.words.size) break
+                                    val wx = textBlockPaint.measureText(lineText, 0, charInLine)
+                                    val ww = textBlockPaint.measureText(wordText)
+                                    if (tapXInLine >= wx - ww * 0.15f && tapXInLine <= wx + ww * 1.15f) {
+                                        wordStartMs = tappedBlock.words[wordIdx].startMs
+                                        break
+                                    }
+                                    charInLine += wordText.length + 1
                                 }
-                                charPos += wordText.length + 1 // +1 for space
                             }
                         }
                         onTextBlockTap?.invoke(tappedBlock, wordStartMs)
