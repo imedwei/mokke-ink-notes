@@ -155,32 +155,43 @@ class TextBlockOperationsTest {
 
         // ── Operations ──────────────────────────────────────────────
 
-        /** Scratch out a specific word in the TextBlock at [line]. */
+        /** Scratch out a specific word in the TextBlock at [line].
+         *  For wrapped TextBlocks, finds the word's actual position using StaticLayout. */
         fun scratchOut(line: Int, word: String, then: DocState.() -> Unit = {}): DocState {
             val block = columnModel.textBlocks.find { it.containsLine(line) }
                 ?: error("No TextBlock at line $line")
 
-            // Compute the X bounds of the target word using TextPaint
             val paint = android.text.TextPaint().apply { textSize = ScreenMetrics.textBody }
             val textLeftMargin = ls * 0.3f
-            val spaceWidth = paint.measureText(" ")
-            val words = block.text.split(" ").filter { it.isNotEmpty() }
-            var xPos = textLeftMargin
+            val fullText = block.text.trimStart()
+            val textWidth = (800f - 2 * textLeftMargin).toInt().coerceAtLeast(100)
+            val layout = android.text.StaticLayout.Builder
+                .obtain(fullText, 0, fullText.length, paint, textWidth)
+                .setAlignment(android.text.Layout.Alignment.ALIGN_NORMAL)
+                .build()
+
+            // Find the word and its position on the correct wrapped line
+            val words = fullText.split(" ").filter { it.isNotEmpty() }
+            var charPos = 0
             var targetLeft = 0f
             var targetRight = 0f
+            var targetLine = line
             var found = false
             for (w in words) {
-                val wordWidth = paint.measureText(w)
                 if (w == word && !found) {
-                    targetLeft = xPos
-                    targetRight = xPos + wordWidth
+                    val wordLine = layout.getLineForOffset(charPos)
+                    targetLine = block.startLineIndex + wordLine
+                    val lineStart = layout.getLineStart(wordLine)
+                    val xInLine = paint.measureText(fullText.substring(lineStart, charPos))
+                    targetLeft = textLeftMargin + xInLine
+                    targetRight = targetLeft + paint.measureText(w)
                     found = true
                 }
-                xPos += wordWidth + spaceWidth
+                charPos += w.length + 1
             }
             assertTrue("Word '$word' not found in '${block.text}'", found)
 
-            val centerY = tm + line * ls + ls / 2
+            val centerY = tm + targetLine * ls + ls / 2
             val result = TextBlockEraser.findAndErase(
                 targetLeft, centerY - 10f, targetRight, centerY + 10f,
                 columnModel.textBlocks, ls, tm
@@ -551,6 +562,66 @@ class TextBlockOperationsTest {
             // After removing "very" and adding gap, height is recalculated
             val block = columnModel.textBlocks[0]
             assertTrue("heightInLines should be >= 1", block.heightInLines >= 1)
+        }
+    }
+
+    // ── Multi-line scratch-out (wrapped TextBlocks) ─────────────────
+
+    @Test
+    fun `scratch word on second wrapped line`() {
+        // This text should wrap to 2+ lines at 800px canvas width
+        val text = "the quick brown fox jumps over the lazy dog near the riverbank"
+        doc {
+            textBlock(line = 0, text = text, heightInLines = 2)
+        }.scratchOut(line = 0, word = "riverbank") {
+            assertGap(removedWord = "riverbank")
+            // All other words should survive
+            val block = columnModel.textBlocks[0]
+            assertTrue("'quick' should survive", block.text.contains("quick"))
+            assertTrue("'fox' should survive", block.text.contains("fox"))
+            assertTrue("'lazy' should survive", block.text.contains("lazy"))
+        }
+    }
+
+    @Test
+    fun `scratch word on first line preserves second line words`() {
+        val text = "the quick brown fox jumps over the lazy dog near the riverbank"
+        doc {
+            textBlock(line = 0, text = text, heightInLines = 2)
+        }.scratchOut(line = 0, word = "quick") {
+            assertGap(removedWord = "quick")
+            val block = columnModel.textBlocks[0]
+            assertTrue("'riverbank' should survive", block.text.contains("riverbank"))
+            assertTrue("'lazy' should survive", block.text.contains("lazy"))
+        }
+    }
+
+    @Test
+    fun `scratch and replace on wrapped line`() {
+        val text = "the quick brown fox jumps over the lazy dog near the riverbank"
+        doc {
+            textBlock(line = 0, text = text, heightInLines = 2)
+        }.scratchOut(line = 0, word = "lazy") {
+            assertGap(removedWord = "lazy")
+        }.replaceWith("sleepy") {
+            val block = columnModel.textBlocks[0]
+            assertTrue("Should contain 'sleepy'", block.text.contains("sleepy"))
+            assertFalse("Should not contain 'lazy'", block.text.contains("lazy"))
+            assertTrue("'riverbank' should survive", block.text.contains("riverbank"))
+            assertTrue("'quick' should survive", block.text.contains("quick"))
+        }
+    }
+
+    @Test
+    fun `scratch middle word in three-line block`() {
+        val text = "testing the voice transcription feature with a very long sentence that definitely wraps across multiple lines on this narrow canvas display"
+        doc {
+            textBlock(line = 0, text = text, heightInLines = 3)
+        }.scratchOut(line = 0, word = "definitely") {
+            assertGap(removedWord = "definitely")
+            val block = columnModel.textBlocks[0]
+            assertTrue("'testing' should survive", block.text.contains("testing"))
+            assertTrue("'display' should survive", block.text.contains("display"))
         }
     }
 }
