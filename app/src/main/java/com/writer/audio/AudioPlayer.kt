@@ -44,15 +44,25 @@ class AudioPlayer {
                 onCompleted?.invoke()
             }
             mp.prepare()
-            mp.start()
-            // Seek after start — seeking before start is unreliable on some devices
             if (startMs > 0) {
-                mp.seekTo(startMs.toInt())
+                // Seek before start using SEEK_CLOSEST for precise positioning (API 26+)
+                mp.seekTo(startMs, MediaPlayer.SEEK_CLOSEST)
+                // Wait for seek to complete before starting playback
+                mp.setOnSeekCompleteListener { seekMp ->
+                    seekMp.setOnSeekCompleteListener(null)
+                    seekMp.start()
+                    player = seekMp
+                    isPlaying = true
+                    startPositionUpdates()
+                    Log.i(tag, "Playing ${file.name} from ${startMs}ms (seeked, duration=${seekMp.duration}ms)")
+                }
+            } else {
+                mp.start()
+                player = mp
+                isPlaying = true
+                startPositionUpdates()
+                Log.i(tag, "Playing ${file.name} from 0ms (duration=${mp.duration}ms)")
             }
-            player = mp
-            isPlaying = true
-            startPositionUpdates()
-            Log.i(tag, "Playing ${file.name} from ${startMs}ms (duration=${mp.duration}ms)")
         } catch (e: Exception) {
             Log.e(tag, "Failed to play ${file.name}", e)
             mp.release()
