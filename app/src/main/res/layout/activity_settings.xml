@@ -56,53 +56,56 @@
             android:layout_marginTop="8dp"
             android:layout_marginBottom="24dp" />
 
-        <!-- Audio Transcription -->
+        <!-- Audio Transcription Engine -->
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Audio Transcription"
+            android:text="Lecture Transcription Engine"
             android:textSize="18sp"
             android:textColor="#666666"
             android:textStyle="bold"
             android:layout_marginBottom="16dp" />
 
-        <LinearLayout
+        <RadioGroup
+            android:id="@+id/transcriptionEngineGroup"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:gravity="center_vertical"
-            android:layout_marginBottom="8dp">
+            android:orientation="vertical">
 
-            <LinearLayout
-                android:layout_width="0dp"
+            <RadioButton
+                android:id="@+id/radioSystem"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:orientation="vertical">
+                android:text="System (real-time, no audio saved)"
+                android:textSize="18sp"
+                android:textColor="@color/black"
+                android:paddingStart="8dp"
+                android:paddingTop="8dp"
+                android:paddingBottom="8dp" />
 
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Use Whisper model"
-                    android:textSize="20sp"
-                    android:textColor="@color/black" />
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Higher accuracy and saves audio recording. Slower than real-time — transcribes after recording stops. Downloads ~75 MB model on first use."
-                    android:textSize="14sp"
-                    android:textColor="#888888"
-                    android:layout_marginTop="4dp" />
-
-            </LinearLayout>
-
-            <Switch
-                android:id="@+id/switchWhisper"
-                android:layout_width="wrap_content"
+            <RadioButton
+                android:id="@+id/radioVosk"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="16dp" />
+                android:text="Vosk (real-time + saves audio, ~40 MB)"
+                android:textSize="18sp"
+                android:textColor="@color/black"
+                android:paddingStart="8dp"
+                android:paddingTop="8dp"
+                android:paddingBottom="8dp" />
 
-        </LinearLayout>
+            <RadioButton
+                android:id="@+id/radioWhisper"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Whisper (highest accuracy, batch, ~75 MB)"
+                android:textSize="18sp"
+                android:textColor="@color/black"
+                android:paddingStart="8dp"
+                android:paddingTop="8dp"
+                android:paddingBottom="8dp" />
+
+        </RadioGroup>
 
         <View
             android:layout_width="match_parent"

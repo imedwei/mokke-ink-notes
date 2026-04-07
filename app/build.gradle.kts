@@ -184,6 +184,10 @@ dependencies {
     // Bypass hidden API restrictions (needed for Onyx SDK on Android 14+)
     implementation("org.lsposed.hiddenapibypass:hiddenapibypass:4.3")
 
+    // Vosk offline speech recognition (real-time streaming with owned AudioRecord)
+    implementation("com.alphacephei:vosk-android:0.3.75@aar")
+    implementation("net.java.dev.jna:jna:5.18.1@aar")
+
     // Google ML Kit Digital Ink Recognition
     implementation("com.google.mlkit:digital-ink-recognition:19.0.0")
 

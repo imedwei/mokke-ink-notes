@@ -4,7 +4,7 @@ import android.app.Activity
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
-import android.widget.Switch
+import android.widget.RadioGroup
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -22,6 +22,10 @@ class SettingsActivity : AppCompatActivity() {
     companion object {
         const val PREFS_NAME = "writer_prefs"
         const val PREF_USE_WHISPER = "use_whisper_transcriber"
+        const val PREF_TRANSCRIPTION_ENGINE = "transcription_engine"
+        const val ENGINE_SYSTEM = "system"
+        const val ENGINE_VOSK = "vosk"
+        const val ENGINE_WHISPER = "whisper"
         const val PREF_SYNC_FOLDER = "sync_folder_uri"
         const val RESULT_SHOW_TUTORIAL = "show_tutorial"
         const val RESULT_DEBUG_RESET = "debug_reset"
@@ -58,11 +62,21 @@ class SettingsActivity : AppCompatActivity() {
 
         val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
 
-        // Whisper toggle
-        val whisperSwitch = findViewById<Switch>(R.id.switchWhisper)
-        whisperSwitch.isChecked = prefs.getBoolean(PREF_USE_WHISPER, false)
-        whisperSwitch.setOnCheckedChangeListener { _, isChecked ->
-            prefs.edit().putBoolean(PREF_USE_WHISPER, isChecked).apply()
+        // Transcription engine selector
+        val engineGroup = findViewById<RadioGroup>(R.id.transcriptionEngineGroup)
+        val currentEngine = prefs.getString(PREF_TRANSCRIPTION_ENGINE, ENGINE_SYSTEM)
+        when (currentEngine) {
+            ENGINE_VOSK -> engineGroup.check(R.id.radioVosk)
+            ENGINE_WHISPER -> engineGroup.check(R.id.radioWhisper)
+            else -> engineGroup.check(R.id.radioSystem)
+        }
+        engineGroup.setOnCheckedChangeListener { _, checkedId ->
+            val engine = when (checkedId) {
+                R.id.radioVosk -> ENGINE_VOSK
+                R.id.radioWhisper -> ENGINE_WHISPER
+                else -> ENGINE_SYSTEM
+            }
+            prefs.edit().putString(PREF_TRANSCRIPTION_ENGINE, engine).apply()
         }
 
         // Sync folder

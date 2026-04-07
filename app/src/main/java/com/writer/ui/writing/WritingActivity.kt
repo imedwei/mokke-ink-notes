@@ -93,9 +93,11 @@ class WritingActivity : AppCompatActivity() {
     private lateinit var micButton: ImageView
     private var audioCaptureManager: com.writer.audio.AudioCaptureManager? = null
     private var audioRecordCapture: com.writer.audio.AudioRecordCapture? = null
-    private val useWhisperTranscriber: Boolean
+    private val transcriptionEngine: String
         get() = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-            .getBoolean(PREF_USE_WHISPER, false)
+            .getString(com.writer.ui.settings.SettingsActivity.PREF_TRANSCRIPTION_ENGINE,
+                com.writer.ui.settings.SettingsActivity.ENGINE_SYSTEM)
+            ?: com.writer.ui.settings.SettingsActivity.ENGINE_SYSTEM
     // Delegate to coordinator for document-scoped state
     private var lectureMode: Boolean
         get() = coordinator?.lectureMode ?: false
@@ -1147,17 +1149,20 @@ class WritingActivity : AppCompatActivity() {
         // Show placeholder at the line where TextBlocks will be inserted
         updateRecordingPlaceholder()
 
-        // Use whisper if enabled (better accuracy, but slower than realtime).
-        // Default to Android SpeechRecognizer for real-time transcription.
-        if (useWhisperTranscriber) {
-            // Foreground service keeps the app alive during batch processing
-            val serviceIntent = android.content.Intent(this, com.writer.audio.AudioRecordingService::class.java)
-            startForegroundService(serviceIntent)
-            startWhisperLectureRecognition()
-        } else {
-            // No foreground service for SpeechRecognizer mode — the microphone
-            // foreground service type interferes with SpeechRecognizer's mic access
-            startLectureSpeechRecognition()
+        when (transcriptionEngine) {
+            com.writer.ui.settings.SettingsActivity.ENGINE_WHISPER -> {
+                val serviceIntent = android.content.Intent(this, com.writer.audio.AudioRecordingService::class.java)
+                startForegroundService(serviceIntent)
+                startWhisperLectureRecognition()
+            }
+            com.writer.ui.settings.SettingsActivity.ENGINE_VOSK -> {
+                val serviceIntent = android.content.Intent(this, com.writer.audio.AudioRecordingService::class.java)
+                startForegroundService(serviceIntent)
+                startVoskLectureRecognition()
+            }
+            else -> {
+                startLectureSpeechRecognition()
+            }
         }
     }
 
@@ -1226,6 +1231,36 @@ class WritingActivity : AppCompatActivity() {
                     if (lectureMode) startLectureSpeechRecognition()
                 }, delayMs)
             }
+        }
+
+        transcriber.start(documentModel.language)
+    }
+
+    private fun startVoskLectureRecognition() {
+        val transcriber = com.writer.recognition.VoskTranscriber(this)
+        audioTranscriber = transcriber
+
+        transcriber.onStatusUpdate = { status ->
+            Toast.makeText(this, status, Toast.LENGTH_SHORT).show()
+        }
+
+        transcriber.onFinalResult = { text ->
+            if (text.isNotBlank() && lectureMode) {
+                val now = System.currentTimeMillis()
+                val startMs = now - lectureRecordingStartMs - 3000L
+                val endMs = now - lectureRecordingStartMs
+                activeCoordinator?.insertTextBlock(
+                    text, startMs = startMs.coerceAtLeast(0), endMs = endMs
+                )
+                updateCueIndicatorStrip()
+                updateRecordingPlaceholder()
+                android.util.Log.i("WritingActivity", "Vosk transcribed: $text")
+            }
+            // Vosk continues automatically — no restart needed
+        }
+
+        transcriber.onError = { errorCode ->
+            android.util.Log.w("WritingActivity", "Vosk error: $errorCode")
         }
 
         transcriber.start(documentModel.language)
@@ -1314,11 +1349,15 @@ class WritingActivity : AppCompatActivity() {
             // Whisper: stop() triggers batch transcription, cleanup in onFinalResult
             audioTranscriber?.stop()
         } else {
-            // SpeechRecognizer: close immediately, text blocks already inserted per-sentence
-            // No audio saved — concurrent AudioRecord not possible on this device
+            // Vosk and SpeechRecognizer: close immediately, text blocks already inserted per-sentence
             lectureMode = false
             audioTranscriber?.close()
             audioTranscriber = null
+
+            // Stop foreground service if running
+            val serviceIntent = android.content.Intent(this, com.writer.audio.AudioRecordingService::class.java)
+            stopService(serviceIntent)
+
             snapshotAndSaveBlocking()
             Toast.makeText(this, "Lecture capture stopped", Toast.LENGTH_SHORT).show()
         }
