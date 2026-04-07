@@ -342,8 +342,13 @@ class WritingCoordinator(
                 } else {
                     val idx = columnModel.textBlocks.indexOf(block)
                     if (idx >= 0) {
-                        // Insert placeholder spaces for the gap so the user can write in it
-                        val gapPlaceholder = " ".repeat(eraseResult.removedWords.length.coerceAtLeast(4))
+                        // Insert placeholder spaces matching the visual width of the removed word + padding
+                        val paint = android.text.TextPaint().apply { textSize = com.writer.view.ScreenMetrics.textBody }
+                        val removedWidth = paint.measureText(eraseResult.removedWords)
+                        val spaceWidth = paint.measureText(" ")
+                        val targetWidth = removedWidth + spaceWidth * 4 // original width + padding
+                        val numSpaces = (targetWidth / spaceWidth).toInt().coerceAtLeast(6)
+                        val gapPlaceholder = " ".repeat(numSpaces)
                         val newText = if (eraseResult.gapCharIndex <= 0) {
                             "$gapPlaceholder ${eraseResult.newText}"
                         } else if (eraseResult.gapCharIndex >= eraseResult.newText.length) {
