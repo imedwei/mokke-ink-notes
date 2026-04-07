@@ -46,7 +46,8 @@ object TextBlockEraser {
         scratchRight: Float, scratchBottom: Float,
         textBlocks: List<TextBlock>,
         lineSpacing: Float,
-        topMargin: Float
+        topMargin: Float,
+        canvasWidth: Float = 824f
     ): Pair<TextBlock, EraseResult>? {
         // Find which text block the scratch overlaps
         val scratchCenterY = (scratchTop + scratchBottom) / 2
@@ -63,7 +64,7 @@ object TextBlockEraser {
         val fullText = block.text.trimStart()
 
         // Use StaticLayout to find which wrapped line the scratch is on
-        val textWidth = (scratchRight.coerceAtLeast(500f) - 2 * textLeftMargin).toInt().coerceAtLeast(100)
+        val textWidth = (canvasWidth - 2 * textLeftMargin).toInt().coerceAtLeast(100)
         val layout = android.text.StaticLayout.Builder
             .obtain(fullText, 0, fullText.length, paint, textWidth)
             .setAlignment(android.text.Layout.Alignment.ALIGN_NORMAL)

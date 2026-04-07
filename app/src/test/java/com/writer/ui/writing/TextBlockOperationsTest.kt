@@ -194,7 +194,7 @@ class TextBlockOperationsTest {
             val centerY = tm + targetLine * ls + ls / 2
             val result = TextBlockEraser.findAndErase(
                 targetLeft, centerY - 10f, targetRight, centerY + 10f,
-                columnModel.textBlocks, ls, tm
+                columnModel.textBlocks, ls, tm, canvasWidth = 800f
             )
             assertNotNull("Scratch-out should hit a TextBlock", result)
             val (hitBlock, eraseResult) = result!!
@@ -292,7 +292,7 @@ class TextBlockOperationsTest {
             val centerY = tm + line * ls + ls / 2
             val result = TextBlockEraser.findAndErase(
                 0f, centerY - 10f, 2000f, centerY + 10f,
-                columnModel.textBlocks, ls, tm
+                columnModel.textBlocks, ls, tm, canvasWidth = 800f
             )
             assertNotNull("Scratch-out should hit a TextBlock", result)
             lastEraseResult = result!!.second

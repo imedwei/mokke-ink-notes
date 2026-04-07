@@ -330,7 +330,8 @@ class WritingCoordinator(
                 left, top, right, bottom,
                 columnModel.textBlocks,
                 HandwritingCanvasView.LINE_SPACING,
-                HandwritingCanvasView.TOP_MARGIN
+                HandwritingCanvasView.TOP_MARGIN,
+                canvasWidth = inkCanvas.width.toFloat()
             )
             if (tbResult != null) {
                 val (block, eraseResult) = tbResult
