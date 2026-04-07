@@ -1252,20 +1252,23 @@ class WritingActivity : AppCompatActivity() {
             }
         }
 
-        transcriber.onFinalResult = { text ->
+        transcriber.onFinalResultWithWords = { text, words ->
             if (text.isNotBlank() && lectureMode) {
-                val now = System.currentTimeMillis()
-                val startMs = now - lectureRecordingStartMs - 3000L
-                val endMs = now - lectureRecordingStartMs
                 val audioFile = "rec-${lectureRecordingStartMs}.webm"
+                // Use word timestamps if available, otherwise estimate
+                val startMs = words.firstOrNull()?.startMs ?: 0L
+                val endMs = words.lastOrNull()?.endMs ?: 0L
                 activeCoordinator?.insertTextBlock(
-                    text, audioFile = audioFile, startMs = startMs.coerceAtLeast(0), endMs = endMs
+                    text, audioFile = audioFile, startMs = startMs, endMs = endMs, words = words
                 )
                 updateCueIndicatorStrip()
                 updateRecordingPlaceholder()
-                android.util.Log.i("WritingActivity", "Vosk transcribed: $text")
+                android.util.Log.i("WritingActivity", "Vosk transcribed: $text (${words.size} words)")
             }
-            // Vosk continues automatically — no restart needed
+        }
+
+        transcriber.onFinalResult = { _ ->
+            // Handled by onFinalResultWithWords above
         }
 
         transcriber.onError = { errorCode ->

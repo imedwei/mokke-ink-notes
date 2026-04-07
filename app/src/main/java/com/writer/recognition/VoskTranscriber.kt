@@ -38,6 +38,8 @@ class VoskTranscriber(private val context: Context) : AudioTranscriber {
     override var onFinalResult: ((String) -> Unit)? = null
     override var onError: ((Int) -> Unit)? = null
     var onStatusUpdate: ((String) -> Unit)? = null
+    /** Final result with per-word confidence and timestamps. */
+    var onFinalResultWithWords: ((String, List<com.writer.model.WordInfo>) -> Unit)? = null
     /** Called with RMS dB level computed from raw PCM — use for quality monitoring. */
     var onRmsChanged: ((Float) -> Unit)? = null
     override var isListening: Boolean = false
@@ -126,7 +128,11 @@ class VoskTranscriber(private val context: Context) : AudioTranscriber {
                         val result = rec.finalResult
                         val text = parseVoskResult(result)
                         if (text.isNotBlank()) {
-                            postMain { onFinalResult?.invoke(text) }
+                            val words = parseVoskWords(result)
+                            postMain {
+                                onFinalResultWithWords?.invoke(text, words)
+                                onFinalResult?.invoke(text)
+                            }
                         }
                     } else {
                         val partial = rec.partialResult
@@ -149,8 +155,11 @@ class VoskTranscriber(private val context: Context) : AudioTranscriber {
 
         // Get any remaining result
         recognizer?.let { rec ->
-            val finalText = parseVoskResult(rec.finalResult)
+            val result = rec.finalResult
+            val finalText = parseVoskResult(result)
             if (finalText.isNotBlank()) {
+                val words = parseVoskWords(result)
+                onFinalResultWithWords?.invoke(finalText, words)
                 onFinalResult?.invoke(finalText)
             }
         }
@@ -195,6 +204,23 @@ class VoskTranscriber(private val context: Context) : AudioTranscriber {
         val rms = kotlin.math.sqrt(sumSq / samples)
         // Convert to dB scale similar to SpeechRecognizer's onRmsChanged range (-2 to 10)
         return if (rms > 0) (20 * kotlin.math.log10(rms / 32768.0) + 90).toFloat().coerceIn(-2f, 10f) else -2f
+    }
+
+    /** Parse Vosk word-level data: [{word, conf, start, end}, ...] */
+    private fun parseVoskWords(json: String): List<com.writer.model.WordInfo> {
+        return try {
+            val obj = JSONObject(json)
+            val resultArray = obj.optJSONArray("result") ?: return emptyList()
+            (0 until resultArray.length()).map { i ->
+                val w = resultArray.getJSONObject(i)
+                com.writer.model.WordInfo(
+                    text = w.optString("word", ""),
+                    confidence = w.optDouble("conf", 1.0).toFloat(),
+                    startMs = (w.optDouble("start", 0.0) * 1000).toLong(),
+                    endMs = (w.optDouble("end", 0.0) * 1000).toLong()
+                )
+            }
+        } catch (_: Exception) { emptyList() }
     }
 
     private fun parseVoskResult(json: String): String {
