@@ -91,15 +91,22 @@ class WritingActivity : AppCompatActivity() {
     private lateinit var redoButton: ImageView
     private lateinit var spaceInsertButton: ImageView
     private lateinit var micButton: ImageView
-    private var audioTranscriber: com.writer.recognition.AudioTranscriber? = null
     private var audioCaptureManager: com.writer.audio.AudioCaptureManager? = null
     private var audioRecordCapture: com.writer.audio.AudioRecordCapture? = null
     private val useWhisperTranscriber: Boolean
         get() = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
             .getBoolean(PREF_USE_WHISPER, false)
-    private var lectureMode = false
-    private var lectureRecordingStartMs = 0L
-    private val audioQualityMonitor = com.writer.audio.AudioQualityMonitor()
+    // Delegate to coordinator for document-scoped state
+    private var lectureMode: Boolean
+        get() = coordinator?.lectureMode ?: false
+        set(value) { coordinator?.lectureMode = value }
+    private var audioTranscriber: com.writer.recognition.AudioTranscriber?
+        get() = coordinator?.audioTranscriber
+        set(value) { coordinator?.audioTranscriber = value }
+    private var lectureRecordingStartMs: Long
+        get() = coordinator?.lectureRecordingStartMs ?: 0L
+        set(value) { coordinator?.lectureRecordingStartMs = value }
+    private val audioQualityMonitor get() = coordinator?.audioQualityMonitor ?: com.writer.audio.AudioQualityMonitor()
     private var audioQualityWarned = false
     private var audioPlaybackFile: java.io.File? = null
 
@@ -223,6 +230,7 @@ class WritingActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        onBackPressedDispatcher.addCallback(this, recordingBackCallback)
 
         val filter = android.content.IntentFilter("${packageName}.GENERATE_BUG_REPORT")
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
@@ -732,8 +740,28 @@ class WritingActivity : AppCompatActivity() {
         }
     }
 
+    /** Confirm before interrupting an active recording. */
+    private fun confirmIfRecording(action: () -> Unit) {
+        if (!lectureMode) {
+            action()
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Recording in progress")
+            .setMessage("Stop the current recording?")
+            .setPositiveButton("Stop") { _, _ ->
+                stopLectureCapture()
+                action()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
     private fun newDocument() {
-        if (lectureMode) stopLectureCapture()
+        confirmIfRecording { newDocumentImpl() }
+    }
+
+    private fun newDocumentImpl() {
         snapshotAndSaveBlocking()
 
         coordinator?.stop()
@@ -1111,6 +1139,7 @@ class WritingActivity : AppCompatActivity() {
         lectureMode = true
         lectureRecordingStartMs = System.currentTimeMillis()
         audioQualityMonitor.reset()
+        recordingBackCallback.isEnabled = true
         audioQualityWarned = false
         micButton.setImageResource(R.drawable.ic_mic_active)
         inkCanvas.lectureRecording = true
@@ -1279,6 +1308,7 @@ class WritingActivity : AppCompatActivity() {
         micButton.setImageResource(R.drawable.ic_mic)
         inkCanvas.lectureRecording = false
         inkCanvas.recordingPlaceholderLine = -1
+        recordingBackCallback.isEnabled = false
 
         if (audioTranscriber is com.writer.recognition.WhisperTranscriber) {
             // Whisper: stop() triggers batch transcription, cleanup in onFinalResult
@@ -1332,7 +1362,7 @@ class WritingActivity : AppCompatActivity() {
         }
         popupView.findViewById<android.view.View>(R.id.menuOpen).setOnClickListener {
             popup.dismiss()
-            showOpenDialog()
+            confirmIfRecording { showOpenDialog() }
         }
         popupView.findViewById<android.view.View>(R.id.menuRename).setOnClickListener {
             launchingSaveAs = true
@@ -2088,17 +2118,20 @@ class WritingActivity : AppCompatActivity() {
         }
     }
 
+    /** During lecture recording, back button moves to background instead of closing. */
+    private val recordingBackCallback = object : androidx.activity.OnBackPressedCallback(false) {
+        override fun handleOnBackPressed() {
+            moveTaskToBack(true)
+        }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         if (lectureMode) stopLectureCapture()
         unregisterReceiver(bugReportReceiver)
         closeDualCanvasOnyx()
-        coordinator?.stop()
+        coordinator?.stop()  // releases audioPlayer, audioTranscriber, lectureMode
         cueCoordinator?.stop()
         recognizer.close()
-        audioTranscriber?.close()
-        audioTranscriber = null
-        audioRecordCapture?.stop()
-        audioRecordCapture = null
     }
 }
