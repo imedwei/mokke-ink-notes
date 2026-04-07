@@ -1009,6 +1009,7 @@ class WritingActivity : AppCompatActivity() {
         }
 
         // Play from tapped word
+        Toast.makeText(this, "Seek: ${wordStartMs ?: "block start"} ms, file: ${block.audioFile}", Toast.LENGTH_SHORT).show()
         val audioFile = ensureAudioFile(block.audioFile)
         if (audioFile == null) {
             Toast.makeText(this, "Audio file not found", Toast.LENGTH_SHORT).show()

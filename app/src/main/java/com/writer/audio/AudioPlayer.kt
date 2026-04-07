@@ -38,18 +38,21 @@ class AudioPlayer {
         val mp = MediaPlayer()
         try {
             mp.setDataSource(file.absolutePath)
-            mp.prepare()
-            mp.seekTo(startMs.toInt())
             mp.setOnCompletionListener {
                 isPlaying = false
                 stopPositionUpdates()
                 onCompleted?.invoke()
             }
+            mp.prepare()
             mp.start()
+            // Seek after start — seeking before start is unreliable on some devices
+            if (startMs > 0) {
+                mp.seekTo(startMs.toInt())
+            }
             player = mp
             isPlaying = true
             startPositionUpdates()
-            Log.i(tag, "Playing ${file.name} from ${startMs}ms")
+            Log.i(tag, "Playing ${file.name} from ${startMs}ms (duration=${mp.duration}ms)")
         } catch (e: Exception) {
             Log.e(tag, "Failed to play ${file.name}", e)
             mp.release()
