@@ -205,7 +205,92 @@ class AudioRecordCapture(private val cacheDir: File) {
         isRecording = false
     }
 
-    /** Get the output file. Available after [stop]. */
+    /**
+     * Start encoder-only mode (no AudioRecord). Call [feedPcm] to provide
+     * external PCM buffers. Use when another component owns the mic stream.
+     */
+    fun startEncoderOnly(): Boolean {
+        if (isRecording) stop()
+
+        val audioDir = File(cacheDir, "audio_recording")
+        audioDir.mkdirs()
+        val file = File(audioDir, "rec-${System.currentTimeMillis()}.webm")
+        outputFile = file
+
+        val format = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_OPUS, SAMPLE_RATE, 1)
+        format.setInteger(MediaFormat.KEY_BIT_RATE, BIT_RATE)
+        format.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, SAMPLE_RATE * 2)
+
+        val codec = try {
+            MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_OPUS)
+        } catch (e: Exception) {
+            Log.w(tag, "Failed to create Opus encoder", e)
+            return false
+        }
+
+        try {
+            codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+        } catch (e: Exception) {
+            Log.w(tag, "Failed to configure Opus encoder", e)
+            codec.release()
+            return false
+        }
+
+        val mux = try {
+            MediaMuxer(file.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_WEBM)
+        } catch (e: Exception) {
+            Log.w(tag, "Failed to create MediaMuxer", e)
+            codec.release()
+            return false
+        }
+
+        encoder = codec
+        muxer = mux
+        trackIndex = -1
+        muxerStarted = false
+        isRecording = true
+        codec.start()
+        Log.i(tag, "Encoder-only mode started")
+        return true
+    }
+
+    /**
+     * Feed external PCM data to the encoder. Call from the recording thread.
+     * Only works in encoder-only mode (started via [startEncoderOnly]).
+     */
+    fun feedPcm(buffer: ByteArray, length: Int) {
+        val codec = encoder ?: return
+        val mux = muxer ?: return
+        val bufferInfo = MediaCodec.BufferInfo()
+
+        val inputIndex = codec.dequeueInputBuffer(10_000)
+        if (inputIndex >= 0) {
+            val inputBuffer = codec.getInputBuffer(inputIndex) ?: return
+            inputBuffer.clear()
+            inputBuffer.put(buffer, 0, length)
+            codec.queueInputBuffer(inputIndex, 0, length, System.nanoTime() / 1000, 0)
+        }
+
+        drainEncoder(codec, mux, bufferInfo, false)
+    }
+
+    /** Stop encoder-only mode and finalize the file. */
+    fun stopEncoder() {
+        val codec = encoder ?: return
+        val mux = muxer ?: return
+
+        // Signal end of stream
+        val inputIndex = codec.dequeueInputBuffer(10_000)
+        if (inputIndex >= 0) {
+            codec.queueInputBuffer(inputIndex, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+        }
+        val bufferInfo = MediaCodec.BufferInfo()
+        drainEncoder(codec, mux, bufferInfo, true)
+        cleanup()
+        Log.i(tag, "Encoder stopped: ${outputFile?.name} (${outputFile?.length() ?: 0} bytes)")
+    }
+
+    /** Get the output file. Available after [stop] or [stopEncoder]. */
     fun getOutputFile(): File? = outputFile
 
     /** Read the compressed audio bytes. Returns null if nothing was recorded. */

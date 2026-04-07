@@ -1249,8 +1249,9 @@ class WritingActivity : AppCompatActivity() {
                 val now = System.currentTimeMillis()
                 val startMs = now - lectureRecordingStartMs - 3000L
                 val endMs = now - lectureRecordingStartMs
+                val audioFile = "rec-${lectureRecordingStartMs}.webm"
                 activeCoordinator?.insertTextBlock(
-                    text, startMs = startMs.coerceAtLeast(0), endMs = endMs
+                    text, audioFile = audioFile, startMs = startMs.coerceAtLeast(0), endMs = endMs
                 )
                 updateCueIndicatorStrip()
                 updateRecordingPlaceholder()
@@ -1348,15 +1349,36 @@ class WritingActivity : AppCompatActivity() {
         if (audioTranscriber is com.writer.recognition.WhisperTranscriber) {
             // Whisper: stop() triggers batch transcription, cleanup in onFinalResult
             audioTranscriber?.stop()
-        } else {
-            // Vosk and SpeechRecognizer: close immediately, text blocks already inserted per-sentence
+        } else if (audioTranscriber is com.writer.recognition.VoskTranscriber) {
+            // Vosk: stop to finalize audio, then save
+            val voskTranscriber = audioTranscriber as com.writer.recognition.VoskTranscriber
+            voskTranscriber.stop()
+
+            // Save audio to bundle
+            val audioBytes = voskTranscriber.readRecordedBytes()
             lectureMode = false
             audioTranscriber?.close()
             audioTranscriber = null
 
-            // Stop foreground service if running
             val serviceIntent = android.content.Intent(this, com.writer.audio.AudioRecordingService::class.java)
             stopService(serviceIntent)
+
+            if (audioBytes != null) {
+                val recordingName = "rec-${lectureRecordingStartMs}.webm"
+                val snapshot = createSaveSnapshot()
+                if (snapshot != null) {
+                    DocumentStorage.save(this, snapshot.name, snapshot.state, mapOf(recordingName to audioBytes))
+                }
+                android.util.Log.i("WritingActivity", "Vosk: saved ${audioBytes.size} bytes audio")
+            } else {
+                snapshotAndSaveBlocking()
+            }
+            Toast.makeText(this, "Lecture capture stopped", Toast.LENGTH_SHORT).show()
+        } else {
+            // SpeechRecognizer: close immediately, no audio saved
+            lectureMode = false
+            audioTranscriber?.close()
+            audioTranscriber = null
 
             snapshotAndSaveBlocking()
             Toast.makeText(this, "Lecture capture stopped", Toast.LENGTH_SHORT).show()

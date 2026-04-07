@@ -92,23 +92,27 @@ class VoskTranscriber(private val context: Context) : AudioTranscriber {
         }
 
         // Start compressed audio capture alongside
+        // Start Opus/WebM encoder for audio save (encoder-only, no own AudioRecord)
         val capture = AudioRecordCapture(context.cacheDir)
-        // Don't start capture's own AudioRecord — we'll feed it manually
-        // Instead, just use AudioRecordCapture for the encoder setup
-        // Actually, AudioRecordCapture opens its own AudioRecord. We need a different approach.
-        // For now, save raw PCM and encode later, or skip audio save for this iteration.
+        if (capture.startEncoderOnly()) {
+            audioCapture = capture
+            Log.i(tag, "Audio encoder started for recording")
+        }
 
         audioRecord = recorder
         recording = true
         recorder.startRecording()
 
         recordingThread = Thread({
-            val buffer = ByteArray(BUFFER_SIZE) // ~0.25s chunks for responsive streaming
+            val buffer = ByteArray(BUFFER_SIZE)
             val rec = recognizer ?: return@Thread
 
             while (recording) {
                 val read = recorder.read(buffer, 0, buffer.size)
                 if (read > 0) {
+                    // Tee PCM to both Vosk recognizer and audio encoder
+                    audioCapture?.feedPcm(buffer, read)
+
                     if (rec.acceptWaveForm(buffer, read)) {
                         val result = rec.finalResult
                         val text = parseVoskResult(result)
@@ -145,6 +149,10 @@ class VoskTranscriber(private val context: Context) : AudioTranscriber {
         audioRecord?.stop()
         audioRecord?.release()
         audioRecord = null
+
+        // Finalize audio encoding
+        audioCapture?.stopEncoder()
+
         isListening = false
     }
 
@@ -154,7 +162,14 @@ class VoskTranscriber(private val context: Context) : AudioTranscriber {
         recognizer = null
         model?.close()
         model = null
+        audioCapture = null
     }
+
+    /** Get the compressed audio file after stop(). */
+    fun getAudioFile(): java.io.File? = audioCapture?.getOutputFile()
+
+    /** Read the compressed audio bytes after stop(). */
+    fun readRecordedBytes(): ByteArray? = audioCapture?.readRecordedBytes()
 
     private fun parseVoskResult(json: String): String {
         return try {
