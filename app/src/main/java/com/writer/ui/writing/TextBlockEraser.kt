@@ -54,39 +54,61 @@ object TextBlockEraser {
 
         val block = textBlocks.find { it.containsLine(scratchLineIndex) } ?: return null
 
-        // Map scratch horizontal span to words using actual text measurement
-        val words = block.text.split(" ").filter { it.isNotEmpty() }
-        if (words.isEmpty()) return block to EraseResult("", deleteBlock = true)
+        // Map scratch to words accounting for multi-line wrapping
+        val allWords = block.text.split(" ").filter { it.isNotEmpty() }
+        if (allWords.isEmpty()) return block to EraseResult("", deleteBlock = true)
 
         val textLeftMargin = lineSpacing * 0.3f
         val paint = TextPaint().apply { textSize = ScreenMetrics.textBody }
-        val spaceWidth = paint.measureText(" ")
+        val fullText = block.text.trimStart()
 
-        // Find which words overlap the scratch horizontal span
-        val scratchStartX = scratchLeft
-        val scratchEndX = scratchRight
+        // Use StaticLayout to find which wrapped line the scratch is on
+        val textWidth = (scratchRight.coerceAtLeast(500f) - 2 * textLeftMargin).toInt().coerceAtLeast(100)
+        val layout = android.text.StaticLayout.Builder
+            .obtain(fullText, 0, fullText.length, paint, textWidth)
+            .setAlignment(android.text.Layout.Alignment.ALIGN_NORMAL)
+            .build()
 
+        val scratchCenterX = (scratchLeft + scratchRight) / 2
+        val scratchWrappedLine = scratchLineIndex - block.startLineIndex
+
+        // Find words on the scratched line and check overlap
         val surviving = mutableListOf<String>()
         val removed = mutableListOf<String>()
-        var xPos = textLeftMargin
         var gapCharIndex = 0
         var foundGap = false
-        for (word in words) {
-            val wordWidth = paint.measureText(word)
-            val wordStart = xPos
-            val wordEnd = xPos + wordWidth
-            val overlaps = wordEnd > scratchStartX && wordStart < scratchEndX
-            if (!overlaps) {
+
+        val wordsInText = fullText.split(" ").filter { it.isNotEmpty() }
+        var charPos = 0
+        for ((i, word) in wordsInText.withIndex()) {
+            // Determine which wrapped line this word is on
+            val wordCharStart = charPos
+            val wordLine = layout.getLineForOffset(wordCharStart)
+
+            if (wordLine == scratchWrappedLine) {
+                // This word is on the scratched line — check X overlap
+                val wordX = textLeftMargin + paint.measureText(
+                    fullText.substring(layout.getLineStart(wordLine), wordCharStart)
+                )
+                val wordWidth = paint.measureText(word)
+                val overlaps = (wordX + wordWidth) > scratchLeft && wordX < scratchRight
+
+                if (overlaps) {
+                    if (!foundGap) {
+                        gapCharIndex = surviving.joinToString(" ").length + if (surviving.isNotEmpty()) 1 else 0
+                        foundGap = true
+                    }
+                    removed.add(word)
+                } else {
+                    if (!foundGap) gapCharIndex = surviving.joinToString(" ").length + if (surviving.isNotEmpty()) 1 else 0
+                    surviving.add(word)
+                }
+            } else {
+                // Word on a different line — always survives
                 if (!foundGap) gapCharIndex = surviving.joinToString(" ").length + if (surviving.isNotEmpty()) 1 else 0
                 surviving.add(word)
-            } else {
-                if (!foundGap) {
-                    gapCharIndex = surviving.joinToString(" ").length + if (surviving.isNotEmpty()) 1 else 0
-                    foundGap = true
-                }
-                removed.add(word)
             }
-            xPos = wordEnd + spaceWidth
+            charPos += word.length + 1 // +1 for space
         }
 
         val newText = surviving.joinToString(" ").trim()
