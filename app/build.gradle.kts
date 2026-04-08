@@ -187,6 +187,9 @@ dependencies {
     // Media3 ExoPlayer for audio playback (supports seeking in WebM/Opus)
     implementation("androidx.media3:media3-exoplayer:1.6.0")
 
+    // Sherpa-ONNX speech recognition (streaming with ONNX Runtime)
+    implementation("com.bihe0832.android:lib-sherpa-onnx:6.25.12")
+
     // Vosk offline speech recognition (real-time streaming with owned AudioRecord)
     implementation("com.alphacephei:vosk-android:0.3.75@aar")
     implementation("net.java.dev.jna:jna:5.18.1@aar")
