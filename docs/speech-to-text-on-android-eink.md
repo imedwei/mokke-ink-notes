@@ -14,14 +14,15 @@ This requires three things from the speech-to-text engine:
 
 Cloud transcription services (Google Cloud Speech, Deepgram, AssemblyAI) would be more accurate, but I ruled them out. This is an open-source app for personal note-taking. Streaming meeting audio to a third-party server is a privacy problem, and ongoing API costs don't make sense for a passion project. Everything needed to run on-device.
 
-I tried three approaches. Here is where I landed:
+I tried four approaches. Here is where I landed:
 
 ```
-Engine               Real-time   Audio   Per-word   Model
-───────────────────────────────────────────────────────────
-SpeechRecognizer     ✓           ✗       ✗          0 MB
-whisper.cpp          ✗ (4.5x)    ✓       ✓          75 MB
-Vosk                 ✓           ✓       ✓          40 MB
+Engine               Real-time   Audio   Per-word   Model    WER
+──────────────────────────────────────────────────────────────────
+SpeechRecognizer     ✓           ✗       ✗          0 MB     —
+whisper.cpp          ✗ (10.4x)   ✓       ✓          31 MB    3.7%
+Vosk                 ✓ (0.27x)   ✓       ✓          40 MB   11.1%
+Sherpa-ONNX          ✓ (0.14x)   ✓       ✓          39 MB   11.2%
 ```
 
 **Device:** Boox Palma 2 Pro, Qualcomm SM6350 (Snapdragon 690), Android 15 (API 35), Kaleido 3 color e-ink display.
@@ -101,11 +102,27 @@ params.temperature_inc = 0.0f;  // disable retry at higher temperatures
 params.token_timestamps = true; // per-word confidence and timestamps
 ```
 
+### Accuracy on real speech
+
+The synthetic sine wave benchmarks above measure pure inference cost. To measure accuracy, I ran a comparative benchmark on 12 LibriSpeech test-clean utterances (4 speakers, 97.8 seconds of real speech) using word error rate (WER) calculated via word-level Levenshtein distance:
+
+```
+Engine                WER     RTF (median of 3)
+─────────────────────────────────────────────────
+whisper.cpp (q5_1)    3.7%    10.4x
+Vosk                 11.1%     0.27x
+Sherpa-ONNX (int8)   11.2%     0.14x
+```
+
+Source: `app/src/androidTest/java/com/writer/perf/TranscriptionBenchmarkTest.kt`
+
+The RTF on real speech (10.4x for Whisper with the q5_1 model at 2 threads) is higher than the synthetic benchmark (5.6x) because Whisper's decoder does more work on real speech tokens than on silence. The f16 model at 4 threads would be faster, but still well above 1.0x realtime.
+
 ### Verdict on Whisper
 
-At 4.5x realtime even with all optimizations, Whisper is not viable for interactive use on the Snapdragon 690. I implemented it as an opt-in "higher accuracy" mode: the user records first, then waits for transcription with a progress bar. The progress bar self-calibrates over multiple uses by tracking the actual realtime factor via exponential moving average.
+At 10.4x realtime on real speech, Whisper is not viable for interactive use on the Snapdragon 690. I implemented it as an opt-in "higher accuracy" mode: the user records first, then waits for transcription with a progress bar. The progress bar self-calibrates over multiple uses by tracking the actual realtime factor via exponential moving average.
 
-Whisper does provide excellent per-word metadata via `whisper_full_get_token_data()`: confidence scores and timestamps for every token. I use this to render red squiggly underlines on low-confidence words and to enable tap-a-word-to-seek-audio. So it earns its place as a batch option, even if it cannot drive the real-time experience.
+Whisper does provide excellent per-word metadata via `whisper_full_get_token_data()`: confidence scores and timestamps for every token. I use this to render red squiggly underlines on low-confidence words and to enable tap-a-word-to-seek-audio. Its 3.7% WER is 3x better than the streaming engines, so it earns its place as a batch option for users who want higher accuracy and are willing to wait.
 
 ---
 
@@ -149,9 +166,59 @@ The buffer size matters for responsiveness. I started with 1-second buffers (32K
 
 Dependency: `com.alphacephei:vosk-android:0.3.75`, model `vosk-model-small-en-us-0.15` (~40 MB). With `setWords(true)`, Vosk returns per-word confidence and timestamps in JSON, enabling the same features as Whisper's token API.
 
-I did not evaluate every on-device speech-to-text option. [Sherpa-ONNX](https://github.com/k2-fsa/sherpa-onnx) (from the next-gen Kaldi project) is another strong candidate for streaming on-device recognition on Android. I chose Vosk because it had a mature Android library, well-documented streaming API, and met my requirements without further investigation. If you're starting fresh, Sherpa-ONNX is worth benchmarking.
-
 A foreground service (`AudioRecordingService` with `foregroundServiceType="microphone"`) keeps recording alive when the app is backgrounded. This matters for lecture capture where the user may switch apps briefly.
+
+---
+
+## Sherpa-ONNX: Twice as Fast as Vosk
+
+After shipping with Vosk, I benchmarked [Sherpa-ONNX](https://github.com/k2-fsa/sherpa-onnx) (from the next-gen Kaldi project). The results were striking: Sherpa processes audio at 0.14x realtime — nearly twice as fast as Vosk's 0.27x — with the same ~11% WER on the LibriSpeech test set.
+
+### Benchmark results
+
+Measured via `TranscriptionBenchmarkTest` on the Palma 2 Pro. 12 LibriSpeech test-clean utterances, 4 speakers, 97.8 seconds total. Each engine ran 3 times; RTF is the median. WER computed via word-level Levenshtein distance.
+
+```
+Engine                 Load     Size     RTF      WER    RTF variance
+────────────────────────────────────────────────────────────────────────
+Sherpa-ONNX (int8)     ~7s      39 MB    0.139   11.2%   0.139 / 0.139 / 0.139
+Vosk (small-en-us)     736ms    68 MB    0.274   11.1%   0.274 / 0.276 / 0.274
+whisper.cpp (q5_1)     514ms    31 MB   10.447    3.7%   10.44 / 10.47 / 10.48
+```
+
+Sherpa's RTF was identical across all three runs — zero measurable variance. Vosk showed the same stability. Both engines are well within real-time on this SoC.
+
+### The API
+
+Sherpa-ONNX provides the same streaming pattern as Vosk: feed PCM chunks, get results back. The key difference is Sherpa accepts `float[]` samples (normalized to [-1, 1]) instead of Vosk's `byte[]` (16-bit PCM).
+
+```kotlin
+val recognizer = OnlineRecognizer(config = OnlineRecognizerConfig(
+    modelConfig = OnlineModelConfig(
+        transducer = OnlineTransducerModelConfig(encoderPath, decoderPath, joinerPath),
+        tokens = tokensPath,
+        numThreads = 2,
+        modelType = "zipformer2"
+    ),
+    enableEndpoint = true
+))
+
+val stream = recognizer.createStream()
+stream.acceptWaveform(floatSamples, sampleRate)
+while (recognizer.isReady(stream)) recognizer.decode(stream)
+if (recognizer.isEndpoint(stream)) {
+    val result = recognizer.getResult(stream)  // .text, .tokens, .timestamps
+    recognizer.reset(stream)
+}
+```
+
+Model: [`sherpa-onnx-streaming-zipformer-en-2023-06-26`](https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-2023-06-26) int8 quantized (encoder 26 MB, decoder 2 MB, joiner 11 MB). Dependency: `com.bihe0832.android:lib-sherpa-onnx:6.25.12`.
+
+### Trade-offs vs Vosk
+
+Sherpa's model load time (~7 seconds) is significantly slower than Vosk's (736ms). This is a one-time cost at session start, so it matters less for lecture capture but more for quick dictation. Sherpa also lacks Vosk's built-in per-word confidence scores — `OnlineRecognizerResult` provides token-level timestamps but not confidence values. For the tap-to-correct workflow, this means Sherpa cannot drive the red-underline feature without additional work.
+
+Sherpa's WER on very short utterances (1-2 words) was unreliable — the endpoint detector sometimes cut off speech or produced spurious text. On utterances longer than 3 seconds, Sherpa and Vosk were comparable in accuracy.
 
 ---
 
@@ -187,7 +254,9 @@ Fix: replace `MediaPlayer` with [Media3 ExoPlayer](https://developer.android.com
 
 The working architecture: Vosk handles real-time streaming transcription, Opus/WebM provides crash-resilient audio recording, and ExoPlayer enables seeking in the saved audio. Per-word confidence and timestamps from both Vosk and Whisper drive the interactive features: tap a word to jump to that moment in the audio, red underlines on low-confidence words to guide correction. Whisper remains available as a batch option for users who want higher accuracy and are willing to wait.
 
-What's still unsolved: audio recording in `SpeechRecognizer` mode. If Google opens up the ML Kit GenAI `fromPfd()` API to third-party apps, that would be the best of both worlds, combining Google's on-device models with full audio access. Until then, Vosk is the best option I have found for real-time on-device transcription on Android.
+Sherpa-ONNX is the fastest engine I tested — 2x faster than Vosk at comparable accuracy. It is a strong candidate for replacing Vosk as the default streaming engine once per-word confidence scores are available (or if the tap-to-correct workflow is redesigned to not require them). For now, Vosk's mature word-level metadata keeps it in the default slot.
+
+What's still unsolved: audio recording in `SpeechRecognizer` mode. If Google opens up the ML Kit GenAI `fromPfd()` API to third-party apps, that would be the best of both worlds, combining Google's on-device models with full audio access. Until then, Vosk and Sherpa-ONNX are the best options I have found for real-time on-device transcription on Android.
 
 ---
 
@@ -202,6 +271,7 @@ What's still unsolved: audio recording in `SpeechRecognizer` mode. If Google ope
 - [Vosk Android demo](https://github.com/alphacep/vosk-android-demo)
 - [Vosk models](https://alphacephei.com/vosk/models)
 - [Sherpa-ONNX](https://github.com/k2-fsa/sherpa-onnx)
+- [Sherpa-ONNX streaming zipformer model](https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-2023-06-26)
 - [Media3 ExoPlayer](https://developer.android.com/media/media3/exoplayer)
 - [Just Press Record](https://www.openplanetsoftware.com/just-press-record/)
 - [Mokke Ink](https://github.com/imedwei/mokke-ink-notes)

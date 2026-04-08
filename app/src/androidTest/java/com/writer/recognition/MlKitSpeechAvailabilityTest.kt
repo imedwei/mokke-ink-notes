@@ -25,16 +25,23 @@ class MlKitSpeechAvailabilityTest {
 
     @Test
     fun checkSpeechRecognitionAvailability() {
+        // Use reflection to avoid compile-time dependency on genai artifact
+        // (not published to Maven Central as of 2026-04-05)
         runBlocking {
             try {
-                val options = com.google.mlkit.genai.speechrecognition.SpeechRecognizerOptions.builder().build()
-                val recognizer = com.google.mlkit.genai.speechrecognition.SpeechRecognition.getClient(options)
+                val optsCls = Class.forName("com.google.mlkit.genai.speechrecognition.SpeechRecognizerOptions")
+                val builder = optsCls.getMethod("builder").invoke(null)
+                val options = builder.javaClass.getMethod("build").invoke(builder)
+
+                val srCls = Class.forName("com.google.mlkit.genai.speechrecognition.SpeechRecognition")
+                val recognizer = srCls.getMethod("getClient", optsCls).invoke(null, options)
                 Log.i(tag, "=== SpeechRecognition client created ===")
 
-                val status = recognizer.checkStatus()
+                val status = recognizer!!.javaClass.getMethod("checkStatus").invoke(recognizer)
                 Log.i(tag, "=== ML Kit Speech Status: $status ===")
             } catch (e: Exception) {
-                Log.e(tag, "=== ML Kit Speech FAILED: ${e.javaClass.simpleName}: ${e.message} ===")
+                val cause = if (e is java.lang.reflect.InvocationTargetException) e.cause else e
+                Log.e(tag, "=== ML Kit Speech FAILED: ${cause?.javaClass?.simpleName}: ${cause?.message} ===")
             }
         }
     }
