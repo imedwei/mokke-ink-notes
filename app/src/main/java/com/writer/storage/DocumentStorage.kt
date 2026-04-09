@@ -92,6 +92,11 @@ object DocumentStorage {
         return saved
     }
 
+    // Cache audio files in memory to avoid re-reading the ZIP on every auto-save.
+    // Key: absolute file path. Cleared on document switch (load/delete).
+    private var audioCache: MutableMap<String, ByteArray> = mutableMapOf()
+    private var audioCachePath: String? = null
+
     /**
      * Save document data to [file], preserving existing audio when [audioFiles]
      * is empty (auto-save path) and merging when both exist.
@@ -117,6 +122,12 @@ object DocumentStorage {
                 throw e
             }
 
+            // Update cache so next auto-save doesn't re-read ZIP
+            if (allAudio.isNotEmpty()) {
+                audioCachePath = file.absolutePath
+                audioCache = allAudio.toMutableMap()
+            }
+
             return true
         } catch (e: Exception) {
             Log.e(TAG, "Failed to save to ${file.name}", e)
@@ -126,7 +137,7 @@ object DocumentStorage {
 
     /**
      * Resolve audio files for a save operation:
-     * - If no new audio and file exists: preserve existing audio from bundle
+     * - If no new audio and file exists: preserve existing audio (from cache or ZIP)
      * - If new audio and file exists: merge existing + new
      * - Otherwise: use whatever was provided
      */
@@ -134,25 +145,41 @@ object DocumentStorage {
         file: File,
         audioFiles: Map<String, ByteArray>
     ): Map<String, ByteArray> {
+        if (!file.exists() && audioFiles.isEmpty()) return emptyMap()
         if (!file.exists()) return audioFiles
+
+        val existing = loadExistingAudio(file)
         return if (audioFiles.isEmpty()) {
-            try {
-                file.inputStream().use { DocumentBundle.readZip(it) }.audioFiles
-            } catch (_: Exception) { emptyMap() }
+            existing
         } else {
-            try {
-                val existing = file.inputStream().use { DocumentBundle.readZip(it) }.audioFiles
-                existing + audioFiles
-            } catch (_: Exception) { audioFiles }
+            existing + audioFiles
         }
+    }
+
+    private fun loadExistingAudio(file: File): Map<String, ByteArray> {
+        // Use cache if available for this file
+        if (audioCachePath == file.absolutePath && audioCache.isNotEmpty()) {
+            return audioCache
+        }
+        return try {
+            val audio = file.inputStream().use { DocumentBundle.readZip(it) }.audioFiles
+            if (audio.isNotEmpty()) {
+                audioCachePath = file.absolutePath
+                audioCache = audio.toMutableMap()
+            }
+            audio
+        } catch (_: Exception) { emptyMap() }
     }
 
     fun load(context: Context, name: String): DocumentData? {
         return loadBundle(context, name)?.data
     }
 
-    /** Load a document with its audio files. */
+    /** Load a document with its audio files. Clears audio cache for the previous document. */
     fun loadBundle(context: Context, name: String): BundleResult? {
+        // Clear audio cache — new document context
+        audioCache.clear()
+        audioCachePath = null
         // Try .mok first, then legacy .inkup, then legacy .json
         try {
             val mok = mokFile(context, name)

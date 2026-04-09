@@ -32,6 +32,7 @@ class SherpaTranscriber(
     private var recordingThread: Thread? = null
     @Volatile private var recording = false
     @Volatile private var audioOffsetSec = 0f
+    private var floatBuffer = FloatArray(BUFFER_SIZE / 2) // reusable PCM conversion buffer
 
     override var onPartialResult: ((String) -> Unit)? = null
     override var onFinalResult: ((String) -> Unit)? = null
@@ -96,6 +97,7 @@ class SherpaTranscriber(
             val buffer = ByteArray(BUFFER_SIZE)
             var lastPartialText = ""
             var chunkCount = 0
+            rmsFrameCount = 0
             // Track cumulative audio position — Sherpa resets timestamps after each
             // endpoint, but the audio recording is continuous.
             audioOffsetSec = 0f
@@ -115,11 +117,12 @@ class SherpaTranscriber(
                     postMain { onRmsChanged?.invoke(rmsDb) }
                 }
 
-                // Convert 16-bit PCM to float32 [-1, 1]
+                // Convert 16-bit PCM to float32 [-1, 1] (reuse buffer)
                 val samples = read / 2
                 segmentSamples += samples
-                val floats = bytesToFloat(buffer, read)
-                onlineStream.acceptWaveform(floats, SAMPLE_RATE)
+                if (floatBuffer.size != samples) floatBuffer = FloatArray(samples)
+                bytesToFloat(buffer, read, floatBuffer)
+                onlineStream.acceptWaveform(floatBuffer, SAMPLE_RATE)
 
                 // Decode
                 while (recognizer.isReady(onlineStream)) {
@@ -237,12 +240,12 @@ class SherpaTranscriber(
         return if (rms > 0) (20 * kotlin.math.log10(rms / 32768.0) + 90).toFloat().coerceIn(-2f, 10f) else -2f
     }
 
-    private fun bytesToFloat(buffer: ByteArray, length: Int): FloatArray {
+    private fun bytesToFloat(buffer: ByteArray, length: Int, out: FloatArray) {
         val samples = length / 2
-        return FloatArray(samples) { i ->
+        for (i in 0 until samples) {
             val lo = buffer[i * 2].toInt() and 0xFF
             val hi = buffer[i * 2 + 1].toInt()
-            (hi shl 8 or lo).toShort().toFloat() / 32768f
+            out[i] = (hi shl 8 or lo).toShort().toFloat() / 32768f
         }
     }
 
