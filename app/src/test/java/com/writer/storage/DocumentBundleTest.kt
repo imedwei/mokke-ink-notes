@@ -149,4 +149,131 @@ class DocumentBundleTest {
         val result = DocumentBundle.read(rawBytes)
         assertEquals(1, result.data.main.strokes.size)
     }
+
+    // ── Audio preservation regression tests ─────────────────────────────
+    // Bug: auto-save (no audioFiles param) was overwriting the bundle,
+    // wiping previously recorded audio.
+
+    @Test
+    fun writeWithoutAudio_thenReadBack_audioFilesEmpty() {
+        // Simulates auto-save: only document data, no audio
+        val out = ByteArrayOutputStream()
+        DocumentBundle.writeZip(out, sampleData())
+        val result = DocumentBundle.readZip(ByteArrayInputStream(out.toByteArray()))
+        assertTrue("Auto-save without audio should produce empty audioFiles",
+            result.audioFiles.isEmpty())
+    }
+
+    @Test
+    fun writeWithAudio_readBack_thenRewriteWithoutAudio_audioLostInBundle() {
+        // This test documents the bundle-level behavior:
+        // writeZip without audio does NOT preserve previous audio.
+        // Preservation must happen at the DocumentStorage layer.
+        val audioFiles = mapOf("rec-123.webm" to "audio data".toByteArray())
+        val out1 = ByteArrayOutputStream()
+        DocumentBundle.writeZip(out1, sampleData(), audioFiles)
+
+        // Verify audio is in the first bundle
+        val result1 = DocumentBundle.readZip(ByteArrayInputStream(out1.toByteArray()))
+        assertEquals(1, result1.audioFiles.size)
+
+        // Rewrite without audio (simulates raw auto-save)
+        val out2 = ByteArrayOutputStream()
+        DocumentBundle.writeZip(out2, sampleData())
+
+        // Audio is gone at the bundle level
+        val result2 = DocumentBundle.readZip(ByteArrayInputStream(out2.toByteArray()))
+        assertTrue("Raw writeZip without audio wipes audio entries",
+            result2.audioFiles.isEmpty())
+    }
+
+    @Test
+    fun mergeAudioFiles_preservesExistingAndAddsNew() {
+        // Simulates DocumentStorage.save() merge behavior
+        val existing = mapOf("rec-100.webm" to "first recording".toByteArray())
+        val newAudio = mapOf("rec-200.webm" to "second recording".toByteArray())
+        val merged = existing + newAudio
+
+        val out = ByteArrayOutputStream()
+        DocumentBundle.writeZip(out, sampleData(), merged)
+
+        val result = DocumentBundle.readZip(ByteArrayInputStream(out.toByteArray()))
+        assertEquals(2, result.audioFiles.size)
+        assertArrayEquals("first recording".toByteArray(), result.audioFiles["rec-100.webm"])
+        assertArrayEquals("second recording".toByteArray(), result.audioFiles["rec-200.webm"])
+    }
+
+    // ── DocumentStorage audio preservation via temp file ────────────────
+    // Regression: auto-save was overwriting the .mok bundle without audio,
+    // wiping previously recorded audio files.
+
+    @Test
+    fun autoSave_preservesExistingAudio_viaFileRoundTrip() {
+        val tmpFile = java.io.File.createTempFile("test-doc", ".mok")
+        try {
+            // Step 1: Save document WITH audio (simulates lecture stop)
+            val audio = mapOf("rec-001.webm" to "lecture audio".toByteArray())
+            tmpFile.outputStream().use { DocumentBundle.writeZip(it, sampleData(), audio) }
+
+            // Verify audio is there
+            val check1 = tmpFile.inputStream().use { DocumentBundle.readZip(it) }
+            assertEquals(1, check1.audioFiles.size)
+
+            // Step 2: Simulate auto-save — read existing audio, merge, rewrite
+            val existing = tmpFile.inputStream().use { DocumentBundle.readZip(it) }
+            val mergedAudio = existing.audioFiles // no new audio, just preserve
+            tmpFile.outputStream().use { DocumentBundle.writeZip(it, sampleData(), mergedAudio) }
+
+            // Verify audio survived
+            val check2 = tmpFile.inputStream().use { DocumentBundle.readZip(it) }
+            assertEquals("Audio must survive auto-save", 1, check2.audioFiles.size)
+            assertArrayEquals("lecture audio".toByteArray(), check2.audioFiles["rec-001.webm"])
+        } finally {
+            tmpFile.delete()
+        }
+    }
+
+    @Test
+    fun autoSave_withoutPreservation_losesAudio() {
+        // Documents the bug: raw writeZip without reading existing audio loses it
+        val tmpFile = java.io.File.createTempFile("test-doc", ".mok")
+        try {
+            // Save WITH audio
+            val audio = mapOf("rec-001.webm" to "lecture audio".toByteArray())
+            tmpFile.outputStream().use { DocumentBundle.writeZip(it, sampleData(), audio) }
+
+            // Overwrite WITHOUT reading existing audio (the bug)
+            tmpFile.outputStream().use { DocumentBundle.writeZip(it, sampleData()) }
+
+            // Audio is gone
+            val result = tmpFile.inputStream().use { DocumentBundle.readZip(it) }
+            assertTrue("Without preservation, audio is lost", result.audioFiles.isEmpty())
+        } finally {
+            tmpFile.delete()
+        }
+    }
+
+    @Test
+    fun secondRecording_mergesWithFirst() {
+        val tmpFile = java.io.File.createTempFile("test-doc", ".mok")
+        try {
+            // First recording saved
+            val audio1 = mapOf("rec-001.webm" to "first".toByteArray())
+            tmpFile.outputStream().use { DocumentBundle.writeZip(it, sampleData(), audio1) }
+
+            // Second recording: read existing, merge, write
+            val existing = tmpFile.inputStream().use { DocumentBundle.readZip(it) }
+            val audio2 = mapOf("rec-002.webm" to "second".toByteArray())
+            val merged = existing.audioFiles + audio2
+            tmpFile.outputStream().use { DocumentBundle.writeZip(it, sampleData(), merged) }
+
+            // Both recordings present
+            val result = tmpFile.inputStream().use { DocumentBundle.readZip(it) }
+            assertEquals(2, result.audioFiles.size)
+            assertArrayEquals("first".toByteArray(), result.audioFiles["rec-001.webm"])
+            assertArrayEquals("second".toByteArray(), result.audioFiles["rec-002.webm"])
+        } finally {
+            tmpFile.delete()
+        }
+    }
 }
