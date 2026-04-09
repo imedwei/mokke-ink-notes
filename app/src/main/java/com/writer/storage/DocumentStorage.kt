@@ -82,26 +82,30 @@ object DocumentStorage {
         data: DocumentData,
         audioFiles: Map<String, ByteArray> = emptyMap()
     ): Boolean {
-        try {
-            val file = mokFile(context, name)
-
-            // Preserve existing audio files when none are provided.
-            // Auto-saves only pass document data; without this, they would
-            // overwrite the bundle and lose previously recorded audio.
-            val allAudio = if (audioFiles.isEmpty() && file.exists()) {
-                try {
-                    val existing = file.inputStream().use { DocumentBundle.readZip(it) }
-                    existing.audioFiles
-                } catch (_: Exception) { emptyMap() }
-            } else if (audioFiles.isNotEmpty() && file.exists()) {
-                // Merge: keep existing audio + add new
-                try {
-                    val existing = file.inputStream().use { DocumentBundle.readZip(it) }
-                    existing.audioFiles + audioFiles
-                } catch (_: Exception) { audioFiles }
-            } else {
-                audioFiles
+        val saved = saveToFile(mokFile(context, name), data, audioFiles)
+        if (saved) {
+            Log.i(TAG, "Saved ${data.main.strokes.size} strokes to $name.$MOKKE_EXT")
+            GlobalScope.launch(Dispatchers.IO) {
+                SearchIndexManager.indexDocument(context, name, data)
             }
+        }
+        return saved
+    }
+
+    /**
+     * Save document data to [file], preserving existing audio when [audioFiles]
+     * is empty (auto-save path) and merging when both exist.
+     *
+     * Extracted from [save] for testability — the audio preservation logic
+     * operates on a plain [File] with no Android Context dependency.
+     */
+    internal fun saveToFile(
+        file: File,
+        data: DocumentData,
+        audioFiles: Map<String, ByteArray> = emptyMap()
+    ): Boolean {
+        try {
+            val allAudio = resolveAudioFiles(file, audioFiles)
 
             val atomicFile = AtomicFile(file)
             val stream = atomicFile.startWrite()
@@ -113,15 +117,33 @@ object DocumentStorage {
                 throw e
             }
 
-            Log.i(TAG, "Saved ${data.main.strokes.size} strokes to $name.$MOKKE_EXT")
-            // Update search index with per-line recognized text
-            GlobalScope.launch(Dispatchers.IO) {
-                SearchIndexManager.indexDocument(context, name, data)
-            }
             return true
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to save document $name", e)
+            Log.e(TAG, "Failed to save to ${file.name}", e)
             return false
+        }
+    }
+
+    /**
+     * Resolve audio files for a save operation:
+     * - If no new audio and file exists: preserve existing audio from bundle
+     * - If new audio and file exists: merge existing + new
+     * - Otherwise: use whatever was provided
+     */
+    internal fun resolveAudioFiles(
+        file: File,
+        audioFiles: Map<String, ByteArray>
+    ): Map<String, ByteArray> {
+        if (!file.exists()) return audioFiles
+        return if (audioFiles.isEmpty()) {
+            try {
+                file.inputStream().use { DocumentBundle.readZip(it) }.audioFiles
+            } catch (_: Exception) { emptyMap() }
+        } else {
+            try {
+                val existing = file.inputStream().use { DocumentBundle.readZip(it) }.audioFiles
+                existing + audioFiles
+            } catch (_: Exception) { audioFiles }
         }
     }
 

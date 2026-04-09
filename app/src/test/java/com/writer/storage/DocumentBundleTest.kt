@@ -203,75 +203,100 @@ class DocumentBundleTest {
         assertArrayEquals("second recording".toByteArray(), result.audioFiles["rec-200.webm"])
     }
 
-    // ── DocumentStorage audio preservation via temp file ────────────────
-    // Regression: auto-save was overwriting the .mok bundle without audio,
-    // wiping previously recorded audio files.
+    // ── DocumentStorage.saveToFile audio preservation ─────────────────
+    // Regression: auto-save (no audioFiles param) was overwriting the .mok
+    // bundle, wiping previously recorded audio. These tests exercise the
+    // production code path in DocumentStorage.saveToFile/resolveAudioFiles.
 
     @Test
-    fun autoSave_preservesExistingAudio_viaFileRoundTrip() {
+    fun saveToFile_autoSave_preservesExistingAudio() {
         val tmpFile = java.io.File.createTempFile("test-doc", ".mok")
         try {
-            // Step 1: Save document WITH audio (simulates lecture stop)
+            // Step 1: Save WITH audio (simulates lecture stop)
             val audio = mapOf("rec-001.webm" to "lecture audio".toByteArray())
-            tmpFile.outputStream().use { DocumentBundle.writeZip(it, sampleData(), audio) }
+            DocumentStorage.saveToFile(tmpFile, sampleData(), audio)
 
-            // Verify audio is there
-            val check1 = tmpFile.inputStream().use { DocumentBundle.readZip(it) }
-            assertEquals(1, check1.audioFiles.size)
+            // Step 2: Auto-save WITHOUT audio (production auto-save path)
+            DocumentStorage.saveToFile(tmpFile, sampleData())
 
-            // Step 2: Simulate auto-save — read existing audio, merge, rewrite
-            val existing = tmpFile.inputStream().use { DocumentBundle.readZip(it) }
-            val mergedAudio = existing.audioFiles // no new audio, just preserve
-            tmpFile.outputStream().use { DocumentBundle.writeZip(it, sampleData(), mergedAudio) }
-
-            // Verify audio survived
-            val check2 = tmpFile.inputStream().use { DocumentBundle.readZip(it) }
-            assertEquals("Audio must survive auto-save", 1, check2.audioFiles.size)
-            assertArrayEquals("lecture audio".toByteArray(), check2.audioFiles["rec-001.webm"])
-        } finally {
-            tmpFile.delete()
-        }
-    }
-
-    @Test
-    fun autoSave_withoutPreservation_losesAudio() {
-        // Documents the bug: raw writeZip without reading existing audio loses it
-        val tmpFile = java.io.File.createTempFile("test-doc", ".mok")
-        try {
-            // Save WITH audio
-            val audio = mapOf("rec-001.webm" to "lecture audio".toByteArray())
-            tmpFile.outputStream().use { DocumentBundle.writeZip(it, sampleData(), audio) }
-
-            // Overwrite WITHOUT reading existing audio (the bug)
-            tmpFile.outputStream().use { DocumentBundle.writeZip(it, sampleData()) }
-
-            // Audio is gone
+            // Audio must survive
             val result = tmpFile.inputStream().use { DocumentBundle.readZip(it) }
-            assertTrue("Without preservation, audio is lost", result.audioFiles.isEmpty())
+            assertEquals("Audio must survive auto-save", 1, result.audioFiles.size)
+            assertArrayEquals("lecture audio".toByteArray(), result.audioFiles["rec-001.webm"])
         } finally {
             tmpFile.delete()
         }
     }
 
     @Test
-    fun secondRecording_mergesWithFirst() {
+    fun saveToFile_secondRecording_mergesWithFirst() {
         val tmpFile = java.io.File.createTempFile("test-doc", ".mok")
         try {
-            // First recording saved
-            val audio1 = mapOf("rec-001.webm" to "first".toByteArray())
-            tmpFile.outputStream().use { DocumentBundle.writeZip(it, sampleData(), audio1) }
+            // First recording
+            DocumentStorage.saveToFile(tmpFile, sampleData(), mapOf("rec-001.webm" to "first".toByteArray()))
 
-            // Second recording: read existing, merge, write
-            val existing = tmpFile.inputStream().use { DocumentBundle.readZip(it) }
-            val audio2 = mapOf("rec-002.webm" to "second".toByteArray())
-            val merged = existing.audioFiles + audio2
-            tmpFile.outputStream().use { DocumentBundle.writeZip(it, sampleData(), merged) }
+            // Second recording (new audio provided)
+            DocumentStorage.saveToFile(tmpFile, sampleData(), mapOf("rec-002.webm" to "second".toByteArray()))
 
-            // Both recordings present
+            // Both present
             val result = tmpFile.inputStream().use { DocumentBundle.readZip(it) }
             assertEquals(2, result.audioFiles.size)
             assertArrayEquals("first".toByteArray(), result.audioFiles["rec-001.webm"])
             assertArrayEquals("second".toByteArray(), result.audioFiles["rec-002.webm"])
+        } finally {
+            tmpFile.delete()
+        }
+    }
+
+    @Test
+    fun saveToFile_newFile_noExistingAudio() {
+        val tmpFile = java.io.File.createTempFile("test-doc", ".mok")
+        tmpFile.delete() // ensure it doesn't exist
+        try {
+            DocumentStorage.saveToFile(tmpFile, sampleData())
+            val result = tmpFile.inputStream().use { DocumentBundle.readZip(it) }
+            assertTrue("New file should have no audio", result.audioFiles.isEmpty())
+        } finally {
+            tmpFile.delete()
+        }
+    }
+
+    @Test
+    fun resolveAudioFiles_noFileExists_returnsProvided() {
+        val tmpFile = java.io.File.createTempFile("test-doc", ".mok")
+        tmpFile.delete()
+        val audio = mapOf("rec.webm" to "data".toByteArray())
+        val resolved = DocumentStorage.resolveAudioFiles(tmpFile, audio)
+        assertEquals(1, resolved.size)
+    }
+
+    @Test
+    fun resolveAudioFiles_fileExists_emptyNew_returnsExisting() {
+        val tmpFile = java.io.File.createTempFile("test-doc", ".mok")
+        try {
+            val audio = mapOf("rec.webm" to "existing".toByteArray())
+            tmpFile.outputStream().use { DocumentBundle.writeZip(it, sampleData(), audio) }
+
+            val resolved = DocumentStorage.resolveAudioFiles(tmpFile, emptyMap())
+            assertEquals(1, resolved.size)
+            assertArrayEquals("existing".toByteArray(), resolved["rec.webm"])
+        } finally {
+            tmpFile.delete()
+        }
+    }
+
+    @Test
+    fun resolveAudioFiles_fileExists_newProvided_mergesBoth() {
+        val tmpFile = java.io.File.createTempFile("test-doc", ".mok")
+        try {
+            val existing = mapOf("rec-1.webm" to "first".toByteArray())
+            tmpFile.outputStream().use { DocumentBundle.writeZip(it, sampleData(), existing) }
+
+            val newAudio = mapOf("rec-2.webm" to "second".toByteArray())
+            val resolved = DocumentStorage.resolveAudioFiles(tmpFile, newAudio)
+            assertEquals(2, resolved.size)
+            assertArrayEquals("first".toByteArray(), resolved["rec-1.webm"])
+            assertArrayEquals("second".toByteArray(), resolved["rec-2.webm"])
         } finally {
             tmpFile.delete()
         }
