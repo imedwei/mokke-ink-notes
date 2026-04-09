@@ -84,6 +84,17 @@
                 android:paddingBottom="8dp" />
 
             <RadioButton
+                android:id="@+id/radioSherpa"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Sherpa (real-time + live partials, ~39 MB)"
+                android:textSize="18sp"
+                android:textColor="@color/black"
+                android:paddingStart="8dp"
+                android:paddingTop="8dp"
+                android:paddingBottom="8dp" />
+
+            <RadioButton
                 android:id="@+id/radioVosk"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"

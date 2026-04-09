@@ -26,6 +26,7 @@ class SettingsActivity : AppCompatActivity() {
         const val ENGINE_SYSTEM = "system"
         const val ENGINE_VOSK = "vosk"
         const val ENGINE_WHISPER = "whisper"
+        const val ENGINE_SHERPA = "sherpa"
         const val PREF_SYNC_FOLDER = "sync_folder_uri"
         const val RESULT_SHOW_TUTORIAL = "show_tutorial"
         const val RESULT_DEBUG_RESET = "debug_reset"
@@ -64,14 +65,16 @@ class SettingsActivity : AppCompatActivity() {
 
         // Transcription engine selector
         val engineGroup = findViewById<RadioGroup>(R.id.transcriptionEngineGroup)
-        val currentEngine = prefs.getString(PREF_TRANSCRIPTION_ENGINE, ENGINE_SYSTEM)
+        val currentEngine = prefs.getString(PREF_TRANSCRIPTION_ENGINE, ENGINE_SHERPA)
         when (currentEngine) {
+            ENGINE_SHERPA -> engineGroup.check(R.id.radioSherpa)
             ENGINE_VOSK -> engineGroup.check(R.id.radioVosk)
             ENGINE_WHISPER -> engineGroup.check(R.id.radioWhisper)
             else -> engineGroup.check(R.id.radioSystem)
         }
         engineGroup.setOnCheckedChangeListener { _, checkedId ->
             val engine = when (checkedId) {
+                R.id.radioSherpa -> ENGINE_SHERPA
                 R.id.radioVosk -> ENGINE_VOSK
                 R.id.radioWhisper -> ENGINE_WHISPER
                 else -> ENGINE_SYSTEM

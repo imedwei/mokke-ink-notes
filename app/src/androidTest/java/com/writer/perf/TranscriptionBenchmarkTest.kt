@@ -65,6 +65,15 @@ class TranscriptionBenchmarkTest {
             "tokens.txt"
         )
 
+        private const val SHERPA_ORT_BASE =
+            "https://huggingface.co/w11wo/sherpa-onnx-ort-streaming-zipformer-en-2023-06-26/resolve/main"
+        private val SHERPA_ORT_FILES = listOf(
+            "encoder-epoch-99-avg-1-chunk-16-left-128.int8.ort",
+            "decoder-epoch-99-avg-1-chunk-16-left-128.int8.ort",
+            "joiner-epoch-99-avg-1-chunk-16-left-128.int8.ort",
+            "tokens.txt"
+        )
+
         private const val VOSK_URL =
             "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip"
         private const val VOSK_DIR = "vosk-model-small-en-us-0.15"
@@ -397,13 +406,19 @@ class TranscriptionBenchmarkTest {
         return modelPath.absolutePath
     }
 
-    private fun ensureSherpaModel(): File {
-        val dir = File(benchDir, "sherpa").also { it.mkdirs() }
-        for (name in SHERPA_FILES) {
+    private fun ensureSherpaModel(): File =
+        ensureModelFiles(File(benchDir, "sherpa"), SHERPA_BASE, SHERPA_FILES)
+
+    private fun ensureSherpaOrtModel(): File =
+        ensureModelFiles(File(benchDir, "sherpa-ort"), SHERPA_ORT_BASE, SHERPA_ORT_FILES)
+
+    private fun ensureModelFiles(dir: File, baseUrl: String, files: List<String>): File {
+        dir.mkdirs()
+        for (name in files) {
             val file = File(dir, name)
             if (file.exists() && file.length() > 0) continue
-            Log.i(TAG, "Downloading sherpa $name...")
-            URL("$SHERPA_BASE/$name").openStream().use { inp ->
+            Log.i(TAG, "Downloading $name...")
+            URL("$baseUrl/$name").openStream().use { inp ->
                 file.outputStream().use { inp.copyTo(it) }
             }
         }
@@ -480,15 +495,25 @@ class TranscriptionBenchmarkTest {
         )
     }
 
-    private fun benchmarkSherpa(utts: List<Utterance>): EngineResult {
-        val modelDir = ensureSherpaModel()
+    private fun benchmarkSherpa(utts: List<Utterance>): EngineResult =
+        benchmarkSherpaWith(utts, ensureSherpaModel(), SHERPA_FILES, "Sherpa (zipformer-en int8)")
+
+    private fun benchmarkSherpaOrt(utts: List<Utterance>): EngineResult =
+        benchmarkSherpaWith(utts, ensureSherpaOrtModel(), SHERPA_ORT_FILES, "Sherpa (zipformer-en int8 ORT)")
+
+    private fun benchmarkSherpaWith(
+        utts: List<Utterance>, modelDir: File, files: List<String>, label: String
+    ): EngineResult {
+        val encoder = files.first { it.startsWith("encoder") }
+        val decoder = files.first { it.startsWith("decoder") }
+        val joiner = files.first { it.startsWith("joiner") }
 
         val config = OnlineRecognizerConfig(
             modelConfig = OnlineModelConfig(
                 transducer = OnlineTransducerModelConfig(
-                    encoder = File(modelDir, "encoder-epoch-99-avg-1-chunk-16-left-128.int8.onnx").absolutePath,
-                    decoder = File(modelDir, "decoder-epoch-99-avg-1-chunk-16-left-128.int8.onnx").absolutePath,
-                    joiner = File(modelDir, "joiner-epoch-99-avg-1-chunk-16-left-128.int8.onnx").absolutePath
+                    encoder = File(modelDir, encoder).absolutePath,
+                    decoder = File(modelDir, decoder).absolutePath,
+                    joiner = File(modelDir, joiner).absolutePath
                 ),
                 tokens = File(modelDir, "tokens.txt").absolutePath,
                 numThreads = 2,
@@ -497,9 +522,18 @@ class TranscriptionBenchmarkTest {
             enableEndpoint = true
         )
 
+        // Force native library load (static init) before timing model init
+        Log.i(TAG, "$label: triggering native library load...")
+        val libStart = System.currentTimeMillis()
+        try { Class.forName("com.k2fsa.sherpa.onnx.OnlineRecognizer") } catch (_: Exception) {}
+        val libMs = System.currentTimeMillis() - libStart
+        Log.i(TAG, "$label: native library loaded in ${libMs}ms")
+
+        Log.i(TAG, "$label: loading models...")
         val t0 = System.currentTimeMillis()
         val recognizer = OnlineRecognizer(config = config)
         val loadMs = System.currentTimeMillis() - t0
+        Log.i(TAG, "$label: models loaded in ${loadMs}ms (lib=${libMs}ms, total=${libMs + loadMs}ms)")
         val modelSize = modelDir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
 
         val rtfs = mutableListOf<Float>()
@@ -537,7 +571,7 @@ class TranscriptionBenchmarkTest {
                     val text = resultText.toString().trim()
                     val wer = wordErrorRate(utt.groundTruth, text)
                     runWers.add(utt.id to wer)
-                    Log.i(TAG, "Sherpa [${utt.id}] WER=%.3f".format(wer))
+                    Log.i(TAG, "$label [${utt.id}] WER=%.3f".format(wer))
                     Log.i(TAG, "  ref: ${utt.groundTruth.take(80)}")
                     Log.i(TAG, "  hyp: ${text.take(80)}")
                 }
@@ -545,13 +579,13 @@ class TranscriptionBenchmarkTest {
             }
 
             rtfs.add(procMs / 1000f / audioSec)
-            Log.i(TAG, "Sherpa run $run: RTF=%.3f".format(rtfs.last()))
+            Log.i(TAG, "$label run $run: RTF=%.3f".format(rtfs.last()))
             if (run == 1) wers = runWers
         }
         recognizer.release()
 
         return EngineResult(
-            engine = "Sherpa (zipformer-en int8)",
+            engine = label,
             modelLoadMs = loadMs, modelSizeBytes = modelSize,
             rtfRuns = rtfs, rtfMedian = rtfs.sorted()[rtfs.size / 2],
             werPerUtterance = wers,
@@ -664,5 +698,459 @@ class TranscriptionBenchmarkTest {
 
         assertTrue("At least one engine must complete", results.isNotEmpty())
         printComparison(results)
+    }
+
+    /** Compare ONNX vs ORT model loading for Sherpa. */
+    @Test
+    fun benchmark_sherpa_onnx_vs_ort() {
+        val utts = utterances
+        Log.i(TAG, "Sherpa ONNX vs ORT comparison (${utts.size} utterances)")
+
+        val results = mutableListOf<EngineResult>()
+        results.add(benchmarkSherpa(utts))
+        results.add(benchmarkSherpaOrt(utts))
+        printComparison(results)
+    }
+
+    /**
+     * Measure memory cost of keeping the Sherpa ORT model pre-loaded.
+     * Reports Java heap, native heap, and PSS before/after/during-use.
+     */
+    @Test
+    fun measure_sherpa_ort_memory() {
+        val modelDir = ensureSherpaOrtModel()
+        val files = SHERPA_ORT_FILES
+        val encoder = files.first { it.startsWith("encoder") }
+        val decoder = files.first { it.startsWith("decoder") }
+        val joiner = files.first { it.startsWith("joiner") }
+
+        val config = OnlineRecognizerConfig(
+            modelConfig = OnlineModelConfig(
+                transducer = OnlineTransducerModelConfig(
+                    encoder = File(modelDir, encoder).absolutePath,
+                    decoder = File(modelDir, decoder).absolutePath,
+                    joiner = File(modelDir, joiner).absolutePath
+                ),
+                tokens = File(modelDir, "tokens.txt").absolutePath,
+                numThreads = 2,
+                modelType = "zipformer2"
+            ),
+            enableEndpoint = true
+        )
+
+        // Force native library load before measurement
+        try { Class.forName("com.k2fsa.sherpa.onnx.OnlineRecognizer") } catch (_: Exception) {}
+
+        // ── Baseline ──
+        forceGc()
+        val baseline = snapshot("baseline")
+
+        // ── After model load ──
+        val recognizer = OnlineRecognizer(config = config)
+        forceGc()
+        val loaded = snapshot("model loaded")
+
+        // ── During active transcription (stream + buffers) ──
+        val utts = utterances
+        val stream = recognizer.createStream()
+        for (utt in utts.take(3)) {
+            var off = 0
+            while (off < utt.pcm.size) {
+                val end = minOf(off + CHUNK_SAMPLES, utt.pcm.size)
+                stream.acceptWaveform(utt.pcm.copyOfRange(off, end), SAMPLE_RATE)
+                while (recognizer.isReady(stream)) recognizer.decode(stream)
+                if (recognizer.isEndpoint(stream)) {
+                    recognizer.getResult(stream)
+                    recognizer.reset(stream)
+                }
+                off = end
+            }
+        }
+        forceGc()
+        val active = snapshot("during transcription")
+
+        // ── After stream release ──
+        stream.inputFinished()
+        while (recognizer.isReady(stream)) recognizer.decode(stream)
+        recognizer.getResult(stream)
+        stream.release()
+        forceGc()
+        val idle = snapshot("stream released")
+
+        // ── After recognizer release ──
+        recognizer.release()
+        forceGc()
+        val released = snapshot("recognizer released")
+
+        printMemoryReport("SHERPA ORT", baseline, loaded, active, idle, released)
+    }
+
+    /**
+     * Measure memory cost of keeping the Vosk model pre-loaded.
+     */
+    @Test
+    fun measure_vosk_memory() {
+        val modelPath = ensureVoskModel()
+
+        // ── Baseline ──
+        forceGc()
+        val baseline = snapshot("baseline")
+
+        // ── After model load ──
+        val model = Model(modelPath)
+        forceGc()
+        val loaded = snapshot("model loaded")
+
+        // ── During active transcription ──
+        val utts = utterances
+        val rec = Recognizer(model, SAMPLE_RATE.toFloat())
+        for (utt in utts.take(3)) {
+            val bytes = floatToBytes(utt.pcm)
+            var off = 0
+            val chunkBytes = CHUNK_SAMPLES * 2
+            while (off < bytes.size) {
+                val end = minOf(off + chunkBytes, bytes.size)
+                rec.acceptWaveForm(bytes.copyOfRange(off, end), end - off)
+                off = end
+            }
+        }
+        rec.finalResult
+        forceGc()
+        val active = snapshot("during transcription")
+
+        // ── After recognizer close ──
+        rec.close()
+        forceGc()
+        val idle = snapshot("recognizer closed")
+
+        // ── After model close ──
+        model.close()
+        forceGc()
+        val released = snapshot("model closed")
+
+        printMemoryReport("VOSK", baseline, loaded, active, idle, released)
+    }
+
+    private fun printMemoryReport(
+        title: String,
+        baseline: MemSnapshot, loaded: MemSnapshot, active: MemSnapshot,
+        idle: MemSnapshot, released: MemSnapshot
+    ) {
+        Log.i(TAG, "")
+        Log.i(TAG, "=== $title MEMORY PROFILE ===")
+        Log.i(TAG, "")
+        Log.i(TAG, "%-24s  %8s  %8s  %8s".format("Phase", "Java", "Native", "PSS"))
+        Log.i(TAG, "%-24s  %8s  %8s  %8s".format("", "(MB)", "(MB)", "(MB)"))
+        Log.i(TAG, "─".repeat(54))
+        for (s in listOf(baseline, loaded, active, idle, released)) {
+            Log.i(TAG, "%-24s  %7.1f  %7.1f  %7.1f".format(
+                s.label, s.javaHeapMB, s.nativeHeapMB, s.pssMB
+            ))
+        }
+        Log.i(TAG, "─".repeat(54))
+
+        val modelCost = loaded - baseline
+        val streamCost = active - loaded
+        val totalCost = loaded - released
+        Log.i(TAG, "%-24s  %+7.1f  %+7.1f  %+7.1f".format(
+            "Model load delta", modelCost.javaHeapMB, modelCost.nativeHeapMB, modelCost.pssMB
+        ))
+        Log.i(TAG, "%-24s  %+7.1f  %+7.1f  %+7.1f".format(
+            "Active stream delta", streamCost.javaHeapMB, streamCost.nativeHeapMB, streamCost.pssMB
+        ))
+        Log.i(TAG, "%-24s  %+7.1f  %+7.1f  %+7.1f".format(
+            "Pre-load cost (retain)", totalCost.javaHeapMB, totalCost.nativeHeapMB, totalCost.pssMB
+        ))
+        Log.i(TAG, "")
+    }
+
+    private data class MemSnapshot(
+        val label: String,
+        val javaHeapMB: Float,
+        val nativeHeapMB: Float,
+        val pssMB: Float
+    ) {
+        operator fun minus(other: MemSnapshot) = MemSnapshot(
+            "$label - ${other.label}",
+            javaHeapMB - other.javaHeapMB,
+            nativeHeapMB - other.nativeHeapMB,
+            pssMB - other.pssMB
+        )
+    }
+
+    private fun snapshot(label: String): MemSnapshot {
+        val javaHeap = (Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory()) / (1024f * 1024f)
+        val nativeHeap = android.os.Debug.getNativeHeapAllocatedSize() / (1024f * 1024f)
+        val memInfo = android.os.Debug.MemoryInfo()
+        android.os.Debug.getMemoryInfo(memInfo)
+        val pss = memInfo.totalPss / 1024f // totalPss is in KB
+        Log.i(TAG, "  MEM [$label] java=%.1fMB native=%.1fMB pss=%.1fMB".format(javaHeap, nativeHeap, pss))
+        return MemSnapshot(label, javaHeap, nativeHeap, pss)
+    }
+
+    private fun forceGc() {
+        System.gc()
+        Thread.sleep(200)
+        System.gc()
+        Thread.sleep(200)
+    }
+
+    // ── Partial / Final latency ─────────────────────────────────────
+
+    /**
+     * Measures partial and final transcript latency for Vosk and Sherpa ORT.
+     *
+     * Feeds audio in real-time-paced 0.125s chunks and records:
+     * - Time-to-first-partial: audio position when first non-empty text appears
+     * - Partial update count: how many times the partial hypothesis changes
+     * - Final latency: audio time between last spoken word and final emission
+     * - Partial→final delta: how much the text changes from last partial to final
+     */
+    @Test
+    fun measure_partial_final_latency() {
+        val utts = utterances.take(4) // one per speaker
+        Log.i(TAG, "Partial/final latency test (${utts.size} utterances)")
+
+        Log.i(TAG, "")
+        Log.i(TAG, "=== VOSK PARTIAL/FINAL BEHAVIOR ===")
+        val voskModel = Model(ensureVoskModel())
+        val voskResults = utts.map { measureVoskLatency(voskModel, it) }
+        voskModel.close()
+
+        Log.i(TAG, "")
+        Log.i(TAG, "=== SHERPA ORT PARTIAL/FINAL BEHAVIOR ===")
+        val sherpaDir = ensureSherpaOrtModel()
+        val files = SHERPA_ORT_FILES
+        val recognizer = OnlineRecognizer(config = OnlineRecognizerConfig(
+            modelConfig = OnlineModelConfig(
+                transducer = OnlineTransducerModelConfig(
+                    encoder = File(sherpaDir, files.first { it.startsWith("encoder") }).absolutePath,
+                    decoder = File(sherpaDir, files.first { it.startsWith("decoder") }).absolutePath,
+                    joiner = File(sherpaDir, files.first { it.startsWith("joiner") }).absolutePath
+                ),
+                tokens = File(sherpaDir, "tokens.txt").absolutePath,
+                numThreads = 2,
+                modelType = "zipformer2"
+            ),
+            enableEndpoint = true
+        ))
+        val sherpaResults = utts.map { measureSherpaLatency(recognizer, it) }
+        recognizer.release()
+
+        // Summary
+        Log.i(TAG, "")
+        Log.i(TAG, "=== PARTIAL/FINAL LATENCY SUMMARY ===")
+        Log.i(TAG, "")
+        Log.i(TAG, "%-14s  %8s  %8s  %8s  %8s".format(
+            "Engine", "1st Par", "Updates", "Final Δ", "Par→Fin"
+        ))
+        Log.i(TAG, "%-14s  %8s  %8s  %8s  %8s".format(
+            "", "(sec)", "(count)", "(sec)", "(words)"
+        ))
+        Log.i(TAG, "─".repeat(54))
+        printLatencySummary("Vosk", voskResults)
+        printLatencySummary("Sherpa ORT", sherpaResults)
+    }
+
+    private data class LatencyResult(
+        val uttId: String,
+        val firstPartialSec: Float,   // audio position when first text appeared
+        val partialUpdates: Int,       // number of distinct partial hypotheses
+        val finalEmitSec: Float,       // audio position when final was emitted
+        val audioDurationSec: Float,
+        val finalLatencySec: Float,    // audioDuration - finalEmitSec (how long after end of audio)
+        val lastPartialText: String,
+        val finalText: String,
+        val partialToFinalWordDelta: Int // word-level edit distance between last partial and final
+    )
+
+    private fun measureVoskLatency(model: Model, utt: Utterance): LatencyResult {
+        val rec = Recognizer(model, SAMPLE_RATE.toFloat())
+        val bytes = floatToBytes(utt.pcm)
+        val chunkBytes = CHUNK_SAMPLES * 2
+        val chunkDurationSec = CHUNK_SAMPLES.toFloat() / SAMPLE_RATE
+
+        var firstPartialSec = -1f
+        var partialUpdates = 0
+        var lastPartialText = ""
+        var finalText = ""
+        var finalEmitSec = -1f
+        var audioPosSec = 0f
+
+        var off = 0
+        while (off < bytes.size) {
+            val end = minOf(off + chunkBytes, bytes.size)
+            val isFinal = rec.acceptWaveForm(bytes.copyOfRange(off, end), end - off)
+            audioPosSec += (end - off).toFloat() / 2 / SAMPLE_RATE
+
+            if (isFinal) {
+                val text = try {
+                    JSONObject(rec.finalResult).optString("text", "")
+                } catch (_: Exception) { "" }
+                if (text.isNotBlank()) {
+                    finalText = text
+                    finalEmitSec = audioPosSec
+                    Log.i(TAG, "  VOSK FINAL @%.2fs: \"%s\"".format(audioPosSec, text.take(60)))
+                }
+            } else {
+                val text = try {
+                    JSONObject(rec.partialResult).optString("partial", "")
+                } catch (_: Exception) { "" }
+                if (text.isNotBlank() && text != lastPartialText) {
+                    if (firstPartialSec < 0) firstPartialSec = audioPosSec
+                    partialUpdates++
+                    lastPartialText = text
+                    if (partialUpdates <= 5 || partialUpdates % 10 == 0) {
+                        Log.i(TAG, "  VOSK partial #$partialUpdates @%.2fs: \"%s\"".format(
+                            audioPosSec, text.take(60)
+                        ))
+                    }
+                }
+            }
+            off = end
+        }
+
+        // Flush remaining
+        val flushText = try {
+            JSONObject(rec.finalResult).optString("text", "")
+        } catch (_: Exception) { "" }
+        if (flushText.isNotBlank()) {
+            finalText = flushText
+            finalEmitSec = audioPosSec
+            Log.i(TAG, "  VOSK FINAL (flush) @%.2fs: \"%s\"".format(audioPosSec, flushText.take(60)))
+        }
+        rec.close()
+
+        val wordDelta = wordEditDistance(
+            normalize(lastPartialText).split(" ").filter { it.isNotEmpty() },
+            normalize(finalText).split(" ").filter { it.isNotEmpty() }
+        )
+
+        val result = LatencyResult(
+            uttId = utt.id,
+            firstPartialSec = firstPartialSec,
+            partialUpdates = partialUpdates,
+            finalEmitSec = finalEmitSec,
+            audioDurationSec = utt.durationSec,
+            finalLatencySec = if (finalEmitSec > 0) finalEmitSec - utt.durationSec else 0f,
+            lastPartialText = lastPartialText,
+            finalText = finalText,
+            partialToFinalWordDelta = wordDelta
+        )
+        Log.i(TAG, "  [${utt.id}] 1st-partial=%.2fs updates=%d final-at=%.2fs (audio=%.1fs) par→fin-Δ=%d words".format(
+            result.firstPartialSec, result.partialUpdates,
+            result.finalEmitSec, result.audioDurationSec, result.partialToFinalWordDelta
+        ))
+        return result
+    }
+
+    private fun measureSherpaLatency(recognizer: OnlineRecognizer, utt: Utterance): LatencyResult {
+        val stream = recognizer.createStream()
+        val chunkDurationSec = CHUNK_SAMPLES.toFloat() / SAMPLE_RATE
+
+        var firstPartialSec = -1f
+        var partialUpdates = 0
+        var lastPartialText = ""
+        var finalText = ""
+        var finalEmitSec = -1f
+        var audioPosSec = 0f
+
+        var off = 0
+        while (off < utt.pcm.size) {
+            val end = minOf(off + CHUNK_SAMPLES, utt.pcm.size)
+            stream.acceptWaveform(utt.pcm.copyOfRange(off, end), SAMPLE_RATE)
+            audioPosSec += (end - off).toFloat() / SAMPLE_RATE
+
+            while (recognizer.isReady(stream)) recognizer.decode(stream)
+
+            if (recognizer.isEndpoint(stream)) {
+                val r = recognizer.getResult(stream)
+                if (r.text.isNotBlank()) {
+                    finalText = r.text
+                    finalEmitSec = audioPosSec
+                    Log.i(TAG, "  SHERPA FINAL @%.2fs: \"%s\"".format(audioPosSec, r.text.take(60)))
+                }
+                recognizer.reset(stream)
+                lastPartialText = ""
+            } else {
+                val r = recognizer.getResult(stream)
+                if (r.text.isNotBlank() && r.text != lastPartialText) {
+                    if (firstPartialSec < 0) firstPartialSec = audioPosSec
+                    partialUpdates++
+                    lastPartialText = r.text
+                    if (partialUpdates <= 5 || partialUpdates % 10 == 0) {
+                        Log.i(TAG, "  SHERPA partial #$partialUpdates @%.2fs: \"%s\"".format(
+                            audioPosSec, r.text.take(60)
+                        ))
+                    }
+                }
+            }
+            off = end
+        }
+
+        // Flush
+        stream.inputFinished()
+        while (recognizer.isReady(stream)) recognizer.decode(stream)
+        val flushR = recognizer.getResult(stream)
+        if (flushR.text.isNotBlank()) {
+            if (finalText.isBlank() || flushR.text != finalText) {
+                finalText = flushR.text
+                finalEmitSec = audioPosSec
+                Log.i(TAG, "  SHERPA FINAL (flush) @%.2fs: \"%s\"".format(audioPosSec, flushR.text.take(60)))
+            }
+        }
+        stream.release()
+
+        val wordDelta = wordEditDistance(
+            normalize(lastPartialText).split(" ").filter { it.isNotEmpty() },
+            normalize(finalText).split(" ").filter { it.isNotEmpty() }
+        )
+
+        val result = LatencyResult(
+            uttId = utt.id,
+            firstPartialSec = firstPartialSec,
+            partialUpdates = partialUpdates,
+            finalEmitSec = finalEmitSec,
+            audioDurationSec = utt.durationSec,
+            finalLatencySec = if (finalEmitSec > 0) finalEmitSec - utt.durationSec else 0f,
+            lastPartialText = lastPartialText,
+            finalText = finalText,
+            partialToFinalWordDelta = wordDelta
+        )
+        Log.i(TAG, "  [${utt.id}] 1st-partial=%.2fs updates=%d final-at=%.2fs (audio=%.1fs) par→fin-Δ=%d words".format(
+            result.firstPartialSec, result.partialUpdates,
+            result.finalEmitSec, result.audioDurationSec, result.partialToFinalWordDelta
+        ))
+        return result
+    }
+
+    /** Word-level edit distance (not normalized). */
+    private fun wordEditDistance(a: List<String>, b: List<String>): Int {
+        val d = Array(a.size + 1) { IntArray(b.size + 1) }
+        for (i in d.indices) d[i][0] = i
+        for (j in 0..b.size) d[0][j] = j
+        for (i in 1..a.size) for (j in 1..b.size) {
+            d[i][j] = minOf(d[i-1][j] + 1, d[i][j-1] + 1, d[i-1][j-1] + if (a[i-1] == b[j-1]) 0 else 1)
+        }
+        return d[a.size][b.size]
+    }
+
+    private fun printLatencySummary(engine: String, results: List<LatencyResult>) {
+        val avgFirstPartial = results.filter { it.firstPartialSec >= 0 }
+            .map { it.firstPartialSec }.average().toFloat()
+        val avgUpdates = results.map { it.partialUpdates }.average().toFloat()
+        val avgFinalLat = results.filter { it.finalEmitSec >= 0 }
+            .map { it.finalLatencySec }.average().toFloat()
+        val avgWordDelta = results.map { it.partialToFinalWordDelta }.average().toFloat()
+
+        Log.i(TAG, "%-14s  %7.2f  %8.0f  %+7.2f  %8.1f".format(
+            engine, avgFirstPartial, avgUpdates, avgFinalLat, avgWordDelta
+        ))
+        for (r in results) {
+            Log.i(TAG, "  %-20s  1st=%.2fs  #%d updates  final@%.2fs  Δ%d words".format(
+                r.uttId, r.firstPartialSec, r.partialUpdates,
+                r.finalEmitSec, r.partialToFinalWordDelta
+            ))
+        }
     }
 }

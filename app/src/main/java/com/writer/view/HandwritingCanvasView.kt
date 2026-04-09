@@ -149,11 +149,22 @@ class HandwritingCanvasView @JvmOverloads constructor(
     var recordingPlaceholderLine: Int = -1
         set(value) { field = value; drawToSurface() }
 
+    /** Live partial transcription text shown inside the recording placeholder. */
+    var partialTranscriptionText: String = ""
+        set(value) { if (field != value) { field = value; drawToSurface() } }
+
     private val placeholderBorderPaint = Paint().apply {
         color = Color.DKGRAY
         style = Paint.Style.STROKE
         strokeWidth = ScreenMetrics.dp(1.5f)
         pathEffect = DashPathEffect(floatArrayOf(ScreenMetrics.dp(8f), ScreenMetrics.dp(6f)), 0f)
+    }
+
+    private val partialTextPaint = TextPaint().apply {
+        color = Color.BLACK
+        textSize = ScreenMetrics.textBody
+        isAntiAlias = false
+        typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.ITALIC)
     }
 
     private val placeholderTextPaint = Paint().apply {
@@ -1534,14 +1545,37 @@ class HandwritingCanvasView @JvmOverloads constructor(
         // Draw recording placeholder — dashed border showing where TextBlock will go
         if (recordingPlaceholderLine >= 0 && transcriptionProgress == null) {
             val phMargin = LINE_SPACING * 0.2f
-            val phTop = TOP_MARGIN + recordingPlaceholderLine * LINE_SPACING + phMargin
-            val phBottom = TOP_MARGIN + (recordingPlaceholderLine + 2) * LINE_SPACING - phMargin
-            canvas.drawRect(phMargin, phTop, canvasRight - phMargin, phBottom, placeholderBorderPaint)
+            val textLeftMarginPh = LINE_SPACING * 0.4f
+            val textWidthPh = (canvasRight - 2 * textLeftMarginPh).toInt().coerceAtLeast(1)
 
-            // Mic icon (small triangle) + "Recording — transcription will appear here"
-            val labelX = LINE_SPACING * 0.4f
-            val labelY = TOP_MARGIN + recordingPlaceholderLine * LINE_SPACING + LINE_SPACING * 0.85f
-            canvas.drawText("\uD83C\uDFA4  Recording — transcription will appear here", labelX, labelY, placeholderTextPaint)
+            if (partialTranscriptionText.isNotBlank()) {
+                // Live partial text — italic inside dashed border
+                val layout = android.text.StaticLayout.Builder
+                    .obtain(partialTranscriptionText, 0, partialTranscriptionText.length, partialTextPaint, textWidthPh)
+                    .setAlignment(android.text.Layout.Alignment.ALIGN_NORMAL)
+                    .build()
+                val lineCount = layout.lineCount.coerceAtLeast(2)
+                val phTop = TOP_MARGIN + recordingPlaceholderLine * LINE_SPACING + phMargin
+                val phBottom = TOP_MARGIN + (recordingPlaceholderLine + lineCount) * LINE_SPACING - phMargin
+                canvas.drawRect(phMargin, phTop, canvasRight - phMargin, phBottom, placeholderBorderPaint)
+
+                for (i in 0 until layout.lineCount) {
+                    val lineText = partialTranscriptionText.substring(
+                        layout.getLineStart(i), layout.getLineEnd(i)
+                    ).trimEnd()
+                    val ruledLineIndex = recordingPlaceholderLine + i
+                    val baselineY = TOP_MARGIN + (ruledLineIndex + 1) * LINE_SPACING
+                    canvas.drawText(lineText, textLeftMarginPh, baselineY, partialTextPaint)
+                }
+            } else {
+                // No partial yet — show placeholder label
+                val phTop = TOP_MARGIN + recordingPlaceholderLine * LINE_SPACING + phMargin
+                val phBottom = TOP_MARGIN + (recordingPlaceholderLine + 2) * LINE_SPACING - phMargin
+                canvas.drawRect(phMargin, phTop, canvasRight - phMargin, phBottom, placeholderBorderPaint)
+
+                val labelY = TOP_MARGIN + recordingPlaceholderLine * LINE_SPACING + LINE_SPACING * 0.85f
+                canvas.drawText("\uD83C\uDFA4  Recording \u2014 transcription will appear here", textLeftMarginPh, labelY, placeholderTextPaint)
+            }
         }
 
         // Draw transcription progress bar at the line where TextBlock will appear

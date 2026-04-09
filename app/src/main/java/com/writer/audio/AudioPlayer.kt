@@ -19,19 +19,12 @@ import java.io.File
  * seeking, unlike MediaPlayer which requires Cues in the container.
  */
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
-class AudioPlayer(context: Context) {
+class AudioPlayer(private val context: Context) {
 
     private val tag = "AudioPlayer"
     private val handler = Handler(Looper.getMainLooper())
     private var positionRunnable: Runnable? = null
-
-    private val player: ExoPlayer = run {
-        val extractorsFactory = DefaultExtractorsFactory()
-            .setConstantBitrateSeekingEnabled(true)
-        ExoPlayer.Builder(context)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(context, extractorsFactory))
-            .build()
-    }
+    private var player: ExoPlayer? = null
 
     var isPlaying: Boolean = false
         private set
@@ -42,8 +35,14 @@ class AudioPlayer(context: Context) {
     /** Called when playback reaches the end. */
     var onCompleted: (() -> Unit)? = null
 
-    init {
-        player.addListener(object : Player.Listener {
+    private fun ensurePlayer(): ExoPlayer {
+        player?.let { return it }
+        val extractorsFactory = DefaultExtractorsFactory()
+            .setConstantBitrateSeekingEnabled(true)
+        val p = ExoPlayer.Builder(context)
+            .setMediaSourceFactory(DefaultMediaSourceFactory(context, extractorsFactory))
+            .build()
+        p.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
                 if (state == Player.STATE_ENDED) {
                     isPlaying = false
@@ -52,47 +51,50 @@ class AudioPlayer(context: Context) {
                 }
             }
         })
+        player = p
+        return p
     }
 
     /**
      * Start playback from [startMs] in the given audio [file].
      */
     fun play(file: File, startMs: Long = 0) {
+        val p = ensurePlayer()
         val mediaItem = MediaItem.fromUri(file.toURI().toString())
-        player.setMediaItem(mediaItem, startMs)
-        player.prepare()
-        player.playWhenReady = true
+        p.setMediaItem(mediaItem, startMs)
+        p.prepare()
+        p.playWhenReady = true
         isPlaying = true
         startPositionUpdates()
         Log.i(tag, "Playing ${file.name} from ${startMs}ms")
     }
 
     fun pause() {
-        player.pause()
+        player?.pause()
         isPlaying = false
         stopPositionUpdates()
     }
 
     fun resume() {
-        player.play()
+        player?.play()
         isPlaying = true
         startPositionUpdates()
     }
 
     fun seekTo(ms: Long) {
-        player.seekTo(ms)
+        player?.seekTo(ms)
         onPositionChanged?.invoke(ms)
     }
 
     fun stop() {
         stopPositionUpdates()
-        player.stop()
+        player?.stop()
         isPlaying = false
     }
 
     /** Current playback position in ms, or 0 if not playing. */
     val currentPositionMs: Long
-        get() = try { player.currentPosition } catch (_: Exception) { 0L }
+        get() = try { player?.currentPosition ?: 0L } catch (_: Exception) { 0L }
 
     private fun startPositionUpdates() {
         stopPositionUpdates()
@@ -115,7 +117,8 @@ class AudioPlayer(context: Context) {
 
     fun release() {
         stop()
-        player.release()
+        player?.release()
+        player = null
         onPositionChanged = null
         onCompleted = null
     }

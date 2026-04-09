@@ -35,4 +35,7 @@ interface AudioTranscriber {
 
     /** Whether the transcriber is currently listening. */
     val isListening: Boolean
+
+    /** Read compressed audio bytes after stop(). Returns null if engine doesn't record audio. */
+    fun readRecordedBytes(): ByteArray? = null
 }

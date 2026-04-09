@@ -84,13 +84,29 @@ object DocumentStorage {
     ): Boolean {
         try {
             val file = mokFile(context, name)
-            val atomicFile = AtomicFile(file)
 
-            // AtomicFile handles tmp-write + rename atomically,
-            // and keeps a .bak for recovery on failure.
+            // Preserve existing audio files when none are provided.
+            // Auto-saves only pass document data; without this, they would
+            // overwrite the bundle and lose previously recorded audio.
+            val allAudio = if (audioFiles.isEmpty() && file.exists()) {
+                try {
+                    val existing = file.inputStream().use { DocumentBundle.readZip(it) }
+                    existing.audioFiles
+                } catch (_: Exception) { emptyMap() }
+            } else if (audioFiles.isNotEmpty() && file.exists()) {
+                // Merge: keep existing audio + add new
+                try {
+                    val existing = file.inputStream().use { DocumentBundle.readZip(it) }
+                    existing.audioFiles + audioFiles
+                } catch (_: Exception) { audioFiles }
+            } else {
+                audioFiles
+            }
+
+            val atomicFile = AtomicFile(file)
             val stream = atomicFile.startWrite()
             try {
-                DocumentBundle.writeZip(stream, data, audioFiles)
+                DocumentBundle.writeZip(stream, data, allAudio)
                 atomicFile.finishWrite(stream)
             } catch (e: Exception) {
                 atomicFile.failWrite(stream)

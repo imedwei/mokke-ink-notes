@@ -179,11 +179,11 @@ After shipping with Vosk, I benchmarked [Sherpa-ONNX](https://github.com/k2-fsa/
 Measured via `TranscriptionBenchmarkTest` on the Palma 2 Pro. 12 LibriSpeech test-clean utterances, 4 speakers, 97.8 seconds total. Each engine ran 3 times; RTF is the median. WER computed via word-level Levenshtein distance.
 
 ```
-Engine                 Load     Size     RTF      WER    RTF variance
-────────────────────────────────────────────────────────────────────────
-Sherpa-ONNX (int8)     ~7s      39 MB    0.139   11.2%   0.139 / 0.139 / 0.139
-Vosk (small-en-us)     736ms    68 MB    0.274   11.1%   0.274 / 0.276 / 0.274
-whisper.cpp (q5_1)     514ms    31 MB   10.447    3.7%   10.44 / 10.47 / 10.48
+Engine                 Load      Size     RTF      WER    RTF variance
+─────────────────────────────────────────────────────────────────────────
+Sherpa-ONNX (int8)     6,076ms   39 MB    0.139   11.2%   0.139 / 0.139 / 0.139
+Vosk (small-en-us)       736ms   68 MB    0.274   11.1%   0.274 / 0.276 / 0.274
+whisper.cpp (q5_1)       514ms   31 MB   10.447    3.7%   10.44 / 10.47 / 10.48
 ```
 
 Sherpa's RTF was identical across all three runs — zero measurable variance. Vosk showed the same stability. Both engines are well within real-time on this SoC.
@@ -214,9 +214,123 @@ if (recognizer.isEndpoint(stream)) {
 
 Model: [`sherpa-onnx-streaming-zipformer-en-2023-06-26`](https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-2023-06-26) int8 quantized (encoder 26 MB, decoder 2 MB, joiner 11 MB). Dependency: `com.bihe0832.android:lib-sherpa-onnx:6.25.12`.
 
-### Trade-offs vs Vosk
+### The 6-second model load
 
-Sherpa's model load time (~7 seconds) is significantly slower than Vosk's (736ms). This is a one-time cost at session start, so it matters less for lecture capture but more for quick dictation. Sherpa also lacks Vosk's built-in per-word confidence scores — `OnlineRecognizerResult` provides token-level timestamps but not confidence values. For the tap-to-correct workflow, this means Sherpa cannot drive the red-underline feature without additional work.
+Sherpa's model load time (6,076ms) is 8x slower than Vosk (736ms) and 12x slower than Whisper (514ms). I profiled it by separating native library loading from ONNX model initialization:
+
+```
+Phase                          Time
+──────────────────────────────────────
+Native library load (JNI)        4ms
+ONNX model init (3 models)   6,076ms
+──────────────────────────────────────
+Total                         6,080ms
+```
+
+The native `.so` is only 4.5 MB and loads instantly. The cost is entirely in the ONNX runtime's graph optimization pass, which runs separately for each of the three transducer models (encoder, decoder, joiner). Vosk and Whisper each load a single model file; Sherpa loads three.
+
+This is a [known issue](https://github.com/k2-fsa/sherpa-onnx/issues/211). The fix is to convert models to [ORT format](https://onnxruntime.ai/docs/reference/ort-format-models.html) (pre-baked graph optimizations that skip the runtime optimization pass):
+
+```bash
+python -m onnxruntime.tools.convert_onnx_models_to_ort --optimization_style=Fixed
+```
+
+Pre-converted ORT models for this zipformer are available at [`w11wo/sherpa-onnx-ort-streaming-zipformer-en-2023-06-26`](https://huggingface.co/w11wo/sherpa-onnx-ort-streaming-zipformer-en-2023-06-26) on HuggingFace. I benchmarked both formats on the Palma 2 Pro:
+
+```
+Format    Load      RTF      WER
+─────────────────────────────────
+ONNX      5,837ms   0.138   11.2%
+ORT       2,074ms   0.134   11.2%
+```
+
+ORT cuts model load time by **2.8x** (5.8s → 2.1s) with identical transcription output across all 12 test utterances — the conversion is lossless. RTF is marginally faster too. The improvement is less dramatic than the [0.6s reported on desktop](https://github.com/k2-fsa/sherpa-onnx/issues/211) because the Snapdragon 690 has less memory bandwidth for the remaining initialization work, but 2 seconds is acceptable with eager pre-loading.
+
+Even with ORT, this is a one-time cost per process. Once loaded, the `OnlineRecognizer` can create streams and decode indefinitely. The natural mitigation is eager pre-loading — but that comes with a steep memory cost.
+
+### The 221 MB memory cost
+
+I profiled native memory, Java heap, and PSS across the full lifecycle (baseline → model loaded → active transcription → stream released → recognizer released):
+
+```
+Phase                         Java    Native       PSS
+──────────────────────────────────────────────────────
+baseline                      3.3      6.9     76.6
+model loaded                  3.3    228.1    249.2
+during transcription         19.3    231.0    273.3
+stream released              19.3    228.8    271.6
+recognizer released          19.3     11.7    138.4
+──────────────────────────────────────────────────────
+Model load delta             +0.0   +221.2   +172.6
+Active stream overhead      +16.0     +2.8    +24.1
+```
+
+Source: `TranscriptionBenchmarkTest#measure_sherpa_ort_memory`
+
+The ONNX runtime allocates **221 MB of native memory** to hold the three transducer models (39 MB on disk). That's a 5.7x expansion — the runtime unpacks weight tensors, allocates operator workspace buffers, and builds the optimized execution graph in memory. The Java heap barely moves; this is almost entirely native allocation invisible to Android's standard memory reporting.
+
+During active transcription, the stream adds only ~3 MB native and ~16 MB Java (for PCM buffers and result objects). After releasing the stream, memory stays at the model-loaded level. Only releasing the `OnlineRecognizer` itself frees the native memory.
+
+For comparison, I profiled Vosk through the same lifecycle:
+
+```
+Phase                         Java    Native       PSS
+──────────────────────────────────────────────────────
+baseline                      3.0      6.8     68.1
+model loaded                  3.4    122.3    195.3
+during transcription         22.5    171.5    270.1
+recognizer closed            22.5    122.5    239.5
+model closed                 22.5      7.0    164.6
+──────────────────────────────────────────────────────
+Model load delta             +0.4   +115.5   +127.2
+Active stream delta         +19.0    +49.2    +74.8
+```
+
+Side by side:
+
+```
+                          Sherpa ORT     Vosk
+                          ──────────     ────
+Model on disk               39 MB       68 MB
+Model in memory (native)  +221 MB     +116 MB
+Stream overhead (native)    +3 MB      +49 MB
+Total PSS during use       273 MB      270 MB
+```
+
+Sherpa's model consumes nearly 2x the native memory of Vosk for the idle model (221 MB vs 116 MB). But during active transcription, total memory converges — Vosk's recognizer allocates 49 MB for its streaming buffers and language model state, while Sherpa's stream adds only 3 MB. The cost of pre-loading Sherpa is paid at idle; during actual use, both engines consume roughly the same memory.
+
+On the Palma 2 Pro (6 GB RAM), 173 MB PSS is ~3% of total memory. That's tolerable for a foreground app, but it makes the process a high-value target for the OOM killer when backgrounded.
+
+The lifecycle I settled on:
+
+1. **Pre-load on document open.** When the user opens a document (the only screen where recording is possible), start loading the recognizer on a background coroutine. The 2-second ORT load overlaps with document rendering and is invisible.
+2. **Block recording until ready.** If the user taps the record button before the model finishes loading, show a brief loading indicator ("Preparing speech engine...") rather than silently dropping the first seconds of speech. The user should know not to start speaking yet. Once the model is ready, transition directly into recording with no additional delay.
+3. **Keep the model resident between recordings.** After a recording session ends, keep the `OnlineRecognizer` alive. A second tap to record starts instantly — no 2-second wait. This matters for lecture capture where the user may pause and resume multiple times.
+4. **Release on background (unless recording).** When the app leaves the foreground (`onStop()`), release the recognizer and reclaim the 221 MB — but only if no recording session is active. During lecture capture the user may switch apps briefly; the foreground service keeps the mic and transcription running, and the model must stay loaded. Once the recording ends and the app is still in the background, release then.
+
+This gives instant recording on every tap except the very first one after opening a document, and even that first tap only blocks if the user is faster than the 2-second pre-load — which overlaps with the document open animation.
+
+### Partial vs final behavior
+
+I measured how each engine handles partial (volatile, in-progress) and final (committed) transcription results, following the [latency taxonomy from Speechmatics](https://www.speechmatics.com/company/articles-and-news/speed-you-can-trust-the-stt-metrics-that-matter-for-voice-agents):
+
+```
+Metric                    Vosk          Sherpa ORT
+──────────────────────────────────────────────────
+Time-to-first-partial     1.06s avg     1.22s avg
+Partial updates/utt       12 avg        11 avg
+Partial→final word Δ      0.8 words     0.0 words
+```
+
+Source: `TranscriptionBenchmarkTest#measure_partial_final_latency`
+
+Both engines need about 1 second of audio before the first text appears. Vosk produces first partials ~160ms sooner. But the important difference is **partial stability**: Sherpa's partials are append-only — each update only adds tokens, never revises previous ones. Vosk's partials can retract and rewrite words (0.8-word average change between the last partial and the final). In a live transcript on screen, Sherpa's monotonic partials mean text never flickers or jumps backward. Vosk's revisions cause visible rewrites, which is distracting during note-taking.
+
+Sherpa also emits sub-word partials (SentencePiece tokens like "CONCOR" → "CONCORD"), giving earlier visual feedback that speech is being recognized, even before a full word boundary.
+
+### Other trade-offs vs Vosk
+
+Sherpa's `OnlineRecognizerResult` provides token-level timestamps but not confidence values in the current Android AAR (bihe0832 v6.25.12). Per-token log probabilities (`ys_log_probs`) were [merged for offline transducer models](https://github.com/k2-fsa/sherpa-onnx/pull/2843) in Dec 2025 but haven't reached the Android wrapper yet. A [broader PR for online + offline vocab log-prob distributions](https://github.com/k2-fsa/sherpa-onnx/pull/2897) is in draft. Once online `ys_log_probs` ships in an Android release, it would enable the red-underline feature for low-confidence words. Until then, confidence-based highlighting requires Vosk or a post-hoc heuristic (e.g., flagging words where the partial revised before settling — though as noted above, Sherpa's partials rarely revise).
 
 Sherpa's WER on very short utterances (1-2 words) was unreliable — the endpoint detector sometimes cut off speech or produced spurious text. On utterances longer than 3 seconds, Sherpa and Vosk were comparable in accuracy.
 

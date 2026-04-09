@@ -187,7 +187,7 @@ class VoskTranscriber(private val context: Context) : AudioTranscriber {
     fun getAudioFile(): java.io.File? = audioCapture?.getOutputFile()
 
     /** Read the compressed audio bytes after stop(). */
-    fun readRecordedBytes(): ByteArray? = audioCapture?.readRecordedBytes()
+    override fun readRecordedBytes(): ByteArray? = audioCapture?.readRecordedBytes()
 
     private var rmsFrameCount = 0
 
