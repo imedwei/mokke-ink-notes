@@ -92,17 +92,14 @@ object DocumentStorage {
         return saved
     }
 
-    // Cache audio files in memory to avoid re-reading the ZIP on every auto-save.
-    // Key: absolute file path. Cleared on document switch (load/delete).
-    private var audioCache: MutableMap<String, ByteArray> = mutableMapOf()
-    private var audioCachePath: String? = null
-
     /**
      * Save document data to [file], preserving existing audio when [audioFiles]
      * is empty (auto-save path) and merging when both exist.
      *
-     * Extracted from [save] for testability — the audio preservation logic
-     * operates on a plain [File] with no Android Context dependency.
+     * Audio files are cached in a sidecar directory on disk (`.audio/`) next to
+     * the `.mok` file, so auto-saves don't need to re-read the ZIP to preserve
+     * audio. The sidecar is the source of truth; audio is also packed into the
+     * ZIP for portability.
      */
     internal fun saveToFile(
         file: File,
@@ -122,12 +119,6 @@ object DocumentStorage {
                 throw e
             }
 
-            // Update cache so next auto-save doesn't re-read ZIP
-            if (allAudio.isNotEmpty()) {
-                audioCachePath = file.absolutePath
-                audioCache = allAudio.toMutableMap()
-            }
-
             return true
         } catch (e: Exception) {
             Log.e(TAG, "Failed to save to ${file.name}", e)
@@ -136,50 +127,63 @@ object DocumentStorage {
     }
 
     /**
-     * Resolve audio files for a save operation:
-     * - If no new audio and file exists: preserve existing audio (from cache or ZIP)
-     * - If new audio and file exists: merge existing + new
-     * - Otherwise: use whatever was provided
+     * Resolve audio files for a save operation.
+     * Uses the sidecar directory as a disk cache to avoid re-reading the ZIP.
      */
     internal fun resolveAudioFiles(
         file: File,
         audioFiles: Map<String, ByteArray>
     ): Map<String, ByteArray> {
-        if (!file.exists() && audioFiles.isEmpty()) return emptyMap()
-        if (!file.exists()) return audioFiles
+        val sidecar = audioCacheDir(file)
+        val sidecarExisted = sidecar.isDirectory
 
-        val existing = loadExistingAudio(file)
-        return if (audioFiles.isEmpty()) {
-            existing
-        } else {
-            existing + audioFiles
-        }
-    }
-
-    private fun loadExistingAudio(file: File): Map<String, ByteArray> {
-        // Use cache if available for this file
-        if (audioCachePath == file.absolutePath && audioCache.isNotEmpty()) {
-            return audioCache
-        }
-        return try {
-            val audio = file.inputStream().use { DocumentBundle.readZip(it) }.audioFiles
-            if (audio.isNotEmpty()) {
-                audioCachePath = file.absolutePath
-                audioCache = audio.toMutableMap()
+        // Write any new audio to the sidecar directory
+        if (audioFiles.isNotEmpty()) {
+            sidecar.mkdirs()
+            for ((name, bytes) in audioFiles) {
+                File(sidecar, name).writeBytes(bytes)
             }
-            audio
-        } catch (_: Exception) { emptyMap() }
+        }
+
+        // If sidecar is new and ZIP has existing audio, migrate to sidecar first
+        if (!sidecarExisted && file.exists()) {
+            try {
+                val existing = file.inputStream().use { DocumentBundle.readZip(it) }.audioFiles
+                if (existing.isNotEmpty()) {
+                    sidecar.mkdirs()
+                    for ((name, bytes) in existing) {
+                        val f = File(sidecar, name)
+                        if (!f.exists()) f.writeBytes(bytes)
+                    }
+                }
+            } catch (_: Exception) { /* fall through */ }
+        }
+
+        // Read all audio from sidecar (fast disk reads, no ZIP parsing)
+        if (sidecar.isDirectory) {
+            val files = sidecar.listFiles() ?: return audioFiles
+            if (files.isNotEmpty()) {
+                val result = mutableMapOf<String, ByteArray>()
+                for (f in files) {
+                    if (f.isFile && f.length() > 0) result[f.name] = f.readBytes()
+                }
+                return result
+            }
+        }
+
+        return audioFiles
     }
+
+    /** Sidecar directory for audio files, next to the .mok file. */
+    private fun audioCacheDir(mokFile: File): File =
+        File(mokFile.parentFile, ".audio-${mokFile.nameWithoutExtension}")
 
     fun load(context: Context, name: String): DocumentData? {
         return loadBundle(context, name)?.data
     }
 
-    /** Load a document with its audio files. Clears audio cache for the previous document. */
+    /** Load a document with its audio files. */
     fun loadBundle(context: Context, name: String): BundleResult? {
-        // Clear audio cache — new document context
-        audioCache.clear()
-        audioCachePath = null
         // Try .mok first, then legacy .inkup, then legacy .json
         try {
             val mok = mokFile(context, name)
@@ -246,6 +250,10 @@ object DocumentStorage {
         // AtomicFile.delete() removes the base file and its .new backup
         AtomicFile(mok).delete()
         AtomicFile(inkup).delete()
+        // Clean up audio sidecar directory
+        audioCacheDir(mok).let { dir ->
+            if (dir.isDirectory) dir.deleteRecursively()
+        }
         val deletedJson = json.delete()
         val deletedAny = !mok.exists() || !inkup.exists() || deletedJson
         if (deletedAny) {

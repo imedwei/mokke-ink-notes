@@ -203,6 +203,14 @@ class DocumentBundleTest {
         assertArrayEquals("second recording".toByteArray(), result.audioFiles["rec-200.webm"])
     }
 
+    /** Clean up a temp .mok file and its audio sidecar directory. */
+    private fun cleanupTempDoc(tmpFile: java.io.File) {
+        tmpFile.delete()
+        // Sidecar: .audio-<nameWithoutExtension> in same parent
+        val sidecar = java.io.File(tmpFile.parentFile, ".audio-${tmpFile.nameWithoutExtension}")
+        if (sidecar.isDirectory) sidecar.deleteRecursively()
+    }
+
     // ── DocumentStorage.saveToFile audio preservation ─────────────────
     // Regression: auto-save (no audioFiles param) was overwriting the .mok
     // bundle, wiping previously recorded audio. These tests exercise the
@@ -212,19 +220,17 @@ class DocumentBundleTest {
     fun saveToFile_autoSave_preservesExistingAudio() {
         val tmpFile = java.io.File.createTempFile("test-doc", ".mok")
         try {
-            // Step 1: Save WITH audio (simulates lecture stop)
             val audio = mapOf("rec-001.webm" to "lecture audio".toByteArray())
             DocumentStorage.saveToFile(tmpFile, sampleData(), audio)
 
-            // Step 2: Auto-save WITHOUT audio (production auto-save path)
+            // Auto-save WITHOUT audio (production auto-save path)
             DocumentStorage.saveToFile(tmpFile, sampleData())
 
-            // Audio must survive
             val result = tmpFile.inputStream().use { DocumentBundle.readZip(it) }
             assertEquals("Audio must survive auto-save", 1, result.audioFiles.size)
             assertArrayEquals("lecture audio".toByteArray(), result.audioFiles["rec-001.webm"])
         } finally {
-            tmpFile.delete()
+            cleanupTempDoc(tmpFile)
         }
     }
 
@@ -232,32 +238,28 @@ class DocumentBundleTest {
     fun saveToFile_secondRecording_mergesWithFirst() {
         val tmpFile = java.io.File.createTempFile("test-doc", ".mok")
         try {
-            // First recording
             DocumentStorage.saveToFile(tmpFile, sampleData(), mapOf("rec-001.webm" to "first".toByteArray()))
-
-            // Second recording (new audio provided)
             DocumentStorage.saveToFile(tmpFile, sampleData(), mapOf("rec-002.webm" to "second".toByteArray()))
 
-            // Both present
             val result = tmpFile.inputStream().use { DocumentBundle.readZip(it) }
             assertEquals(2, result.audioFiles.size)
             assertArrayEquals("first".toByteArray(), result.audioFiles["rec-001.webm"])
             assertArrayEquals("second".toByteArray(), result.audioFiles["rec-002.webm"])
         } finally {
-            tmpFile.delete()
+            cleanupTempDoc(tmpFile)
         }
     }
 
     @Test
     fun saveToFile_newFile_noExistingAudio() {
         val tmpFile = java.io.File.createTempFile("test-doc", ".mok")
-        tmpFile.delete() // ensure it doesn't exist
+        tmpFile.delete()
         try {
             DocumentStorage.saveToFile(tmpFile, sampleData())
             val result = tmpFile.inputStream().use { DocumentBundle.readZip(it) }
             assertTrue("New file should have no audio", result.audioFiles.isEmpty())
         } finally {
-            tmpFile.delete()
+            cleanupTempDoc(tmpFile)
         }
     }
 
@@ -265,9 +267,13 @@ class DocumentBundleTest {
     fun resolveAudioFiles_noFileExists_returnsProvided() {
         val tmpFile = java.io.File.createTempFile("test-doc", ".mok")
         tmpFile.delete()
-        val audio = mapOf("rec.webm" to "data".toByteArray())
-        val resolved = DocumentStorage.resolveAudioFiles(tmpFile, audio)
-        assertEquals(1, resolved.size)
+        try {
+            val audio = mapOf("rec.webm" to "data".toByteArray())
+            val resolved = DocumentStorage.resolveAudioFiles(tmpFile, audio)
+            assertEquals(1, resolved.size)
+        } finally {
+            cleanupTempDoc(tmpFile)
+        }
     }
 
     @Test
@@ -281,7 +287,7 @@ class DocumentBundleTest {
             assertEquals(1, resolved.size)
             assertArrayEquals("existing".toByteArray(), resolved["rec.webm"])
         } finally {
-            tmpFile.delete()
+            cleanupTempDoc(tmpFile)
         }
     }
 
@@ -298,7 +304,7 @@ class DocumentBundleTest {
             assertArrayEquals("first".toByteArray(), resolved["rec-1.webm"])
             assertArrayEquals("second".toByteArray(), resolved["rec-2.webm"])
         } finally {
-            tmpFile.delete()
+            cleanupTempDoc(tmpFile)
         }
     }
 }
