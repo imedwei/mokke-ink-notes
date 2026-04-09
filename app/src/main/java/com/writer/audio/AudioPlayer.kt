@@ -6,10 +6,7 @@ import android.os.Looper
 import android.util.Log
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
-import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
-import androidx.media3.extractor.DefaultExtractorsFactory
 import java.io.File
 
 /**
@@ -37,11 +34,8 @@ class AudioPlayer(private val context: Context) {
 
     private fun ensurePlayer(): ExoPlayer {
         player?.let { return it }
-        val extractorsFactory = DefaultExtractorsFactory()
-            .setConstantBitrateSeekingEnabled(true)
-        val p = ExoPlayer.Builder(context)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(context, extractorsFactory))
-            .build()
+        // No constant-bitrate seeking needed — fMP4 has native seek tables
+        val p = ExoPlayer.Builder(context).build()
         p.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
                 if (state == Player.STATE_ENDED) {

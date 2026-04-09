@@ -184,7 +184,7 @@ dependencies {
     // Bypass hidden API restrictions (needed for Onyx SDK on Android 14+)
     implementation("org.lsposed.hiddenapibypass:hiddenapibypass:4.3")
 
-    // Media3 ExoPlayer for audio playback (supports seeking in WebM/Opus)
+    // Media3 ExoPlayer for audio playback (OGG/Opus seeking via granule positions)
     implementation("androidx.media3:media3-exoplayer:1.6.0")
 
     // Sherpa-ONNX speech recognition (streaming with ONNX Runtime)

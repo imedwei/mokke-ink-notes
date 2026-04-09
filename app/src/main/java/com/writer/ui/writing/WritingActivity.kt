@@ -1286,7 +1286,7 @@ class WritingActivity : AppCompatActivity() {
 
         // Capture recording name at wire time — must not read lectureRecordingStartMs lazily
         // inside the callback, as it may change between recordings in the same session
-        val recordingName = "rec-${lectureRecordingStartMs}.webm"
+        val recordingName = "rec-${lectureRecordingStartMs}.ogg"
 
         transcriber.onPartialResult = { text ->
             if (text.isNotBlank() && lectureMode) {
@@ -1333,7 +1333,7 @@ class WritingActivity : AppCompatActivity() {
             }
         }
 
-        val voskRecordingName = "rec-${lectureRecordingStartMs}.webm"
+        val voskRecordingName = "rec-${lectureRecordingStartMs}.ogg"
         transcriber.onFinalResultWithWords = { text, words ->
             if (text.isNotBlank() && lectureMode) {
                 val startMs = words.firstOrNull()?.startMs ?: 0L
@@ -1456,7 +1456,7 @@ class WritingActivity : AppCompatActivity() {
             stopService(serviceIntent)
 
             if (audioBytes != null) {
-                val recordingName = "rec-${lectureRecordingStartMs}.webm"
+                val recordingName = "rec-${lectureRecordingStartMs}.ogg"
                 val snapshot = createSaveSnapshot()
                 if (snapshot != null) {
                     DocumentStorage.save(this, snapshot.name, snapshot.state, mapOf(recordingName to audioBytes))

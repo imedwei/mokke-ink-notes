@@ -5,34 +5,50 @@ import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.util.Log
-import com.k2fsa.sherpa.onnx.OnlineRecognizer
-import com.k2fsa.sherpa.onnx.OnlineStream
 import com.writer.audio.AudioRecordCapture
 import java.io.File
+import java.util.concurrent.ConcurrentLinkedQueue
 
 /**
  * [AudioTranscriber] using Sherpa-ONNX for real-time on-device transcription
  * with simultaneous audio recording.
  *
  * Same single-[AudioRecord] architecture as [VoskTranscriber]: tees each PCM
- * buffer to both the Sherpa decoder and an Opus/WebM encoder. The recognizer
- * is obtained from [SherpaModelManager] and is NOT owned by this class —
- * it survives across recording sessions.
+ * buffer to both the speech recognizer and an Opus/OGG encoder.
+ *
+ * The recognizer is obtained from [SherpaModelManager] via the [StreamingRecognizer]
+ * interface — does NOT own it. The recognizer survives across recording sessions.
+ *
+ * @param pcmSourceFactory injectable for testing — defaults to creating an [AudioRecord].
  */
 class SherpaTranscriber(
-    private val context: Context,
-    private val modelManager: SherpaModelManager
+    private val context: Context?,
+    private val modelManager: SherpaModelManager,
+    private val pcmSourceFactory: (() -> PcmSource)? = null,
+    private val mainThreadExecutor: (Runnable) -> Unit = { action ->
+        android.os.Handler(android.os.Looper.getMainLooper()).post(action)
+    }
 ) : AudioTranscriber {
+
+    /** Abstraction over AudioRecord for testability. */
+    interface PcmSource {
+        fun read(buffer: ByteArray, offset: Int, size: Int): Int
+        fun stop()
+        fun release()
+    }
 
     private val tag = "SherpaTranscriber"
 
-    private var audioRecord: AudioRecord? = null
+    private var pcmSource: PcmSource? = null
     private var audioCapture: AudioRecordCapture? = null
-    private var stream: OnlineStream? = null
+    private var stream: RecognizerStream? = null
     private var recordingThread: Thread? = null
     @Volatile private var recording = false
     @Volatile private var audioOffsetSec = 0f
-    private var floatBuffer = FloatArray(BUFFER_SIZE / 2) // reusable PCM conversion buffer
+    private var floatBuffer = FloatArray(BUFFER_SIZE / 2)
+
+    private data class PendingFinal(val text: String, val words: List<com.writer.model.WordInfo>)
+    private val pendingFinals = ConcurrentLinkedQueue<PendingFinal>()
 
     override var onPartialResult: ((String) -> Unit)? = null
     override var onFinalResult: ((String) -> Unit)? = null
@@ -47,7 +63,7 @@ class SherpaTranscriber(
         if (isListening) stop()
         isListening = true
 
-        val recognizer = modelManager.getRecognizer() as? OnlineRecognizer
+        val recognizer = modelManager.getRecognizer()
         if (recognizer == null) {
             Log.e(tag, "Model not ready")
             postMain { onStatusUpdate?.invoke("Speech engine not ready"); onError?.invoke(-1); isListening = false }
@@ -58,102 +74,80 @@ class SherpaTranscriber(
         startRecording(recognizer)
     }
 
-    private fun startRecording(recognizer: OnlineRecognizer) {
-        val bufferSize = AudioRecord.getMinBufferSize(
-            SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
-        ).coerceAtLeast(SAMPLE_RATE * 2)
-
-        val recorder = try {
-            AudioRecord(
-                MediaRecorder.AudioSource.MIC,
-                SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO,
-                AudioFormat.ENCODING_PCM_16BIT, bufferSize
-            )
-        } catch (e: SecurityException) {
-            Log.w(tag, "Mic permission denied", e)
-            onError?.invoke(-1); isListening = false; return
-        }
-
-        if (recorder.state != AudioRecord.STATE_INITIALIZED) {
-            Log.w(tag, "AudioRecord failed to initialize")
-            recorder.release(); onError?.invoke(-1); isListening = false; return
-        }
-
-        val capture = AudioRecordCapture(context.cacheDir)
-        if (capture.startEncoderOnly()) {
-            audioCapture = capture
-            Log.i(tag, "Audio encoder started")
+    private fun startRecording(recognizer: StreamingRecognizer) {
+        val source = if (pcmSourceFactory != null) {
+            pcmSourceFactory.invoke()
         } else {
-            Log.w(tag, "Audio encoder failed to start — recording will have no audio")
+            createAudioRecordSource() ?: run {
+                onError?.invoke(-1); isListening = false; return
+            }
+        }
+
+        // Start audio encoder (skip if using injected PcmSource — tests don't need encoding)
+        if (pcmSourceFactory == null) {
+            val capture = AudioRecordCapture(context!!.cacheDir)
+            if (capture.startEncoderOnly()) {
+                audioCapture = capture
+                Log.i(tag, "Audio encoder started")
+            } else {
+                Log.w(tag, "Audio encoder failed to start — recording will have no audio")
+            }
         }
 
         val onlineStream = recognizer.createStream()
         stream = onlineStream
-        audioRecord = recorder
+        pcmSource = source
         recording = true
-        recorder.startRecording()
+        pendingFinals.clear()
 
         recordingThread = Thread({
             val buffer = ByteArray(BUFFER_SIZE)
             var lastPartialText = ""
             var chunkCount = 0
             rmsFrameCount = 0
-            // Track cumulative audio position — Sherpa resets timestamps after each
-            // endpoint, but the audio recording is continuous.
             audioOffsetSec = 0f
             var segmentSamples = 0
 
             while (recording) {
-                val read = recorder.read(buffer, 0, buffer.size)
+                val read = source.read(buffer, 0, buffer.size)
                 if (read <= 0) continue
 
-                // Tee PCM to audio encoder
                 audioCapture?.feedPcm(buffer, read)
 
-                // RMS monitoring
                 rmsFrameCount++
                 if (rmsFrameCount % RMS_REPORT_INTERVAL == 0) {
                     val rmsDb = computeRmsDb(buffer, read)
                     postMain { onRmsChanged?.invoke(rmsDb) }
                 }
 
-                // Convert 16-bit PCM to float32 [-1, 1] (reuse buffer)
                 val samples = read / 2
                 segmentSamples += samples
                 if (floatBuffer.size != samples) floatBuffer = FloatArray(samples)
                 bytesToFloat(buffer, read, floatBuffer)
                 onlineStream.acceptWaveform(floatBuffer, SAMPLE_RATE)
 
-                // Decode
                 while (recognizer.isReady(onlineStream)) {
                     recognizer.decode(onlineStream)
                 }
 
-                // Check for endpoint (final)
                 if (recognizer.isEndpoint(onlineStream)) {
                     val result = recognizer.getResult(onlineStream)
                     val text = normalizeCase(result.text.trim())
                     if (text.isNotBlank()) {
                         val words = SherpaTokenMerger.mergeTokens(
-                            result.tokens ?: emptyArray(),
-                            result.timestamps ?: floatArrayOf(),
-                            audioOffsetSec
+                            result.tokens, result.timestamps, audioOffsetSec
                         )
                         Log.i(tag, "Final (offset=%.2fs): %d words, text=\"%s\"".format(
                             audioOffsetSec, words.size, text.take(60)
                         ))
-                        postMain {
-                            onFinalResultWithWords?.invoke(text, words)
-                            onFinalResult?.invoke(text)
-                        }
+                        pendingFinals.add(PendingFinal(text, words))
+                        postMain { deliverPendingFinals() }
                     }
-                    // Advance offset by the audio duration of this segment
                     audioOffsetSec += segmentSamples.toFloat() / SAMPLE_RATE
                     segmentSamples = 0
                     recognizer.reset(onlineStream)
                     lastPartialText = ""
                 } else {
-                    // Partial — throttle to every PARTIAL_THROTTLE_CHUNKS chunks (~0.5s)
                     chunkCount++
                     if (chunkCount % PARTIAL_THROTTLE_CHUNKS == 0) {
                         val result = recognizer.getResult(onlineStream)
@@ -172,11 +166,16 @@ class SherpaTranscriber(
 
     override fun stop() {
         recording = false
+        pcmSource?.stop() // unblock read() so the recording thread can exit
         recordingThread?.join(3000)
         recordingThread = null
 
+        // Deliver any finals queued by the recording thread.
+        // Must happen before the caller clears lectureMode.
+        deliverPendingFinals()
+
         // Flush remaining audio
-        val recognizer = modelManager.getRecognizer() as? OnlineRecognizer
+        val recognizer = modelManager.getRecognizer()
         val onlineStream = stream
         if (recognizer != null && onlineStream != null) {
             onlineStream.inputFinished()
@@ -187,9 +186,7 @@ class SherpaTranscriber(
             val text = normalizeCase(result.text.trim())
             if (text.isNotBlank()) {
                 val words = SherpaTokenMerger.mergeTokens(
-                    result.tokens ?: emptyArray(),
-                    result.timestamps ?: floatArrayOf(),
-                    audioOffsetSec
+                    result.tokens, result.timestamps, audioOffsetSec
                 )
                 Log.i(tag, "Final (flush, offset=%.2fs): %d words".format(audioOffsetSec, words.size))
                 onFinalResultWithWords?.invoke(text, words)
@@ -199,9 +196,9 @@ class SherpaTranscriber(
         }
         stream = null
 
-        audioRecord?.stop()
-        audioRecord?.release()
-        audioRecord = null
+        pcmSource?.stop() // idempotent — already called before join, but needed for release
+        pcmSource?.release()
+        pcmSource = null
 
         audioCapture?.stopEncoder()
         val audioFile = audioCapture?.getOutputFile()
@@ -211,18 +208,23 @@ class SherpaTranscriber(
 
     override fun close() {
         stop()
-        // Do NOT release the recognizer — it belongs to SherpaModelManager
         audioCapture = null
     }
 
     fun getAudioFile(): File? = audioCapture?.getOutputFile()
     override fun readRecordedBytes(): ByteArray? = audioCapture?.readRecordedBytes()
 
-    /** Lowercase with first-letter capitalization (model outputs ALL CAPS). */
+    private fun deliverPendingFinals() {
+        while (true) {
+            val f = pendingFinals.poll() ?: break
+            onFinalResultWithWords?.invoke(f.text, f.words)
+            onFinalResult?.invoke(f.text)
+        }
+    }
+
     private fun normalizeCase(text: String): String {
         if (text.isEmpty()) return text
-        val lower = text.lowercase()
-        return lower.replaceFirstChar { it.uppercase() }
+        return text.lowercase().replaceFirstChar { it.uppercase() }
     }
 
     private var rmsFrameCount = 0
@@ -249,14 +251,40 @@ class SherpaTranscriber(
         }
     }
 
+    private fun createAudioRecordSource(): PcmSource? {
+        val bufferSize = AudioRecord.getMinBufferSize(
+            SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
+        ).coerceAtLeast(SAMPLE_RATE * 2)
+
+        val recorder = try {
+            AudioRecord(
+                MediaRecorder.AudioSource.MIC, SAMPLE_RATE,
+                AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, bufferSize
+            )
+        } catch (e: SecurityException) {
+            Log.w(tag, "Mic permission denied", e); return null
+        }
+
+        if (recorder.state != AudioRecord.STATE_INITIALIZED) {
+            Log.w(tag, "AudioRecord failed to initialize"); recorder.release(); return null
+        }
+
+        recorder.startRecording()
+        return object : PcmSource {
+            override fun read(buffer: ByteArray, offset: Int, size: Int) = recorder.read(buffer, offset, size)
+            override fun stop() = recorder.stop()
+            override fun release() = recorder.release()
+        }
+    }
+
     private fun postMain(action: () -> Unit) {
-        android.os.Handler(android.os.Looper.getMainLooper()).post(action)
+        mainThreadExecutor(Runnable { action() })
     }
 
     companion object {
         private const val SAMPLE_RATE = 16000
-        private const val BUFFER_SIZE = 4000 // ~0.125s at 16kHz 16-bit mono
-        private const val RMS_REPORT_INTERVAL = 8 // every ~1 second
-        private const val PARTIAL_THROTTLE_CHUNKS = 4 // emit partial every ~0.5s
+        private const val BUFFER_SIZE = 4000
+        private const val RMS_REPORT_INTERVAL = 8
+        private const val PARTIAL_THROTTLE_CHUNKS = 4
     }
 }

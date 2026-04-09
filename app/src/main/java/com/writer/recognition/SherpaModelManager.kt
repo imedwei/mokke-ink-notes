@@ -26,15 +26,16 @@ class SherpaModelManager {
     /** Called on the loading thread when the model becomes READY. */
     var onReady: (() -> Unit)? = null
 
-    private var recognizer: Any? = null // OnlineRecognizer at runtime, Any for testing
+    private var recognizer: StreamingRecognizer? = null
 
-    fun getRecognizer(): Any? = if (state == State.READY) recognizer else null
+    fun getRecognizer(): StreamingRecognizer? =
+        if (state == State.READY) recognizer else null
 
     /**
      * Load using an injected factory (for testing without real models).
      * Blocks on the calling thread.
      */
-    fun loadWithFactory(factory: () -> Any) {
+    fun loadWithFactory(factory: () -> StreamingRecognizer) {
         if (state == State.READY) return
         state = State.LOADING
         try {
@@ -55,7 +56,7 @@ class SherpaModelManager {
             try {
                 val modelDir = ensureModelFiles(context)
                 val config = buildConfig(modelDir)
-                recognizer = OnlineRecognizer(config = config)
+                recognizer = SherpaRecognizerWrapper(OnlineRecognizer(config = config))
                 state = State.READY
                 Log.i(TAG, "Sherpa model ready")
                 onReady?.invoke()
@@ -71,7 +72,7 @@ class SherpaModelManager {
         val rec = recognizer
         recognizer = null
         state = State.UNLOADED
-        if (rec is OnlineRecognizer) {
+        if (rec is StreamingRecognizer) {
             try { rec.release() } catch (e: Exception) {
                 Log.w(TAG, "Error releasing recognizer", e)
             }

@@ -4,35 +4,33 @@ import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaCodec
 import android.media.MediaFormat
-import android.media.MediaMuxer
 import android.media.MediaRecorder
 import android.util.Log
+import java.io.BufferedOutputStream
 import java.io.File
+import java.io.FileOutputStream
 
 /**
- * Captures audio via [AudioRecord] and stream-compresses to Opus in a WebM
- * container via [MediaCodec] + [MediaMuxer].
+ * Captures audio via [AudioRecord] and stream-compresses to Opus in an
+ * OGG container via [MediaCodec] + [OggOpusWriter].
  *
- * Opus at 24kbps mono ≈ 180 KB/min (~11 MB/hr). Better voice quality than
- * AAC at equivalent bitrate.
+ * Opus at 24kbps mono ≈ 180 KB/min (~11 MB/hr). Best voice codec at
+ * low bitrates.
  *
- * WebM (Matroska-based) is crash-resilient: each cluster is self-contained,
- * so a truncated file is playable up to the last complete cluster (~1-5s loss).
- * MP4 would lose the entire file on crash because the moov atom is written last.
- *
- * Designed to run concurrently alongside SpeechRecognizer on Android 10+.
+ * OGG is crash-resilient: each page is self-contained, so a truncated
+ * file is playable up to the last complete page. OGG granule positions
+ * provide sample-accurate seeking — no estimation needed.
  */
 class AudioRecordCapture(private val cacheDir: File) {
 
     private val tag = "AudioRecordCapture"
     private var recorder: AudioRecord? = null
     private var encoder: MediaCodec? = null
-    private var muxer: MediaMuxer? = null
+    private var oggWriter: OggOpusWriter? = null
+    private var outputStream: BufferedOutputStream? = null
     private var recordingThread: Thread? = null
     @Volatile private var recording = false
     private var outputFile: File? = null
-    private var trackIndex = -1
-    private var muxerStarted = false
     private var startTimeUs = 0L
     var isRecording: Boolean = false
         private set
@@ -65,53 +63,14 @@ class AudioRecordCapture(private val cacheDir: File) {
             return false
         }
 
-        // Set up output file
-        val audioDir = File(cacheDir, "audio_recording")
-        audioDir.mkdirs()
-        val file = File(audioDir, "rec-${System.currentTimeMillis()}.webm")
-        outputFile = file
-
-        // Set up Opus encoder
-        val format = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_OPUS, SAMPLE_RATE, 1)
-        format.setInteger(MediaFormat.KEY_BIT_RATE, BIT_RATE)
-        format.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, SAMPLE_RATE * 2) // 1 second
-
-        val codec = try {
-            MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_OPUS)
-        } catch (e: Exception) {
-            Log.w(tag, "Failed to create Opus encoder", e)
-            audioRecord.release()
-            return false
-        }
-
-        try {
-            codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-        } catch (e: Exception) {
-            Log.w(tag, "Failed to configure Opus encoder", e)
-            codec.release()
-            audioRecord.release()
-            return false
-        }
-
-        val mux = try {
-            MediaMuxer(file.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_WEBM)
-        } catch (e: Exception) {
-            Log.w(tag, "Failed to create MediaMuxer", e)
-            codec.release()
+        if (!initEncoder()) {
             audioRecord.release()
             return false
         }
 
         recorder = audioRecord
-        encoder = codec
-        muxer = mux
-        trackIndex = -1
-        muxerStarted = false
-        startTimeUs = System.nanoTime() / 1000
         recording = true
         isRecording = true
-
-        codec.start()
 
         try {
             audioRecord.startRecording()
@@ -122,19 +81,19 @@ class AudioRecordCapture(private val cacheDir: File) {
         }
 
         recordingThread = Thread({
-            encodeLoop(audioRecord, codec, mux)
+            encodeLoop(audioRecord)
         }, "AudioRecordCapture").also { it.start() }
 
-        Log.i(tag, "Recording started (Opus/WebM compressed)")
+        Log.i(tag, "Recording started (Opus/OGG)")
         return true
     }
 
-    private fun encodeLoop(audioRecord: AudioRecord, codec: MediaCodec, mux: MediaMuxer) {
+    private fun encodeLoop(audioRecord: AudioRecord) {
         val bufferInfo = MediaCodec.BufferInfo()
         val pcmBuffer = ShortArray(SAMPLE_RATE) // 1 second chunks
+        val codec = encoder ?: return
 
         while (recording) {
-            // Feed PCM to encoder
             val inputIndex = codec.dequeueInputBuffer(10_000)
             if (inputIndex >= 0) {
                 val inputBuffer = codec.getInputBuffer(inputIndex) ?: continue
@@ -149,34 +108,30 @@ class AudioRecordCapture(private val cacheDir: File) {
                     codec.queueInputBuffer(inputIndex, 0, 0, 0, 0)
                 }
             }
-
-            // Drain encoder output
-            drainEncoder(codec, mux, bufferInfo, false)
+            drainEncoder(bufferInfo, false)
         }
 
-        // Signal end of stream
         val inputIndex = codec.dequeueInputBuffer(10_000)
         if (inputIndex >= 0) {
             codec.queueInputBuffer(inputIndex, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
         }
-        drainEncoder(codec, mux, bufferInfo, true)
+        drainEncoder(bufferInfo, true)
     }
 
-    private fun drainEncoder(codec: MediaCodec, mux: MediaMuxer, bufferInfo: MediaCodec.BufferInfo, endOfStream: Boolean) {
+    private fun drainEncoder(bufferInfo: MediaCodec.BufferInfo, endOfStream: Boolean) {
+        val codec = encoder ?: return
+        val ogg = oggWriter ?: return
+
         while (true) {
             val outputIndex = codec.dequeueOutputBuffer(bufferInfo, if (endOfStream) 10_000 else 0)
             when {
-                outputIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
-                    trackIndex = mux.addTrack(codec.outputFormat)
-                    mux.start()
-                    muxerStarted = true
-                }
                 outputIndex >= 0 -> {
                     val outputBuffer = codec.getOutputBuffer(outputIndex) ?: break
-                    if (bufferInfo.size > 0 && muxerStarted) {
+                    if (bufferInfo.size > 0 && bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0) {
+                        val data = ByteArray(bufferInfo.size)
                         outputBuffer.position(bufferInfo.offset)
-                        outputBuffer.limit(bufferInfo.offset + bufferInfo.size)
-                        mux.writeSampleData(trackIndex, outputBuffer, bufferInfo)
+                        outputBuffer.get(data)
+                        ogg.writePacket(data, bufferInfo.presentationTimeUs)
                     }
                     codec.releaseOutputBuffer(outputIndex, false)
                     if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) return
@@ -201,9 +156,10 @@ class AudioRecordCapture(private val cacheDir: File) {
         try { encoder?.stop() } catch (_: Exception) {}
         encoder?.release()
         encoder = null
-        try { if (muxerStarted) muxer?.stop() } catch (_: Exception) {}
-        muxer?.release()
-        muxer = null
+        try { oggWriter?.close() } catch (_: Exception) {}
+        oggWriter = null
+        try { outputStream?.close() } catch (_: Exception) {}
+        outputStream = null
         isRecording = false
     }
 
@@ -213,10 +169,13 @@ class AudioRecordCapture(private val cacheDir: File) {
      */
     fun startEncoderOnly(): Boolean {
         if (isRecording) stop()
+        return initEncoder()
+    }
 
+    private fun initEncoder(): Boolean {
         val audioDir = File(cacheDir, "audio_recording")
         audioDir.mkdirs()
-        val file = File(audioDir, "rec-${System.currentTimeMillis()}.webm")
+        val file = File(audioDir, "rec-${System.currentTimeMillis()}.ogg")
         outputFile = file
 
         val format = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_OPUS, SAMPLE_RATE, 1)
@@ -238,22 +197,24 @@ class AudioRecordCapture(private val cacheDir: File) {
             return false
         }
 
-        val mux = try {
-            MediaMuxer(file.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_WEBM)
+        val fos = try {
+            BufferedOutputStream(FileOutputStream(file))
         } catch (e: Exception) {
-            Log.w(tag, "Failed to create MediaMuxer", e)
+            Log.w(tag, "Failed to open output file", e)
             codec.release()
             return false
         }
 
+        val ogg = OggOpusWriter(fos, SAMPLE_RATE, 1)
+        ogg.writeHeaders()
+
         encoder = codec
-        muxer = mux
-        trackIndex = -1
-        muxerStarted = false
+        oggWriter = ogg
+        outputStream = fos
         startTimeUs = System.nanoTime() / 1000
         isRecording = true
         codec.start()
-        Log.i(tag, "Encoder-only mode started")
+        Log.i(tag, "Encoder started (Opus/OGG)")
         return true
     }
 
@@ -263,7 +224,6 @@ class AudioRecordCapture(private val cacheDir: File) {
      */
     fun feedPcm(buffer: ByteArray, length: Int) {
         val codec = encoder ?: return
-        val mux = muxer ?: return
         val bufferInfo = MediaCodec.BufferInfo()
 
         val inputIndex = codec.dequeueInputBuffer(10_000)
@@ -274,21 +234,19 @@ class AudioRecordCapture(private val cacheDir: File) {
             codec.queueInputBuffer(inputIndex, 0, length, System.nanoTime() / 1000 - startTimeUs, 0)
         }
 
-        drainEncoder(codec, mux, bufferInfo, false)
+        drainEncoder(bufferInfo, false)
     }
 
     /** Stop encoder-only mode and finalize the file. */
     fun stopEncoder() {
         val codec = encoder ?: return
-        val mux = muxer ?: return
 
-        // Signal end of stream
         val inputIndex = codec.dequeueInputBuffer(10_000)
         if (inputIndex >= 0) {
             codec.queueInputBuffer(inputIndex, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
         }
         val bufferInfo = MediaCodec.BufferInfo()
-        drainEncoder(codec, mux, bufferInfo, true)
+        drainEncoder(bufferInfo, true)
         cleanup()
         Log.i(tag, "Encoder stopped: ${outputFile?.name} (${outputFile?.length() ?: 0} bytes)")
     }

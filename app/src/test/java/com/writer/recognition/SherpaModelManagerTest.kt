@@ -8,6 +8,21 @@ class SherpaModelManagerTest {
 
     private lateinit var manager: SherpaModelManager
 
+    /** Minimal fake — just needs to be a valid StreamingRecognizer instance. */
+    private fun fakeRecognizer(): StreamingRecognizer = object : StreamingRecognizer {
+        override fun createStream() = object : RecognizerStream {
+            override fun acceptWaveform(samples: FloatArray, sampleRate: Int) {}
+            override fun inputFinished() {}
+            override fun release() {}
+        }
+        override fun isReady(stream: RecognizerStream) = false
+        override fun decode(stream: RecognizerStream) {}
+        override fun isEndpoint(stream: RecognizerStream) = false
+        override fun getResult(stream: RecognizerStream) = RecognitionResult("")
+        override fun reset(stream: RecognizerStream) {}
+        override fun release() {}
+    }
+
     @Before
     fun setUp() {
         manager = SherpaModelManager()
@@ -31,20 +46,20 @@ class SherpaModelManagerTest {
 
     @Test
     fun `loadWithFactory transitions to READY`() {
-        val fakeRecognizer = Object()
-        manager.loadWithFactory { fakeRecognizer }
+        val fake = fakeRecognizer()
+        manager.loadWithFactory { fake }
         assertEquals(SherpaModelManager.State.READY, manager.state)
     }
 
     @Test
     fun `getRecognizer returns non-null when READY`() {
-        manager.loadWithFactory { Object() }
+        manager.loadWithFactory { fakeRecognizer() }
         assertNotNull(manager.getRecognizer())
     }
 
     @Test
     fun `release transitions back to UNLOADED`() {
-        manager.loadWithFactory { Object() }
+        manager.loadWithFactory { fakeRecognizer() }
         manager.release()
         assertEquals(SherpaModelManager.State.UNLOADED, manager.state)
         assertNull(manager.getRecognizer())
@@ -52,9 +67,9 @@ class SherpaModelManagerTest {
 
     @Test
     fun `double load is no-op when READY`() {
-        val first = Object()
+        val first = fakeRecognizer()
         manager.loadWithFactory { first }
-        manager.loadWithFactory { Object() } // should not replace
+        manager.loadWithFactory { fakeRecognizer() } // should not replace
         assertSame(first, manager.getRecognizer())
     }
 
@@ -70,7 +85,7 @@ class SherpaModelManagerTest {
         manager.loadWithFactory { throw RuntimeException("fail") }
         assertEquals(SherpaModelManager.State.ERROR, manager.state)
 
-        val good = Object()
+        val good = fakeRecognizer()
         manager.loadWithFactory { good }
         assertEquals(SherpaModelManager.State.READY, manager.state)
         assertSame(good, manager.getRecognizer())
@@ -87,7 +102,7 @@ class SherpaModelManagerTest {
     fun `onReady callback fires when transitioning to READY`() {
         var called = false
         manager.onReady = { called = true }
-        manager.loadWithFactory { Object() }
+        manager.loadWithFactory { fakeRecognizer() }
         assertTrue(called)
     }
 
