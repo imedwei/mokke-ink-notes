@@ -12,7 +12,7 @@ package com.writer.view
  * 3. Hold duration exceeds tap threshold (accidental long press)
  */
 class GutterTouchGuard(
-    private val palmThresholdPx: Float,
+    val palmThresholdPx: Float,
     private val maxTapMs: Long,
     private val isPenBusy: () -> Boolean,
 ) {

@@ -124,6 +124,10 @@ class AudioPlayer(private val context: Context) {
     val currentPositionMs: Long
         get() = try { player?.currentPosition ?: 0L } catch (_: Exception) { 0L }
 
+    /** Total duration in ms, or 0 if not ready. */
+    val durationMs: Long
+        get() = try { player?.duration?.let { if (it == C.TIME_UNSET) 0L else it } ?: 0L } catch (_: Exception) { 0L }
+
     private fun startPositionUpdates() {
         stopPositionUpdates()
         val runnable = object : Runnable {

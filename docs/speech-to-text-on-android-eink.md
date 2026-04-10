@@ -14,15 +14,17 @@ This requires three things from the speech-to-text engine:
 
 Cloud transcription services (Google Cloud Speech, Deepgram, AssemblyAI) would be more accurate, but I ruled them out. This is an open-source app for personal note-taking. Streaming meeting audio to a third-party server is a privacy problem, and ongoing API costs don't make sense for a passion project. Everything needed to run on-device.
 
-I tried four approaches. Here is where I landed:
+I tried six approaches. Here is where I landed:
 
 ```
-Engine               Real-time   Audio   Per-word   Model    WER
-──────────────────────────────────────────────────────────────────
-SpeechRecognizer     ✓           ✗       ✗          0 MB     —
-whisper.cpp          ✗ (10.4x)   ✓       ✓          31 MB    3.7%
-Vosk                 ✓ (0.27x)   ✓       ✓          40 MB   11.1%
-Sherpa-ONNX          ✓ (0.14x)   ✓       ✓          39 MB   11.2%
+Engine                    Real-time   Audio   Per-word   Model    WER
+───────────────────────────────────────────────────────────────────────
+SpeechRecognizer          ✓           ✗       ✗          0 MB     —
+whisper.cpp               ✗ (10.4x)  ✓       ✓          31 MB    3.7%
+Vosk                      ✓ (0.27x)  ✓       ✓          40 MB   11.1%
+Sherpa-ONNX (streaming)   ✓ (0.14x)  ✓       ✓          39 MB   11.2%
+Sherpa-ONNX (offline)     ✗ (0.06x)  ✓       ✓         180 MB    0.5%
+Sherpa Paraformer          ✗ (0.06x)  ✓       ✓         219 MB    2.5%
 ```
 
 **Device:** Boox Palma 2 Pro, Qualcomm SM6350 (Snapdragon 690), Android 15 (API 35), Kaleido 3 color e-ink display.
@@ -356,6 +358,48 @@ If the model changes (different chunk size or emission-regularized training), up
 
 ---
 
+## Sherpa Offline: 0.5% WER at 16x Real-Time
+
+After shipping with streaming Sherpa, I benchmarked the offline (non-streaming) variants. The results were dramatic.
+
+### Benchmark results
+
+Same LibriSpeech test-clean dataset (12 utterances, 4 speakers, 97.8s). Each engine ran 3 times; RTF is the median.
+
+```
+Engine                     Load      Size     RTF      WER    RTF variance
+────────────────────────────────────────────────────────────────────────────
+Sherpa streaming (int8)    5,796ms    69 MB   0.138   11.2%   0.138 / 0.139 / 0.138
+Sherpa offline (int8)      8,978ms   180 MB   0.058    0.5%   0.059 / 0.058 / 0.058
+Sherpa Paraformer (int8)   8,481ms   219 MB   0.059    2.5%   0.060 / 0.059 / 0.059
+```
+
+Source: `TranscriptionBenchmarkTest#benchmark_sherpa_online_vs_offline`
+
+The offline zipformer achieved **0.5% WER** — a 22x improvement over streaming (11.2%), and better than Whisper (3.7%) at 60x the speed. It got 0% WER on 10 of 12 utterances. The Paraformer (Alibaba's non-autoregressive architecture) was similarly fast at 2.5% WER.
+
+Both offline models process audio at **0.06x real-time** — 16x faster than real-time. For a 10-second memo, transcription takes 0.6 seconds. Fast enough for batch use after recording stops.
+
+### Why offline is so much better
+
+Streaming models must emit tokens as audio arrives — they can't "look ahead." The streaming zipformer sees only a 640ms chunk before committing to a token. The offline zipformer sees the entire utterance before decoding, enabling:
+
+- Better word boundary detection (no premature token emission)
+- Global context for ambiguous words (homophones, names)
+- No endpoint detection artifacts (the 50% WER on "POOR ALICE" disappears)
+
+### The hybrid approach
+
+This suggests a two-pass architecture:
+
+1. **During recording**: streaming Sherpa for live partial display (11% WER, but instant feedback)
+2. **After stop()**: re-transcribe the saved audio with the offline model (0.5% WER, ~0.6s per 10s of audio)
+3. **Replace the text blocks** with the offline result — the user sees text "upgrade" from approximate to near-perfect within a second
+
+The tradeoff: 180 MB additional model storage, ~9 seconds additional load time, and ~250 MB native memory for the offline model. On a 6 GB device this is feasible if the offline model is loaded on-demand (only after stop()) and released immediately after re-transcription.
+
+---
+
 ## Hardware: The Mic Is Fine (for This Purpose)
 
 Before blaming transcription quality on hardware, I measured the Palma 2 Pro's microphone SNR using RMS dB readings. Noise floor: -0.7 dB. Peak speech: 10.0 dB. SNR: ~10.7 dB.
@@ -386,11 +430,13 @@ Fix: replace `MediaPlayer` with [Media3 ExoPlayer](https://developer.android.com
 
 ## Where This Lands
 
-The working architecture: Vosk handles real-time streaming transcription, Opus/WebM provides crash-resilient audio recording, and ExoPlayer enables seeking in the saved audio. Per-word confidence and timestamps from both Vosk and Whisper drive the interactive features: tap a word to jump to that moment in the audio, red underlines on low-confidence words to guide correction. Whisper remains available as a batch option for users who want higher accuracy and are willing to wait.
+The working architecture: Sherpa-ONNX streaming handles real-time transcription with live italic partials in the recording placeholder. Opus in an OGG container (via a custom `OggOpusWriter`) provides crash-resilient audio recording with sample-accurate seeking via granule positions. ExoPlayer handles playback with a bottom overlay bar for controls. Per-word timestamps (with 320ms latency compensation derived from the model's chunk size) enable tap-a-word-to-seek. A `PlaybackController` state machine manages the IDLE→PLAYING→PAUSED transitions.
 
-Sherpa-ONNX is the fastest engine I tested — 2x faster than Vosk at comparable accuracy. It is a strong candidate for replacing Vosk as the default streaming engine once per-word confidence scores are available (or if the tap-to-correct workflow is redesigned to not require them). For now, Vosk's mature word-level metadata keeps it in the default slot.
+The offline zipformer benchmark (0.5% WER at 0.06x RTF) opens a clear path forward: a two-pass hybrid where streaming provides real-time feedback during recording, and the offline model re-transcribes after stop for near-perfect accuracy. The Paraformer (2.5% WER, same speed) is a viable alternative with a different architectural tradeoff.
 
-What's still unsolved: audio recording in `SpeechRecognizer` mode. If Google opens up the ML Kit GenAI `fromPfd()` API to third-party apps, that would be the best of both worlds, combining Google's on-device models with full audio access. Until then, Vosk and Sherpa-ONNX are the best options I have found for real-time on-device transcription on Android.
+Vosk remains available as a fallback. Whisper remains the batch option for users who want maximum accuracy and are willing to wait. The engine is selectable in settings, with Sherpa streaming as the default.
+
+What's still unsolved: audio recording in `SpeechRecognizer` mode. If Google opens up the ML Kit GenAI `fromPfd()` API to third-party apps, that would be the best of both worlds. Until then, Sherpa-ONNX is the best option I have found for real-time on-device transcription on Android.
 
 ---
 
@@ -406,6 +452,11 @@ What's still unsolved: audio recording in `SpeechRecognizer` mode. If Google ope
 - [Vosk models](https://alphacephei.com/vosk/models)
 - [Sherpa-ONNX](https://github.com/k2-fsa/sherpa-onnx)
 - [Sherpa-ONNX streaming zipformer model](https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-2023-06-26)
+- [Sherpa-ONNX ORT streaming zipformer model](https://huggingface.co/w11wo/sherpa-onnx-ort-streaming-zipformer-en-2023-06-26)
+- [Sherpa-ONNX offline zipformer model](https://huggingface.co/csukuangfj/sherpa-onnx-zipformer-en-2023-04-01)
+- [Sherpa-ONNX Paraformer model](https://huggingface.co/csukuangfj/sherpa-onnx-paraformer-en-2024-03-09)
+- [FastEmit: Low-latency Streaming ASR](https://arxiv.org/abs/2010.11148)
+- [Self-Alignment for RNN-T](https://arxiv.org/abs/2105.05005)
 - [Media3 ExoPlayer](https://developer.android.com/media/media3/exoplayer)
 - [Just Press Record](https://www.openplanetsoftware.com/just-press-record/)
 - [Mokke Ink](https://github.com/imedwei/mokke-ink-notes)

@@ -95,9 +95,16 @@ class HandwritingCanvasView @JvmOverloads constructor(
     /** Called when user finger-taps a TextBlock with linked audio. Second param is word-level startMs if available. */
     var onTextBlockTap: ((TextBlock, Long?) -> Unit)? = null
 
+    /** Called when user taps the pause/play toggle in the playback overlay bar. */
+    var onPlaybackPauseToggle: (() -> Unit)? = null
+
+    /** Called when user taps outside text blocks while audio is playing. */
+    var onPlaybackStop: (() -> Unit)? = null
+
     /** ID of the TextBlock currently playing audio (for visual indicator). */
     var playingTextBlockId: String? = null
         set(value) { field = value; drawToSurface() }
+
 
     private val textBlockPaint = TextPaint().apply {
         color = Color.BLACK
@@ -152,6 +159,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
     /** Live partial transcription text shown inside the recording placeholder. */
     var partialTranscriptionText: String = ""
         set(value) { if (field != value) { field = value; drawToSurface() } }
+
 
     private val placeholderBorderPaint = Paint().apply {
         color = Color.DKGRAY
@@ -737,6 +745,11 @@ class HandwritingCanvasView @JvmOverloads constructor(
                         onTextBlockTap?.invoke(tappedBlock, wordStartMs)
                         return true
                     }
+                }
+
+                // Tapped outside any text block — stop playback if active
+                if (playingTextBlockId != null) {
+                    onPlaybackStop?.invoke()
                 }
 
                 if (textOverscroll == 0f) {

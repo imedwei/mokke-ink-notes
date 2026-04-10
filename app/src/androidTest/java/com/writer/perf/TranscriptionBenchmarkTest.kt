@@ -80,6 +80,23 @@ class TranscriptionBenchmarkTest {
 
         private const val WHISPER_URL =
             "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en-q5_1.bin"
+
+        // Offline Sherpa models
+        private const val SHERPA_OFFLINE_TRANSDUCER_BASE =
+            "https://huggingface.co/csukuangfj/sherpa-onnx-zipformer-en-2023-04-01/resolve/main"
+        private val SHERPA_OFFLINE_TRANSDUCER_FILES = listOf(
+            "encoder-epoch-99-avg-1.int8.onnx",
+            "decoder-epoch-99-avg-1.int8.onnx",
+            "joiner-epoch-99-avg-1.int8.onnx",
+            "tokens.txt"
+        )
+
+        private const val SHERPA_PARAFORMER_BASE =
+            "https://huggingface.co/csukuangfj/sherpa-onnx-paraformer-en-2024-03-09/resolve/main"
+        private val SHERPA_PARAFORMER_FILES = listOf(
+            "model.int8.onnx",
+            "tokens.txt"
+        )
     }
 
     private val context get() = InstrumentationRegistry.getInstrumentation().targetContext
@@ -1133,6 +1150,162 @@ class TranscriptionBenchmarkTest {
             d[i][j] = minOf(d[i-1][j] + 1, d[i][j-1] + 1, d[i-1][j-1] + if (a[i-1] == b[j-1]) 0 else 1)
         }
         return d[a.size][b.size]
+    }
+
+    // ── Offline Sherpa benchmarks ─────────────────────────────────────
+
+    private fun ensureOfflineTransducerModel(): File =
+        ensureModelFiles(File(benchDir, "sherpa-offline-transducer"), SHERPA_OFFLINE_TRANSDUCER_BASE, SHERPA_OFFLINE_TRANSDUCER_FILES)
+
+    private fun ensureParaformerModel(): File =
+        ensureModelFiles(File(benchDir, "sherpa-paraformer"), SHERPA_PARAFORMER_BASE, SHERPA_PARAFORMER_FILES)
+
+    private fun benchmarkOfflineTransducer(utts: List<Utterance>): EngineResult {
+        val modelDir = ensureOfflineTransducerModel()
+
+        val config = com.k2fsa.sherpa.onnx.OfflineRecognizerConfig(
+            modelConfig = com.k2fsa.sherpa.onnx.OfflineModelConfig(
+                transducer = com.k2fsa.sherpa.onnx.OfflineTransducerModelConfig(
+                    encoder = File(modelDir, "encoder-epoch-99-avg-1.int8.onnx").absolutePath,
+                    decoder = File(modelDir, "decoder-epoch-99-avg-1.int8.onnx").absolutePath,
+                    joiner = File(modelDir, "joiner-epoch-99-avg-1.int8.onnx").absolutePath
+                ),
+                tokens = File(modelDir, "tokens.txt").absolutePath,
+                numThreads = 2
+            )
+        )
+
+        Log.i(TAG, "Offline transducer: loading model...")
+        val t0 = System.currentTimeMillis()
+        val recognizer = com.k2fsa.sherpa.onnx.OfflineRecognizer(config = config)
+        val loadMs = System.currentTimeMillis() - t0
+        Log.i(TAG, "Offline transducer: loaded in ${loadMs}ms")
+        val modelSize = modelDir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+
+        val rtfs = mutableListOf<Float>()
+        var wers = emptyList<Pair<String, Float>>()
+
+        for (run in 1..BENCHMARK_RUNS) {
+            var audioSec = 0f; var procMs = 0L
+            val runWers = mutableListOf<Pair<String, Float>>()
+
+            for (utt in utts) {
+                val stream = recognizer.createStream()
+                stream.acceptWaveform(utt.pcm, SAMPLE_RATE)
+
+                val start = System.currentTimeMillis()
+                recognizer.decode(stream)
+                procMs += System.currentTimeMillis() - start
+                audioSec += utt.durationSec
+
+                if (run == 1) {
+                    val result = recognizer.getResult(stream)
+                    val text = result.text.trim()
+                    val wer = wordErrorRate(utt.groundTruth, text)
+                    runWers.add(utt.id to wer)
+                    Log.i(TAG, "OfflineTransducer [${utt.id}] WER=%.3f".format(wer))
+                    Log.i(TAG, "  ref: ${utt.groundTruth.take(80)}")
+                    Log.i(TAG, "  hyp: ${text.take(80)}")
+                }
+            }
+
+            rtfs.add(procMs / 1000f / audioSec)
+            Log.i(TAG, "Offline transducer run $run: RTF=%.3f".format(rtfs.last()))
+            if (run == 1) wers = runWers
+        }
+        recognizer.release()
+
+        return EngineResult(
+            engine = "Sherpa Offline (zipformer int8)",
+            modelLoadMs = loadMs, modelSizeBytes = modelSize,
+            rtfRuns = rtfs, rtfMedian = rtfs.sorted()[rtfs.size / 2],
+            werPerUtterance = wers,
+            werAggregate = wers.map { it.second }.average().toFloat()
+        )
+    }
+
+    private fun benchmarkParaformer(utts: List<Utterance>): EngineResult {
+        val modelDir = ensureParaformerModel()
+
+        val config = com.k2fsa.sherpa.onnx.OfflineRecognizerConfig(
+            modelConfig = com.k2fsa.sherpa.onnx.OfflineModelConfig(
+                paraformer = com.k2fsa.sherpa.onnx.OfflineParaformerModelConfig(
+                    model = File(modelDir, "model.int8.onnx").absolutePath
+                ),
+                tokens = File(modelDir, "tokens.txt").absolutePath,
+                numThreads = 2
+            )
+        )
+
+        Log.i(TAG, "Paraformer: loading model...")
+        val t0 = System.currentTimeMillis()
+        val recognizer = com.k2fsa.sherpa.onnx.OfflineRecognizer(config = config)
+        val loadMs = System.currentTimeMillis() - t0
+        Log.i(TAG, "Paraformer: loaded in ${loadMs}ms")
+        val modelSize = modelDir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+
+        val rtfs = mutableListOf<Float>()
+        var wers = emptyList<Pair<String, Float>>()
+
+        for (run in 1..BENCHMARK_RUNS) {
+            var audioSec = 0f; var procMs = 0L
+            val runWers = mutableListOf<Pair<String, Float>>()
+
+            for (utt in utts) {
+                val stream = recognizer.createStream()
+                stream.acceptWaveform(utt.pcm, SAMPLE_RATE)
+
+                val start = System.currentTimeMillis()
+                recognizer.decode(stream)
+                procMs += System.currentTimeMillis() - start
+                audioSec += utt.durationSec
+
+                if (run == 1) {
+                    val result = recognizer.getResult(stream)
+                    val text = result.text.trim()
+                    val wer = wordErrorRate(utt.groundTruth, text)
+                    runWers.add(utt.id to wer)
+                    Log.i(TAG, "Paraformer [${utt.id}] WER=%.3f".format(wer))
+                    Log.i(TAG, "  ref: ${utt.groundTruth.take(80)}")
+                    Log.i(TAG, "  hyp: ${text.take(80)}")
+                }
+            }
+
+            rtfs.add(procMs / 1000f / audioSec)
+            Log.i(TAG, "Paraformer run $run: RTF=%.3f".format(rtfs.last()))
+            if (run == 1) wers = runWers
+        }
+        recognizer.release()
+
+        return EngineResult(
+            engine = "Sherpa Paraformer (int8)",
+            modelLoadMs = loadMs, modelSizeBytes = modelSize,
+            rtfRuns = rtfs, rtfMedian = rtfs.sorted()[rtfs.size / 2],
+            werPerUtterance = wers,
+            werAggregate = wers.map { it.second }.average().toFloat()
+        )
+    }
+
+    /** Compare online streaming vs offline transducer vs paraformer. */
+    @Test
+    fun benchmark_sherpa_online_vs_offline() {
+        val utts = utterances
+        Log.i(TAG, "Online vs Offline comparison (${utts.size} utterances)")
+
+        val results = mutableListOf<EngineResult>()
+
+        try { results.add(benchmarkSherpa(utts)) } catch (e: Exception) {
+            Log.e(TAG, "Online benchmark failed", e)
+        }
+        try { results.add(benchmarkOfflineTransducer(utts)) } catch (e: Exception) {
+            Log.e(TAG, "Offline transducer benchmark failed", e)
+        }
+        try { results.add(benchmarkParaformer(utts)) } catch (e: Exception) {
+            Log.e(TAG, "Paraformer benchmark failed", e)
+        }
+
+        assertTrue("At least one engine must complete", results.isNotEmpty())
+        printComparison(results)
     }
 
     private fun printLatencySummary(engine: String, results: List<LatencyResult>) {
