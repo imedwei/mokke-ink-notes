@@ -24,6 +24,7 @@ whisper.cpp               ✗ (10.4x)  ✓       ✓          31 MB    3.7%
 Vosk                      ✓ (0.27x)  ✓       ✓          40 MB   11.1%
 Sherpa-ONNX (streaming)   ✓ (0.14x)  ✓       ✓          39 MB   11.2%
 Sherpa-ONNX (offline)     ✗ (0.06x)  ✓       ✓         180 MB    0.5%
+Sherpa two-pass           ✓ (0.19x)  ✓       ✓         251 MB    0.5%
 Sherpa Paraformer          ✗ (0.06x)  ✓       ✓         219 MB    2.5%
 ```
 
@@ -388,15 +389,46 @@ Streaming models must emit tokens as audio arrives — they can't "look ahead." 
 - Global context for ambiguous words (homophones, names)
 - No endpoint detection artifacts (the 50% WER on "POOR ALICE" disappears)
 
-### The hybrid approach
+### The hybrid approach: per-endpoint two-pass
 
-This suggests a two-pass architecture:
+The sherpa-onnx project already ships a [two-pass Android example](https://github.com/k2-fsa/sherpa-onnx/tree/master/android/SherpaOnnx2Pass) that combines both models at the application layer. The pattern: run the streaming recognizer for real-time partials, and when it detects an endpoint (silence between sentences), send the buffered audio segment to the offline recognizer for a second pass. The offline result replaces the streaming result for that segment. A 500ms overlap buffer (8000 samples at 16kHz) bridges segment boundaries.
 
-1. **During recording**: streaming Sherpa for live partial display (11% WER, but instant feedback)
-2. **After stop()**: re-transcribe the saved audio with the offline model (0.5% WER, ~0.6s per 10s of audio)
-3. **Replace the text blocks** with the offline result — the user sees text "upgrade" from approximate to near-perfect within a second
+This is better than the whole-recording re-transcription I originally planned. Instead of waiting until the user stops recording, each sentence is upgraded to near-perfect accuracy within a second of the user finishing it.
 
-The tradeoff: 180 MB additional model storage, ~9 seconds additional load time, and ~250 MB native memory for the offline model. On a 6 GB device this is feasible if the offline model is loaded on-demand (only after stop()) and released immediately after re-transcription.
+I validated this on the Palma 2 Pro with the same LibriSpeech test set:
+
+```
+Engine                     Load      Size     RTF      WER
+────────────────────────────────────────────────────────────
+Sherpa streaming (ORT)     2,237ms    71 MB   0.16   11.2%
+Two-pass (ORT + offline)  10,657ms   251 MB   0.19    0.5%
+Sherpa offline (int8)      9,230ms   180 MB   0.06    0.5%
+```
+
+Source: `TranscriptionBenchmarkTest#benchmark_two_pass`
+
+The two-pass WER matched the offline WER exactly — 0.5%, with identical per-utterance results. The per-endpoint segmentation introduces zero degradation:
+
+```
+Utterance                     Stream   TwoPass   Offline
+────────────────────────────────────────────────────────
+6930-75918-0000                12.5%      0.0%      0.0%
+6930-75918-0007                11.1%      0.0%      0.0%
+6930-75918-0006                17.6%      0.0%      0.0%
+1320-122617-0003                4.5%      0.0%      0.0%
+1320-122617-0012                0.0%      0.0%      0.0%
+1320-122617-0026                6.7%      0.0%      0.0%
+5639-40744-0032                 3.6%      0.0%      0.0%
+5639-40744-0002                 8.3%      4.2%      4.2%
+5639-40744-0030                 7.0%      1.8%      1.8%
+260-123440-0018                10.0%      0.0%      0.0%
+260-123440-0004                 3.0%      0.0%      0.0%
+260-123440-0001                50.0%      0.0%      0.0%
+```
+
+The RTF overhead is small: 0.19 vs 0.16 for streaming-only. The offline second pass adds ~19% processing time on top of streaming, which is negligible since both are well under real-time.
+
+The tradeoff: 180 MB additional model storage, ~9 seconds additional load time, and ~250 MB native memory for the offline model. On a 6 GB device this is feasible if the offline model is loaded on-demand and released after use.
 
 ---
 
@@ -430,9 +462,7 @@ Fix: replace `MediaPlayer` with [Media3 ExoPlayer](https://developer.android.com
 
 ## Where This Lands
 
-The working architecture: Sherpa-ONNX streaming handles real-time transcription with live italic partials in the recording placeholder. Opus in an OGG container (via a custom `OggOpusWriter`) provides crash-resilient audio recording with sample-accurate seeking via granule positions. ExoPlayer handles playback with a bottom overlay bar for controls. Per-word timestamps (with 320ms latency compensation derived from the model's chunk size) enable tap-a-word-to-seek. A `PlaybackController` state machine manages the IDLE→PLAYING→PAUSED transitions.
-
-The offline zipformer benchmark (0.5% WER at 0.06x RTF) opens a clear path forward: a two-pass hybrid where streaming provides real-time feedback during recording, and the offline model re-transcribes after stop for near-perfect accuracy. The Paraformer (2.5% WER, same speed) is a viable alternative with a different architectural tradeoff.
+The working architecture: Sherpa-ONNX two-pass handles transcription — the streaming model provides real-time italic partials during recording, and the offline model re-transcribes each sentence at endpoint detection for 0.5% WER with no user-visible delay. Opus in an OGG container (via a custom `OggOpusWriter`) provides crash-resilient audio recording with sample-accurate seeking via granule positions. ExoPlayer handles playback with a bottom overlay bar for controls. Per-word timestamps (with 320ms latency compensation derived from the model's chunk size) enable tap-a-word-to-seek. A `PlaybackController` state machine manages the IDLE→PLAYING→PAUSED transitions.
 
 Vosk remains available as a fallback. Whisper remains the batch option for users who want maximum accuracy and are willing to wait. The engine is selectable in settings, with Sherpa streaming as the default.
 
@@ -453,6 +483,7 @@ What's still unsolved: audio recording in `SpeechRecognizer` mode. If Google ope
 - [Sherpa-ONNX](https://github.com/k2-fsa/sherpa-onnx)
 - [Sherpa-ONNX streaming zipformer model](https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-2023-06-26)
 - [Sherpa-ONNX ORT streaming zipformer model](https://huggingface.co/w11wo/sherpa-onnx-ort-streaming-zipformer-en-2023-06-26)
+- [Sherpa-ONNX two-pass Android example](https://github.com/k2-fsa/sherpa-onnx/tree/master/android/SherpaOnnx2Pass)
 - [Sherpa-ONNX offline zipformer model](https://huggingface.co/csukuangfj/sherpa-onnx-zipformer-en-2023-04-01)
 - [Sherpa-ONNX Paraformer model](https://huggingface.co/csukuangfj/sherpa-onnx-paraformer-en-2024-03-09)
 - [FastEmit: Low-latency Streaming ASR](https://arxiv.org/abs/2010.11148)

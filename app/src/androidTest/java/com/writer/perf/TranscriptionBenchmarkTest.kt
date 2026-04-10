@@ -1308,6 +1308,235 @@ class TranscriptionBenchmarkTest {
         printComparison(results)
     }
 
+    // ── Two-pass benchmark (streaming endpoints → offline re-transcription) ──
+
+    /**
+     * Simulate the per-endpoint two-pass approach from SherpaOnnx2Pass:
+     * 1. Feed audio in chunks to the online (streaming) recognizer
+     * 2. When an endpoint is detected, send the buffered segment to the offline recognizer
+     * 3. Use the offline result as the final text for that segment
+     * 4. Keep a 500ms overlap buffer for the next segment
+     *
+     * This measures the WER of the two-pass result vs pure streaming vs pure offline.
+     */
+    private fun benchmarkTwoPass(utts: List<Utterance>): EngineResult {
+        val onlineModelDir = ensureSherpaOrtModel()
+        val offlineModelDir = ensureOfflineTransducerModel()
+
+        // Create online (streaming) recognizer
+        val onlineEncoder = SHERPA_ORT_FILES.first { it.startsWith("encoder") }
+        val onlineDecoder = SHERPA_ORT_FILES.first { it.startsWith("decoder") }
+        val onlineJoiner = SHERPA_ORT_FILES.first { it.startsWith("joiner") }
+
+        val onlineConfig = OnlineRecognizerConfig(
+            modelConfig = OnlineModelConfig(
+                transducer = OnlineTransducerModelConfig(
+                    encoder = File(onlineModelDir, onlineEncoder).absolutePath,
+                    decoder = File(onlineModelDir, onlineDecoder).absolutePath,
+                    joiner = File(onlineModelDir, onlineJoiner).absolutePath
+                ),
+                tokens = File(onlineModelDir, "tokens.txt").absolutePath,
+                numThreads = 2,
+                modelType = "zipformer2"
+            ),
+            enableEndpoint = true
+        )
+
+        // Create offline recognizer
+        val offlineConfig = com.k2fsa.sherpa.onnx.OfflineRecognizerConfig(
+            modelConfig = com.k2fsa.sherpa.onnx.OfflineModelConfig(
+                transducer = com.k2fsa.sherpa.onnx.OfflineTransducerModelConfig(
+                    encoder = File(offlineModelDir, "encoder-epoch-99-avg-1.int8.onnx").absolutePath,
+                    decoder = File(offlineModelDir, "decoder-epoch-99-avg-1.int8.onnx").absolutePath,
+                    joiner = File(offlineModelDir, "joiner-epoch-99-avg-1.int8.onnx").absolutePath
+                ),
+                tokens = File(offlineModelDir, "tokens.txt").absolutePath,
+                numThreads = 2
+            )
+        )
+
+        Log.i(TAG, "Two-pass: loading online model...")
+        val t0 = System.currentTimeMillis()
+        val onlineRecognizer = OnlineRecognizer(config = onlineConfig)
+        val onlineLoadMs = System.currentTimeMillis() - t0
+
+        Log.i(TAG, "Two-pass: loading offline model...")
+        val t1 = System.currentTimeMillis()
+        val offlineRecognizer = com.k2fsa.sherpa.onnx.OfflineRecognizer(config = offlineConfig)
+        val offlineLoadMs = System.currentTimeMillis() - t1
+        val totalLoadMs = onlineLoadMs + offlineLoadMs
+        Log.i(TAG, "Two-pass: models loaded (online=${onlineLoadMs}ms, offline=${offlineLoadMs}ms)")
+
+        val modelSize = onlineModelDir.walkTopDown().filter { it.isFile }.sumOf { it.length() } +
+            offlineModelDir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+
+        val rtfs = mutableListOf<Float>()
+        var wers = emptyList<Pair<String, Float>>()
+        val overlapSamples = 8000 // 500ms at 16kHz, same as SherpaOnnx2Pass
+
+        for (run in 1..BENCHMARK_RUNS) {
+            var audioSec = 0f; var procMs = 0L
+            val runWers = mutableListOf<Pair<String, Float>>()
+
+            for (utt in utts) {
+                val stream = onlineRecognizer.createStream()
+                val resultText = StringBuilder()
+                val samplesBuffer = mutableListOf<FloatArray>()
+                var secondPassCount = 0
+
+                val start = System.currentTimeMillis()
+                var off = 0
+                while (off < utt.pcm.size) {
+                    val end = minOf(off + CHUNK_SAMPLES, utt.pcm.size)
+                    val chunk = utt.pcm.copyOfRange(off, end)
+                    samplesBuffer.add(chunk)
+                    stream.acceptWaveform(chunk, SAMPLE_RATE)
+                    while (onlineRecognizer.isReady(stream)) onlineRecognizer.decode(stream)
+
+                    if (onlineRecognizer.isEndpoint(stream)) {
+                        val onlineResult = onlineRecognizer.getResult(stream)
+                        onlineRecognizer.reset(stream)
+
+                        if (onlineResult.text.isNotBlank()) {
+                            // Run second pass on buffered segment
+                            val segmentText = runOfflineSecondPass(
+                                offlineRecognizer, samplesBuffer, overlapSamples
+                            )
+                            if (segmentText.isNotBlank()) {
+                                resultText.append(segmentText).append(" ")
+                            }
+                            secondPassCount++
+                        } else {
+                            samplesBuffer.clear()
+                        }
+                    }
+                    off = end
+                }
+
+                // Process any remaining audio after the last endpoint
+                stream.inputFinished()
+                while (onlineRecognizer.isReady(stream)) onlineRecognizer.decode(stream)
+                val finalOnline = onlineRecognizer.getResult(stream)
+                if (finalOnline.text.isNotBlank()) {
+                    // Run second pass on remaining audio
+                    val segmentText = runOfflineSecondPass(
+                        offlineRecognizer, samplesBuffer, 0 // no overlap needed for final segment
+                    )
+                    if (segmentText.isNotBlank()) {
+                        resultText.append(segmentText)
+                    }
+                    secondPassCount++
+                }
+
+                procMs += System.currentTimeMillis() - start
+                audioSec += utt.durationSec
+
+                if (run == 1) {
+                    val text = resultText.toString().trim()
+                    val wer = wordErrorRate(utt.groundTruth, text)
+                    runWers.add(utt.id to wer)
+                    Log.i(TAG, "TwoPass [${utt.id}] WER=%.3f (${secondPassCount} segments)".format(wer))
+                    Log.i(TAG, "  ref: ${utt.groundTruth.take(80)}")
+                    Log.i(TAG, "  hyp: ${text.take(80)}")
+                }
+                stream.release()
+            }
+
+            rtfs.add(procMs / 1000f / audioSec)
+            Log.i(TAG, "Two-pass run $run: RTF=%.3f".format(rtfs.last()))
+            if (run == 1) wers = runWers
+        }
+        onlineRecognizer.release()
+        offlineRecognizer.release()
+
+        return EngineResult(
+            engine = "Two-pass (ORT + offline)",
+            modelLoadMs = totalLoadMs, modelSizeBytes = modelSize,
+            rtfRuns = rtfs, rtfMedian = rtfs.sorted()[rtfs.size / 2],
+            werPerUtterance = wers,
+            werAggregate = wers.map { it.second }.average().toFloat()
+        )
+    }
+
+    /**
+     * Flatten buffered samples, send to offline recognizer, keep overlap for next segment.
+     * Mirrors SherpaOnnx2Pass runSecondPass() logic.
+     */
+    private fun runOfflineSecondPass(
+        offlineRecognizer: com.k2fsa.sherpa.onnx.OfflineRecognizer,
+        samplesBuffer: MutableList<FloatArray>,
+        overlapSamples: Int
+    ): String {
+        // Flatten all buffered chunks into a single array
+        val totalSamples = samplesBuffer.sumOf { it.size }
+        val samples = FloatArray(totalSamples)
+        var i = 0
+        for (chunk in samplesBuffer) {
+            chunk.copyInto(samples, i)
+            i += chunk.size
+        }
+
+        // Keep overlap for next segment (500ms at 16kHz = 8000 samples)
+        val n = maxOf(0, samples.size - overlapSamples)
+        samplesBuffer.clear()
+        if (overlapSamples > 0 && n < samples.size) {
+            samplesBuffer.add(samples.copyOfRange(n, samples.size))
+        }
+
+        // Decode with offline model
+        val stream = offlineRecognizer.createStream()
+        stream.acceptWaveform(if (overlapSamples > 0) samples.copyOfRange(0, maxOf(1, n)) else samples, SAMPLE_RATE)
+        offlineRecognizer.decode(stream)
+        val result = offlineRecognizer.getResult(stream)
+        stream.release()
+
+        return result.text.trim()
+    }
+
+    /**
+     * Compare streaming-only, two-pass, and offline-only approaches.
+     * This validates whether per-endpoint two-pass achieves similar WER to full offline.
+     */
+    @Test
+    fun benchmark_two_pass() {
+        val utts = utterances
+        Log.i(TAG, "Two-pass benchmark (${utts.size} utterances)")
+
+        val results = mutableListOf<EngineResult>()
+
+        try { results.add(benchmarkSherpaOrt(utts)) } catch (e: Exception) {
+            Log.e(TAG, "Streaming-only benchmark failed", e)
+        }
+        try { results.add(benchmarkTwoPass(utts)) } catch (e: Exception) {
+            Log.e(TAG, "Two-pass benchmark failed", e)
+        }
+        try { results.add(benchmarkOfflineTransducer(utts)) } catch (e: Exception) {
+            Log.e(TAG, "Offline-only benchmark failed", e)
+        }
+
+        assertTrue("At least one engine must complete", results.isNotEmpty())
+        printComparison(results)
+
+        // Log per-utterance comparison if all three completed
+        if (results.size == 3) {
+            Log.i(TAG, "")
+            Log.i(TAG, "=== PER-UTTERANCE WER COMPARISON ===")
+            Log.i(TAG, "%-30s  %8s  %8s  %8s".format("Utterance", "Stream", "TwoPass", "Offline"))
+            Log.i(TAG, "─".repeat(60))
+            val streamWers = results[0].werPerUtterance.toMap()
+            val twoPassWers = results[1].werPerUtterance.toMap()
+            val offlineWers = results[2].werPerUtterance.toMap()
+            for ((id, _) in results[0].werPerUtterance) {
+                Log.i(TAG, "%-30s  %7.1f%%  %7.1f%%  %7.1f%%".format(
+                    id.take(30),
+                    (streamWers[id] ?: 0f) * 100,
+                    (twoPassWers[id] ?: 0f) * 100,
+                    (offlineWers[id] ?: 0f) * 100
+                ))
+            }
+        }
+    }
+
     private fun printLatencySummary(engine: String, results: List<LatencyResult>) {
         val avgFirstPartial = results.filter { it.firstPartialSec >= 0 }
             .map { it.firstPartialSec }.average().toFloat()
