@@ -334,6 +334,26 @@ Sherpa's `OnlineRecognizerResult` provides token-level timestamps but not confid
 
 Sherpa's WER on very short utterances (1-2 words) was unreliable — the endpoint detector sometimes cut off speech or produced spurious text. On utterances longer than 3 seconds, Sherpa and Vosk were comparable in accuracy.
 
+### Timestamp alignment: the 320ms correction
+
+Tapping a transcribed word to seek in the audio consistently landed ~300ms past the word onset. The word was already mid-syllable by the time playback started.
+
+This is a known property of streaming transducer models. The RNN-T loss function doesn't enforce temporal alignment — the model is free to emit tokens at any point along the monotonic alignment path. In practice, streaming models need to "see" enough future context before committing to a token, so timestamps are systematically late. [Microsoft measured ~400ms delay for vanilla RNN-T](https://www.microsoft.com/en-us/research/wp-content/uploads/2020/04/rnnt-icassp2020.pdf). Google's [FastEmit](https://arxiv.org/abs/2010.11148) and [Self-Alignment](https://arxiv.org/abs/2105.05005) reduce this to 100-250ms, but those require retraining the model with emission regularization. Our pre-trained zipformer has no such regularization.
+
+The fix: subtract a latency compensation derived from the model's chunk size. For the `chunk-16-left-128` model:
+
+```
+chunk_frames = 16 (subsampled encoder frames per chunk)
+frame_duration = 40ms (10ms frame shift × 4x conv subsampling)
+chunk_duration = 16 × 40ms = 640ms
+
+compensation = chunk_duration / 2 = 320ms
+```
+
+The `/ 2` is because the token is emitted somewhere within the chunk — on average, halfway through. The compensation is applied once in `SherpaTokenMerger.mergeTokens()`, clamped to zero (never negative), and flows through to the `WordInfo.startMs` stored in each `TextBlock`. No other code needs to change — the tap handler and audio player use the already-compensated value.
+
+If the model changes (different chunk size or emission-regularized training), update the constants in `SherpaTokenMerger`. The formula is: `compensation = chunk_frames × frame_duration_ms / 2`.
+
 ---
 
 ## Hardware: The Mic Is Fine (for This Purpose)

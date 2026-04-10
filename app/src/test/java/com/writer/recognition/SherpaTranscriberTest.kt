@@ -106,7 +106,11 @@ class SherpaTranscriberTest {
 
     @Test
     fun `finals queued before stop are delivered synchronously in stop`() {
-        val recognizer = FakeRecognizer(endpointAfterChunks = 2, endpointText = "IMPORTANT RESULT")
+        val recognizer = FakeRecognizer(
+            endpointAfterChunks = 2, endpointText = "IMPORTANT RESULT",
+            endpointTokens = arrayOf(" IMPORTANT", " RESULT"),
+            endpointTimestamps = floatArrayOf(0.5f, 1.0f)
+        )
         val pcmSource = FakePcmSource(chunksToEmit = 4)
 
         val transcriber = createTranscriber(recognizer, pcmSource)

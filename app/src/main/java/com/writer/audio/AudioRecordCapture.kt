@@ -14,12 +14,10 @@ import java.io.FileOutputStream
  * Captures audio via [AudioRecord] and stream-compresses to Opus in an
  * OGG container via [MediaCodec] + [OggOpusWriter].
  *
- * Opus at 24kbps mono ≈ 180 KB/min (~11 MB/hr). Best voice codec at
- * low bitrates.
+ * Opus at 24kbps mono ≈ 180 KB/min (~11 MB/hr). Best voice codec at low bitrates.
  *
- * OGG is crash-resilient: each page is self-contained, so a truncated
- * file is playable up to the last complete page. OGG granule positions
- * provide sample-accurate seeking — no estimation needed.
+ * OGG provides sample-accurate seeking via granule positions — no estimation needed.
+ * Each page is self-contained, so a truncated file is playable up to the last page.
  */
 class AudioRecordCapture(private val cacheDir: File) {
 
@@ -32,6 +30,7 @@ class AudioRecordCapture(private val cacheDir: File) {
     @Volatile private var recording = false
     private var outputFile: File? = null
     private var startTimeUs = 0L
+    private var headersWritten = false
     var isRecording: Boolean = false
         private set
 
@@ -39,83 +38,62 @@ class AudioRecordCapture(private val cacheDir: File) {
         if (isRecording) stop()
 
         val bufferSize = AudioRecord.getMinBufferSize(
-            SAMPLE_RATE,
-            AudioFormat.CHANNEL_IN_MONO,
-            AudioFormat.ENCODING_PCM_16BIT
+            SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
         ).coerceAtLeast(SAMPLE_RATE * 2)
 
         val audioRecord = try {
             AudioRecord(
-                MediaRecorder.AudioSource.VOICE_RECOGNITION,
-                SAMPLE_RATE,
-                AudioFormat.CHANNEL_IN_MONO,
-                AudioFormat.ENCODING_PCM_16BIT,
-                bufferSize
+                MediaRecorder.AudioSource.VOICE_RECOGNITION, SAMPLE_RATE,
+                AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, bufferSize
             )
         } catch (e: SecurityException) {
-            Log.w(tag, "Mic permission denied", e)
-            return false
+            Log.w(tag, "Mic permission denied", e); return false
         }
 
         if (audioRecord.state != AudioRecord.STATE_INITIALIZED) {
-            Log.w(tag, "AudioRecord failed to initialize")
-            audioRecord.release()
-            return false
+            Log.w(tag, "AudioRecord failed to initialize"); audioRecord.release(); return false
         }
 
-        if (!initEncoder()) {
-            audioRecord.release()
-            return false
-        }
+        if (!initEncoder()) { audioRecord.release(); return false }
 
         recorder = audioRecord
         recording = true
         isRecording = true
 
-        try {
-            audioRecord.startRecording()
-        } catch (e: IllegalStateException) {
-            Log.w(tag, "startRecording failed — concurrent capture not supported", e)
-            cleanup()
-            return false
+        try { audioRecord.startRecording() } catch (e: IllegalStateException) {
+            Log.w(tag, "startRecording failed", e); cleanup(); return false
         }
 
         recordingThread = Thread({
-            encodeLoop(audioRecord)
+            val bufferInfo = MediaCodec.BufferInfo()
+            val pcmBuffer = ShortArray(SAMPLE_RATE)
+            val codec = encoder ?: return@Thread
+
+            while (recording) {
+                val inputIndex = codec.dequeueInputBuffer(10_000)
+                if (inputIndex >= 0) {
+                    val inputBuffer = codec.getInputBuffer(inputIndex) ?: continue
+                    val read = audioRecord.read(pcmBuffer, 0, pcmBuffer.size)
+                    if (read > 0) {
+                        inputBuffer.clear()
+                        for (i in 0 until read) inputBuffer.putShort(pcmBuffer[i])
+                        codec.queueInputBuffer(inputIndex, 0, read * 2, System.nanoTime() / 1000 - startTimeUs, 0)
+                    } else {
+                        codec.queueInputBuffer(inputIndex, 0, 0, 0, 0)
+                    }
+                }
+                drainEncoder(bufferInfo, false)
+            }
+
+            val inputIndex = codec.dequeueInputBuffer(10_000)
+            if (inputIndex >= 0) {
+                codec.queueInputBuffer(inputIndex, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+            }
+            drainEncoder(bufferInfo, true)
         }, "AudioRecordCapture").also { it.start() }
 
         Log.i(tag, "Recording started (Opus/OGG)")
         return true
-    }
-
-    private fun encodeLoop(audioRecord: AudioRecord) {
-        val bufferInfo = MediaCodec.BufferInfo()
-        val pcmBuffer = ShortArray(SAMPLE_RATE) // 1 second chunks
-        val codec = encoder ?: return
-
-        while (recording) {
-            val inputIndex = codec.dequeueInputBuffer(10_000)
-            if (inputIndex >= 0) {
-                val inputBuffer = codec.getInputBuffer(inputIndex) ?: continue
-                val read = audioRecord.read(pcmBuffer, 0, pcmBuffer.size)
-                if (read > 0) {
-                    inputBuffer.clear()
-                    for (i in 0 until read) {
-                        inputBuffer.putShort(pcmBuffer[i])
-                    }
-                    codec.queueInputBuffer(inputIndex, 0, read * 2, System.nanoTime() / 1000 - startTimeUs, 0)
-                } else {
-                    codec.queueInputBuffer(inputIndex, 0, 0, 0, 0)
-                }
-            }
-            drainEncoder(bufferInfo, false)
-        }
-
-        val inputIndex = codec.dequeueInputBuffer(10_000)
-        if (inputIndex >= 0) {
-            codec.queueInputBuffer(inputIndex, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
-        }
-        drainEncoder(bufferInfo, true)
     }
 
     private fun drainEncoder(bufferInfo: MediaCodec.BufferInfo, endOfStream: Boolean) {
@@ -125,9 +103,24 @@ class AudioRecordCapture(private val cacheDir: File) {
         while (true) {
             val outputIndex = codec.dequeueOutputBuffer(bufferInfo, if (endOfStream) 10_000 else 0)
             when {
+                outputIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                    // Extract CSD-0 (OpusHead) from the encoder's output format
+                    val outputFormat = codec.outputFormat
+                    val csd0 = outputFormat.getByteBuffer("csd-0")?.let { buf ->
+                        ByteArray(buf.remaining()).also { buf.get(it); buf.rewind() }
+                    }
+                    if (!headersWritten) {
+                        ogg.writeHeaders(csd0)
+                        headersWritten = true
+                        Log.i(tag, "OGG headers written (csd0=${csd0?.size ?: 0} bytes)")
+                    }
+                }
                 outputIndex >= 0 -> {
                     val outputBuffer = codec.getOutputBuffer(outputIndex) ?: break
-                    if (bufferInfo.size > 0 && bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0) {
+                    if (bufferInfo.size > 0 &&
+                        bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0 &&
+                        headersWritten
+                    ) {
                         val data = ByteArray(bufferInfo.size)
                         outputBuffer.position(bufferInfo.offset)
                         outputBuffer.get(data)
@@ -151,11 +144,9 @@ class AudioRecordCapture(private val cacheDir: File) {
 
     private fun cleanup() {
         try { recorder?.stop() } catch (_: Exception) {}
-        recorder?.release()
-        recorder = null
+        recorder?.release(); recorder = null
         try { encoder?.stop() } catch (_: Exception) {}
-        encoder?.release()
-        encoder = null
+        encoder?.release(); encoder = null
         try { oggWriter?.close() } catch (_: Exception) {}
         oggWriter = null
         try { outputStream?.close() } catch (_: Exception) {}
@@ -163,10 +154,6 @@ class AudioRecordCapture(private val cacheDir: File) {
         isRecording = false
     }
 
-    /**
-     * Start encoder-only mode (no AudioRecord). Call [feedPcm] to provide
-     * external PCM buffers. Use when another component owns the mic stream.
-     */
     fun startEncoderOnly(): Boolean {
         if (isRecording) stop()
         return initEncoder()
@@ -184,33 +171,20 @@ class AudioRecordCapture(private val cacheDir: File) {
 
         val codec = try {
             MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_OPUS)
-        } catch (e: Exception) {
-            Log.w(tag, "Failed to create Opus encoder", e)
-            return false
-        }
+        } catch (e: Exception) { Log.w(tag, "Failed to create Opus encoder", e); return false }
 
         try {
             codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-        } catch (e: Exception) {
-            Log.w(tag, "Failed to configure Opus encoder", e)
-            codec.release()
-            return false
-        }
+        } catch (e: Exception) { Log.w(tag, "Failed to configure encoder", e); codec.release(); return false }
 
         val fos = try {
             BufferedOutputStream(FileOutputStream(file))
-        } catch (e: Exception) {
-            Log.w(tag, "Failed to open output file", e)
-            codec.release()
-            return false
-        }
-
-        val ogg = OggOpusWriter(fos, SAMPLE_RATE, 1)
-        ogg.writeHeaders()
+        } catch (e: Exception) { Log.w(tag, "Failed to open output file", e); codec.release(); return false }
 
         encoder = codec
-        oggWriter = ogg
+        oggWriter = OggOpusWriter(fos, SAMPLE_RATE, 1)
         outputStream = fos
+        headersWritten = false
         startTimeUs = System.nanoTime() / 1000
         isRecording = true
         codec.start()
@@ -218,10 +192,6 @@ class AudioRecordCapture(private val cacheDir: File) {
         return true
     }
 
-    /**
-     * Feed external PCM data to the encoder. Call from the recording thread.
-     * Only works in encoder-only mode (started via [startEncoderOnly]).
-     */
     fun feedPcm(buffer: ByteArray, length: Int) {
         val codec = encoder ?: return
         val bufferInfo = MediaCodec.BufferInfo()
@@ -233,11 +203,9 @@ class AudioRecordCapture(private val cacheDir: File) {
             inputBuffer.put(buffer, 0, length)
             codec.queueInputBuffer(inputIndex, 0, length, System.nanoTime() / 1000 - startTimeUs, 0)
         }
-
         drainEncoder(bufferInfo, false)
     }
 
-    /** Stop encoder-only mode and finalize the file. */
     fun stopEncoder() {
         val codec = encoder ?: return
 
@@ -251,14 +219,11 @@ class AudioRecordCapture(private val cacheDir: File) {
         Log.i(tag, "Encoder stopped: ${outputFile?.name} (${outputFile?.length() ?: 0} bytes)")
     }
 
-    /** Get the output file. Available after [stop] or [stopEncoder]. */
     fun getOutputFile(): File? = outputFile
-
-    /** Read the compressed audio bytes. Returns null if nothing was recorded. */
     fun readRecordedBytes(): ByteArray? = outputFile?.takeIf { it.exists() && it.length() > 0 }?.readBytes()
 
     companion object {
         const val SAMPLE_RATE = 16000
-        const val BIT_RATE = 24000 // 24 kbps Opus — ~180 KB/min for voice
+        const val BIT_RATE = 24000
     }
 }

@@ -8,15 +8,14 @@ import java.nio.ByteOrder
  * Minimal OGG/Opus muxer. Wraps encoded Opus packets from [android.media.MediaCodec]
  * into OGG pages with granule positions for sample-accurate seeking.
  *
- * OGG page format (RFC 3533):
- * - 27-byte header with capture pattern, granule position, serial, page/segment counts
- * - Segment table (1 byte per segment, values 0-255)
- * - Payload (concatenated segments)
+ * Usage:
+ * 1. Call [writeHeaders] with the CSD-0 bytes from MediaCodec's output format
+ * 2. Call [writePacket] for each encoded Opus packet
+ * 3. Call [close] to write EOS and flush
  *
- * Opus in OGG (RFC 7845):
- * - Page 0: OpusHead header (identification)
- * - Page 1: OpusTags header (metadata)
- * - Page 2+: Audio data pages, each with granule position = cumulative sample count
+ * The CSD-0 from Android's Opus encoder contains a valid OpusHead identification
+ * header (RFC 7845 §5.1) with the correct pre-skip, channel count, and sample rate
+ * for the configured encoder. Using it directly ensures decoder compatibility.
  */
 class OggOpusWriter(
     private val out: OutputStream,
@@ -26,21 +25,36 @@ class OggOpusWriter(
     private var serialNo = (System.nanoTime() and 0xFFFFFFFFL).toInt()
     private var pageSequence = 0
     private var granulePosition = 0L
+    private var preSkip = DEFAULT_PRE_SKIP
     private var closed = false
 
-    /** Write the required OGG/Opus headers. Call once before any audio packets. */
-    fun writeHeaders() {
+    /**
+     * Write the required OGG/Opus headers.
+     *
+     * @param csd0 CSD-0 bytes from MediaCodec's output format. If non-null, used as
+     *             the OpusHead identification header. If null, a default header is generated.
+     */
+    fun writeHeaders(csd0: ByteArray? = null) {
         // Page 0: OpusHead
-        val opusHead = ByteBuffer.allocate(19).order(ByteOrder.LITTLE_ENDIAN).apply {
-            put("OpusHead".toByteArray())  // magic
-            put(1)                          // version
-            put(channels.toByte())          // channel count
-            putShort(0)                     // pre-skip (samples)
-            putInt(sampleRate)              // input sample rate
-            putShort(0)                     // output gain
-            put(0)                          // channel mapping family
+        val opusHead = if (csd0 != null && csd0.size >= 19 &&
+            String(csd0, 0, 8, Charsets.US_ASCII) == "OpusHead"
+        ) {
+            // CSD-0 is already a valid OpusHead — use it directly
+            preSkip = ByteBuffer.wrap(csd0, 10, 2).order(ByteOrder.LITTLE_ENDIAN).short.toInt() and 0xFFFF
+            csd0
+        } else {
+            // Generate a default OpusHead
+            ByteBuffer.allocate(19).order(ByteOrder.LITTLE_ENDIAN).apply {
+                put("OpusHead".toByteArray())
+                put(1)                              // version
+                put(channels.toByte())              // channel count
+                putShort(DEFAULT_PRE_SKIP.toShort()) // pre-skip
+                putInt(sampleRate)                   // input sample rate
+                putShort(0)                          // output gain
+                put(0)                               // channel mapping family
+            }.array()
         }
-        writePage(opusHead.array(), granulePos = 0, flags = FLAG_BOS)
+        writePage(opusHead, granulePos = 0, flags = FLAG_BOS)
 
         // Page 1: OpusTags
         val vendor = "InkUp"
@@ -55,51 +69,46 @@ class OggOpusWriter(
     }
 
     /**
-     * Write an encoded Opus packet. [presentationTimeUs] is used to compute
-     * the granule position (cumulative samples at 48kHz, per RFC 7845).
+     * Write an encoded Opus packet.
      *
      * @param data encoded Opus packet bytes
      * @param presentationTimeUs presentation timestamp in microseconds
      */
     fun writePacket(data: ByteArray, presentationTimeUs: Long) {
-        // Granule position is in 48kHz samples regardless of input sample rate (RFC 7845 §4)
-        granulePosition = presentationTimeUs * 48 / 1000 // µs → 48kHz samples
+        // Granule position = 48kHz samples + pre-skip (RFC 7845 §4)
+        granulePosition = presentationTimeUs * 48 / 1000 + preSkip
         writePage(data, granulePos = granulePosition, flags = 0)
     }
 
     /** Write the final page and close. */
     fun close() {
         if (closed) return
-        // Write an empty EOS page
         writePage(ByteArray(0), granulePos = granulePosition, flags = FLAG_EOS)
         out.flush()
         closed = true
     }
 
     private fun writePage(payload: ByteArray, granulePos: Long, flags: Int) {
-        // Segment table: each segment is max 255 bytes.
-        // A packet is terminated by a segment < 255 bytes (or a 0-length segment).
         val segments = mutableListOf<Int>()
         var remaining = payload.size
         while (remaining >= 255) {
             segments.add(255)
             remaining -= 255
         }
-        segments.add(remaining) // final segment (0-254), terminates the packet
+        segments.add(remaining)
 
         val header = ByteBuffer.allocate(27 + segments.size).order(ByteOrder.LITTLE_ENDIAN).apply {
-            put("OggS".toByteArray())       // capture pattern
-            put(0)                           // stream structure version
-            put(flags.toByte())              // header type flags
-            putLong(granulePos)              // granule position
-            putInt(serialNo)                 // bitstream serial number
-            putInt(pageSequence++)           // page sequence number
-            putInt(0)                        // CRC checksum (filled below)
-            put(segments.size.toByte())      // number of segments
+            put("OggS".toByteArray())
+            put(0)
+            put(flags.toByte())
+            putLong(granulePos)
+            putInt(serialNo)
+            putInt(pageSequence++)
+            putInt(0) // CRC placeholder
+            put(segments.size.toByte())
             for (s in segments) put(s.toByte())
         }
 
-        // Compute CRC-32 over header + payload
         val headerBytes = header.array()
         val crc = oggCrc32(headerBytes, payload)
         headerBytes[22] = (crc and 0xFF).toByte()
@@ -112,10 +121,10 @@ class OggOpusWriter(
     }
 
     companion object {
-        private const val FLAG_BOS = 0x02  // beginning of stream
-        private const val FLAG_EOS = 0x04  // end of stream
+        private const val FLAG_BOS = 0x02
+        private const val FLAG_EOS = 0x04
+        private const val DEFAULT_PRE_SKIP = 312 // 6.5ms at 48kHz
 
-        // OGG uses a custom CRC-32 polynomial (0x04C11DB7), not the standard zlib one.
         private val crcTable = IntArray(256).also { table ->
             for (i in 0..255) {
                 var r = i shl 24

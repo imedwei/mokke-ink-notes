@@ -718,12 +718,21 @@ class HandwritingCanvasView @JvmOverloads constructor(
                                     val wx = textBlockPaint.measureText(lineText, 0, charInLine)
                                     val ww = textBlockPaint.measureText(wordText)
                                     if (tapXInLine >= wx - ww * 0.15f && tapXInLine <= wx + ww * 1.15f) {
-                                        wordStartMs = tappedBlock.words[wordIdx].startMs
+                                        val word = tappedBlock.words[wordIdx]
+                                        wordStartMs = word.startMs
+                                        android.util.Log.i("TextBlockTap",
+                                            "Tapped word[$wordIdx]=\"${word.text}\" startMs=${word.startMs} endMs=${word.endMs} " +
+                                            "tapX=%.1f wordX=%.1f..%.1f".format(tapXInLine, wx, wx + ww))
                                         break
                                     }
                                     charInLine += wordText.length + 1
                                 }
                             }
+                        }
+                        if (wordStartMs == null && tappedBlock.words.isNotEmpty()) {
+                            android.util.Log.w("TextBlockTap",
+                                "No word matched tap. Falling back to block startMs=${tappedBlock.audioStartMs}. " +
+                                "Words: ${tappedBlock.words.joinToString { "${it.text}@${it.startMs}ms" }}")
                         }
                         onTextBlockTap?.invoke(tappedBlock, wordStartMs)
                         return true

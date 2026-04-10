@@ -1,9 +1,12 @@
 package com.writer.audio
 
 import android.content.Context
+import android.media.AudioManager
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
@@ -34,8 +37,13 @@ class AudioPlayer(private val context: Context) {
 
     private fun ensurePlayer(): ExoPlayer {
         player?.let { return it }
-        // No constant-bitrate seeking needed — fMP4 has native seek tables
-        val p = ExoPlayer.Builder(context).build()
+        val audioAttrs = AudioAttributes.Builder()
+            .setUsage(C.USAGE_MEDIA)
+            .setContentType(C.AUDIO_CONTENT_TYPE_SPEECH)
+            .build()
+        val p = ExoPlayer.Builder(context)
+            .setAudioAttributes(audioAttrs, /* handleAudioFocus= */ true)
+            .build()
         p.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
                 if (state == Player.STATE_ENDED) {
@@ -43,6 +51,12 @@ class AudioPlayer(private val context: Context) {
                     stopPositionUpdates()
                     onCompleted?.invoke()
                 }
+            }
+
+            override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                Log.e(tag, "Playback error: ${error.message}")
+                isPlaying = false
+                stopPositionUpdates()
             }
         })
         player = p
@@ -53,6 +67,10 @@ class AudioPlayer(private val context: Context) {
      * Start playback from [startMs] in the given audio [file].
      */
     fun play(file: File, startMs: Long = 0) {
+        // Force speaker output if Bluetooth is paired but not actually connected
+        // (Android routes to A2DP even when the profile is down, producing silence)
+        ensureSpeakerRouting()
+
         val p = ensurePlayer()
         val mediaItem = MediaItem.fromUri(file.toURI().toString())
         p.setMediaItem(mediaItem, startMs)
@@ -61,6 +79,22 @@ class AudioPlayer(private val context: Context) {
         isPlaying = true
         startPositionUpdates()
         Log.i(tag, "Playing ${file.name} from ${startMs}ms")
+    }
+
+    private fun ensureSpeakerRouting() {
+        val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        val devices = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+        val hasActiveBluetooth = devices.any {
+            it.type == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP &&
+                it.isSink
+        }
+        // If BT A2DP is listed as output but music isn't actually routing there,
+        // the audio_hw will fail with "A2DP profile is not ready". Force speaker.
+        if (hasActiveBluetooth && !audioManager.isBluetoothA2dpOn) {
+            Log.w(tag, "Bluetooth A2DP device present but not active — forcing speaker")
+            audioManager.mode = AudioManager.MODE_NORMAL
+            audioManager.isSpeakerphoneOn = true
+        }
     }
 
     fun pause() {
@@ -111,6 +145,11 @@ class AudioPlayer(private val context: Context) {
 
     fun release() {
         stop()
+        // Restore speaker routing if we forced it
+        try {
+            val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            audioManager.isSpeakerphoneOn = false
+        } catch (_: Exception) {}
         player?.release()
         player = null
         onPositionChanged = null

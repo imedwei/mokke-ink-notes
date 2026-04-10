@@ -82,10 +82,10 @@ class OggOpusWriterTest {
         assertEquals("Should have 3 pages (head, tags, audio)", 3, pageCount)
 
         // Granule position at offset 6 (8 bytes, little-endian)
-        // 1,000,000 µs × 48 / 1000 = 48,000 samples
+        // 1,000,000 µs × 48 / 1000 + 312 pre-skip = 48,312 samples
         val granule = java.nio.ByteBuffer.wrap(bytes, pageStart + 6, 8)
             .order(java.nio.ByteOrder.LITTLE_ENDIAN).long
-        assertEquals("Granule should be 48000 for 1s at 48kHz", 48_000L, granule)
+        assertEquals("Granule should be 48312 for 1s at 48kHz + pre-skip", 48_312L, granule)
     }
 
     @Test

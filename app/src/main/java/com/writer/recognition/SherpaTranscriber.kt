@@ -108,9 +108,38 @@ class SherpaTranscriber(
             audioOffsetSec = 0f
             var segmentSamples = 0
 
+            var consecutiveReadErrors = 0
+            var consecutiveSilentChunks = 0
+
             while (recording) {
                 val read = source.read(buffer, 0, buffer.size)
-                if (read <= 0) continue
+                if (read < 0) {
+                    consecutiveReadErrors++
+                    Log.w(tag, "AudioRecord.read() returned $read (error #$consecutiveReadErrors)")
+                    if (consecutiveReadErrors >= MAX_READ_ERRORS) {
+                        Log.e(tag, "Too many read errors — mic may be unavailable")
+                        postMain {
+                            onStatusUpdate?.invoke("Microphone error — recording stopped")
+                            onError?.invoke(-2)
+                        }
+                        break
+                    }
+                    continue
+                }
+                if (read == 0) continue
+                consecutiveReadErrors = 0
+
+                // Detect sustained silence (mic producing empty frames)
+                val hasSignal = buffer.any { it != 0.toByte() }
+                if (!hasSignal) {
+                    consecutiveSilentChunks++
+                    if (consecutiveSilentChunks == SILENT_CHUNKS_WARNING) {
+                        Log.w(tag, "No audio signal for ${consecutiveSilentChunks * BUFFER_SIZE / 2 / SAMPLE_RATE}s — mic may not be capturing")
+                        postMain { onStatusUpdate?.invoke("No audio detected — check microphone") }
+                    }
+                } else {
+                    consecutiveSilentChunks = 0
+                }
 
                 audioCapture?.feedPcm(buffer, read)
 
@@ -132,11 +161,14 @@ class SherpaTranscriber(
 
                 if (recognizer.isEndpoint(onlineStream)) {
                     val result = recognizer.getResult(onlineStream)
-                    val text = normalizeCase(result.text.trim())
-                    if (text.isNotBlank()) {
+                    if (result.text.isNotBlank()) {
                         val words = SherpaTokenMerger.mergeTokens(
                             result.tokens, result.timestamps, audioOffsetSec
                         )
+                        // Reconstruct text from merged words so word count matches
+                        // for tap-to-seek indexing. result.text may have different
+                        // word boundaries than the token merger.
+                        val text = normalizeCase(words.joinToString(" ") { it.text })
                         Log.i(tag, "Final (offset=%.2fs): %d words, text=\"%s\"".format(
                             audioOffsetSec, words.size, text.take(60)
                         ))
@@ -183,11 +215,11 @@ class SherpaTranscriber(
                 recognizer.decode(onlineStream)
             }
             val result = recognizer.getResult(onlineStream)
-            val text = normalizeCase(result.text.trim())
-            if (text.isNotBlank()) {
+            if (result.text.isNotBlank()) {
                 val words = SherpaTokenMerger.mergeTokens(
                     result.tokens, result.timestamps, audioOffsetSec
                 )
+                val text = normalizeCase(words.joinToString(" ") { it.text })
                 Log.i(tag, "Final (flush, offset=%.2fs): %d words".format(audioOffsetSec, words.size))
                 onFinalResultWithWords?.invoke(text, words)
                 onFinalResult?.invoke(text)
@@ -286,5 +318,7 @@ class SherpaTranscriber(
         private const val BUFFER_SIZE = 4000
         private const val RMS_REPORT_INTERVAL = 8
         private const val PARTIAL_THROTTLE_CHUNKS = 4
+        private const val MAX_READ_ERRORS = 10 // consecutive read() failures before giving up
+        private const val SILENT_CHUNKS_WARNING = 40 // ~5s of silence before warning (40 × 0.125s)
     }
 }
