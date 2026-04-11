@@ -113,4 +113,60 @@ class SherpaModelManagerTest {
         manager.loadWithFactory { throw RuntimeException("fail") }
         assertFalse(called)
     }
+
+    // ── Model file validation ──────────────────────────────────────
+
+    @Test
+    fun `isValidModelFile rejects empty file`() {
+        val file = java.io.File.createTempFile("test", ".ort")
+        try {
+            file.writeBytes(ByteArray(0))
+            assertFalse(SherpaModelManager.isValidModelFile(file, "encoder-foo.ort"))
+        } finally { file.delete() }
+    }
+
+    @Test
+    fun `isValidModelFile rejects small file`() {
+        val file = java.io.File.createTempFile("test", ".ort")
+        try {
+            file.writeBytes(ByteArray(100)) // way too small for an encoder
+            assertFalse(SherpaModelManager.isValidModelFile(file, "encoder-foo.ort"))
+        } finally { file.delete() }
+    }
+
+    @Test
+    fun `isValidModelFile rejects HTML redirect page`() {
+        val file = java.io.File.createTempFile("test", ".ort")
+        try {
+            // HuggingFace redirect: starts with "<" not "ORTM"
+            val html = "<html><body>Redirecting...</body></html>"
+            file.writeText(html.repeat(10000)) // make it large enough to pass size check
+            assertFalse(SherpaModelManager.isValidModelFile(file, "joiner-foo.ort"))
+        } finally { file.delete() }
+    }
+
+    @Test
+    fun `isValidModelFile accepts valid ORT header`() {
+        val file = java.io.File.createTempFile("test", ".ort")
+        try {
+            // ORT magic + padding to pass size check for tokens
+            val data = ByteArray(5000)
+            data[0] = 'O'.code.toByte()
+            data[1] = 'R'.code.toByte()
+            data[2] = 'T'.code.toByte()
+            data[3] = 'M'.code.toByte()
+            file.writeBytes(data)
+            assertTrue(SherpaModelManager.isValidModelFile(file, "tokens.txt"))
+        } finally { file.delete() }
+    }
+
+    @Test
+    fun `isValidModelFile accepts tokens txt`() {
+        val file = java.io.File.createTempFile("test", ".txt")
+        try {
+            val tokens = (0..500).joinToString("\n") { "$it ▁token$it" }
+            file.writeText(tokens)
+            assertTrue(SherpaModelManager.isValidModelFile(file, "tokens.txt"))
+        } finally { file.delete() }
+    }
 }

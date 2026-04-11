@@ -96,11 +96,21 @@ class OfflineModelManager {
         val dir = File(context.filesDir, MODEL_DIR).also { it.mkdirs() }
         for (name in MODEL_FILES) {
             val file = File(dir, name)
-            if (file.exists() && file.length() > 0) continue
-            Log.i(TAG, "Downloading offline model $name...")
-            URL("$MODEL_BASE_URL/$name").openStream().use { input ->
-                file.outputStream().use { input.copyTo(it) }
+            if (file.exists() && SherpaModelManager.isValidModelFile(file, name)) continue
+            if (file.exists()) {
+                Log.w(TAG, "Deleting invalid model file $name (${file.length()} bytes)")
+                file.delete()
             }
+            Log.i(TAG, "Downloading offline model $name...")
+            val tmpFile = File(dir, "$name.tmp")
+            URL("$MODEL_BASE_URL/$name").openStream().use { input ->
+                tmpFile.outputStream().use { input.copyTo(it) }
+            }
+            if (!SherpaModelManager.isValidModelFile(tmpFile, name)) {
+                tmpFile.delete()
+                throw IllegalStateException("Downloaded $name is invalid (${tmpFile.length()} bytes)")
+            }
+            tmpFile.renameTo(file)
         }
         return dir
     }
