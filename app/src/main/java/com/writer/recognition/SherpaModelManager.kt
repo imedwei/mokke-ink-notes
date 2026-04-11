@@ -7,7 +7,6 @@ import com.k2fsa.sherpa.onnx.OnlineRecognizer
 import com.k2fsa.sherpa.onnx.OnlineRecognizerConfig
 import com.k2fsa.sherpa.onnx.OnlineTransducerModelConfig
 import java.io.File
-import java.net.URL
 
 /**
  * Manages the Sherpa-ONNX [OnlineRecognizer] lifecycle.
@@ -25,6 +24,9 @@ class SherpaModelManager {
 
     /** Called on the loading thread when the model becomes READY. */
     var onReady: (() -> Unit)? = null
+
+    /** Status updates during download/load. Called from background thread. */
+    var onStatusUpdate: ((String) -> Unit)? = null
 
     private var recognizer: StreamingRecognizer? = null
 
@@ -54,7 +56,10 @@ class SherpaModelManager {
         state = State.LOADING
         Thread({
             try {
-                val modelDir = ensureModelFiles(context)
+                val modelDir = ModelDownloader.ensureModelFiles(
+                    File(context.filesDir, MODEL_DIR), MODEL_BASE_URL, MODEL_FILES, onStatusUpdate
+                )
+                onStatusUpdate?.invoke("Loading models…")
                 val config = buildConfig(modelDir)
                 recognizer = SherpaRecognizerWrapper(OnlineRecognizer(config = config))
                 state = State.READY
@@ -94,29 +99,6 @@ class SherpaModelManager {
             enableEndpoint = true
         )
 
-    private fun ensureModelFiles(context: Context): File {
-        val dir = File(context.filesDir, MODEL_DIR).also { it.mkdirs() }
-        for (name in MODEL_FILES) {
-            val file = File(dir, name)
-            if (file.exists() && isValidModelFile(file, name)) continue
-            if (file.exists()) {
-                Log.w(TAG, "Deleting invalid model file $name (${file.length()} bytes)")
-                file.delete()
-            }
-            Log.i(TAG, "Downloading $name...")
-            val tmpFile = File(dir, "$name.tmp")
-            URL("$MODEL_BASE_URL/$name").openStream().use { input ->
-                tmpFile.outputStream().use { input.copyTo(it) }
-            }
-            if (!isValidModelFile(tmpFile, name)) {
-                tmpFile.delete()
-                throw IllegalStateException("Downloaded $name is invalid (${tmpFile.length()} bytes)")
-            }
-            tmpFile.renameTo(file)
-        }
-        return dir
-    }
-
     companion object {
         private const val TAG = "SherpaModelManager"
         private const val MODEL_DIR = "sherpa_models"
@@ -129,28 +111,5 @@ class SherpaModelManager {
         private const val TOKENS = "tokens.txt"
 
         private val MODEL_FILES = listOf(ENCODER, DECODER, JOINER, TOKENS)
-
-        /** Minimum valid sizes — a truncated or redirect-page file will be smaller. */
-        private val MIN_FILE_SIZES = mapOf(
-            ENCODER to 25_000_000L,  // ~26 MB
-            DECODER to 1_000_000L,   // ~1.3 MB
-            JOINER to 200_000L,      // ~262 KB
-            TOKENS to 4_000L         // ~5 KB
-        )
-
-        /** Validate a model file: check size and magic bytes. */
-        fun isValidModelFile(file: File, name: String): Boolean {
-            val minSize = MIN_FILE_SIZES[name] ?: 0L
-            if (file.length() < minSize) return false
-            if (name.endsWith(".ort") || name.endsWith(".onnx")) {
-                // ORT files start with "ORTM", ONNX files start with backslash-b (protobuf)
-                val header = ByteArray(4)
-                file.inputStream().use { it.read(header) }
-                val magic = String(header, Charsets.US_ASCII)
-                if (name.endsWith(".ort") && magic != "ORTM") return false
-                if (name.endsWith(".onnx") && header[0] != 0x08.toByte()) return false
-            }
-            return true
-        }
     }
 }

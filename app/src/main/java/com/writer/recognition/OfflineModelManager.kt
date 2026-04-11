@@ -3,14 +3,12 @@ package com.writer.recognition
 import android.content.Context
 import android.util.Log
 import java.io.File
-import java.net.URL
 
 /**
  * Manages the Sherpa-ONNX offline [OfflineRecognizer] lifecycle.
  *
- * The offline model is larger (~180 MB) with a longer load time (~9s ONNX, ~3s ORT).
- * It provides much better accuracy (0.5% WER vs 11.2% for streaming) and is used
- * as the second pass in two-pass transcription.
+ * The offline GigaSpeech model (~68 MB ORT) provides ~12% WER on real-world audio
+ * and is used as the second pass in two-pass transcription.
  *
  * Same state machine pattern as [SherpaModelManager].
  */
@@ -23,6 +21,9 @@ class OfflineModelManager {
 
     /** Called on the loading thread when the model becomes READY. */
     var onReady: (() -> Unit)? = null
+
+    /** Status updates during download/load. Called from background thread. */
+    var onStatusUpdate: ((String) -> Unit)? = null
 
     private var recognizer: OfflineRecognizer? = null
 
@@ -52,7 +53,10 @@ class OfflineModelManager {
         state = State.LOADING
         Thread({
             try {
-                val modelDir = ensureModelFiles(context)
+                val modelDir = ModelDownloader.ensureModelFiles(
+                    File(context.filesDir, MODEL_DIR), MODEL_BASE_URL, MODEL_FILES, onStatusUpdate
+                )
+                onStatusUpdate?.invoke("Loading offline model…")
                 val config = buildConfig(modelDir)
                 recognizer = SherpaOfflineRecognizerWrapper(
                     com.k2fsa.sherpa.onnx.OfflineRecognizer(config = config)
@@ -91,29 +95,6 @@ class OfflineModelManager {
                 numThreads = 2
             )
         )
-
-    private fun ensureModelFiles(context: Context): File {
-        val dir = File(context.filesDir, MODEL_DIR).also { it.mkdirs() }
-        for (name in MODEL_FILES) {
-            val file = File(dir, name)
-            if (file.exists() && SherpaModelManager.isValidModelFile(file, name)) continue
-            if (file.exists()) {
-                Log.w(TAG, "Deleting invalid model file $name (${file.length()} bytes)")
-                file.delete()
-            }
-            Log.i(TAG, "Downloading offline model $name...")
-            val tmpFile = File(dir, "$name.tmp")
-            URL("$MODEL_BASE_URL/$name").openStream().use { input ->
-                tmpFile.outputStream().use { input.copyTo(it) }
-            }
-            if (!SherpaModelManager.isValidModelFile(tmpFile, name)) {
-                tmpFile.delete()
-                throw IllegalStateException("Downloaded $name is invalid (${tmpFile.length()} bytes)")
-            }
-            tmpFile.renameTo(file)
-        }
-        return dir
-    }
 
     companion object {
         private const val TAG = "OfflineModelManager"

@@ -1179,6 +1179,36 @@ class WritingActivity : AppCompatActivity() {
             return
         }
 
+        // For Sherpa: ensure model is ready before entering lecture mode.
+        // If not ready, show download progress and defer until the model loads.
+        if (transcriptionEngine == com.writer.ui.settings.SettingsActivity.ENGINE_SHERPA) {
+            if (sherpaModelManager.getRecognizer() == null) {
+                val state = sherpaModelManager.state
+                if (state == com.writer.recognition.SherpaModelManager.State.ERROR) {
+                    Toast.makeText(this, "Speech engine failed to load \u2014 retrying\u2026", Toast.LENGTH_SHORT).show()
+                    sherpaModelManager.release()
+                } else {
+                    Toast.makeText(this, "Preparing speech engine\u2026", Toast.LENGTH_SHORT).show()
+                }
+                sherpaModelManager.onStatusUpdate = { status ->
+                    runOnUiThread {
+                        Toast.makeText(this, status, Toast.LENGTH_SHORT).show()
+                    }
+                }
+                sherpaModelManager.onReady = {
+                    runOnUiThread {
+                        sherpaModelManager.onReady = null
+                        sherpaModelManager.onStatusUpdate = null
+                        startLectureCapture() // retry the full flow
+                    }
+                }
+                if (sherpaModelManager.state != com.writer.recognition.SherpaModelManager.State.LOADING) {
+                    sherpaModelManager.preload(this)
+                }
+                return
+            }
+        }
+
         lectureMode = true
         lectureRecordingStartMs = System.currentTimeMillis()
         audioQualityMonitor.reset()
@@ -1284,24 +1314,20 @@ class WritingActivity : AppCompatActivity() {
     }
 
     private fun startSherpaLectureRecognition() {
+        // Streaming model is guaranteed ready — startLectureCapture checks before entering lectureMode
         val recognizer = sherpaModelManager.getRecognizer()
-        if (recognizer == null) {
-            Toast.makeText(this, "Preparing speech engine\u2026", Toast.LENGTH_SHORT).show()
-            // Retry once model is ready
-            sherpaModelManager.onReady = {
-                runOnUiThread {
-                    sherpaModelManager.onReady = null
-                    if (lectureMode && audioTranscriber == null) startSherpaLectureRecognition()
-                }
+            ?: run {
+                Log.e("WritingActivity", "Sherpa model not ready in startSherpaLectureRecognition — should not happen")
+                return
             }
-            if (sherpaModelManager.state == com.writer.recognition.SherpaModelManager.State.UNLOADED) {
-                sherpaModelManager.preload(this)
-            }
-            return
-        }
 
-        // Start loading offline model for two-pass (non-blocking, ~9s)
-        if (offlineModelManager.state == com.writer.recognition.OfflineModelManager.State.UNLOADED) {
+        // Start loading offline model for two-pass (non-blocking, best-effort)
+        val offlineState = offlineModelManager.state
+        if (offlineState == com.writer.recognition.OfflineModelManager.State.UNLOADED ||
+            offlineState == com.writer.recognition.OfflineModelManager.State.ERROR) {
+            if (offlineState == com.writer.recognition.OfflineModelManager.State.ERROR) {
+                offlineModelManager.release()
+            }
             offlineModelManager.preload(this)
         }
 
