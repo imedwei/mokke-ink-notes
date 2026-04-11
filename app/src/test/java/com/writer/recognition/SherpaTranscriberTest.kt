@@ -198,6 +198,126 @@ class SherpaTranscriberTest {
         assertTrue("Should emit partials during recording", partials.isNotEmpty())
     }
 
+    // ── Timestamp alignment tests ────────────────────────────────────
+
+    /** Helper to create a SherpaTranscriber for alignTimestamps testing. */
+    private fun alignHelper(): SherpaTranscriber {
+        modelManager.loadWithFactory { FakeRecognizer() }
+        return SherpaTranscriber(
+            context = null, modelManager = modelManager,
+            pcmSourceFactory = { FakePcmSource(0) },
+            mainThreadExecutor = immediateExecutor
+        )
+    }
+
+    private fun wordInfo(text: String, startMs: Long, endMs: Long) =
+        com.writer.model.WordInfo(text = text, startMs = startMs, endMs = endMs)
+
+    @Test
+    fun `alignTimestamps with identical words preserves all timestamps`() {
+        val transcriber = alignHelper()
+        val streaming = listOf(
+            wordInfo("hello", 100, 300),
+            wordInfo("world", 400, 600)
+        )
+        val result = transcriber.alignTimestamps(streaming, "hello world", 0, 1000)
+        assertEquals(2, result.size)
+        assertEquals(100, result[0].startMs)
+        assertEquals(300, result[0].endMs)
+        assertEquals(400, result[1].startMs)
+        assertEquals(600, result[1].endMs)
+    }
+
+    @Test
+    fun `alignTimestamps with offline word correction inherits neighbor timestamps`() {
+        // Streaming: "hello worl" -> Offline fixes to: "hello world"
+        val transcriber = alignHelper()
+        val streaming = listOf(
+            wordInfo("hello", 100, 300),
+            wordInfo("worl", 400, 600)
+        )
+        val result = transcriber.alignTimestamps(streaming, "hello world", 0, 1000)
+        assertEquals(2, result.size)
+        assertEquals("hello", result[0].text)
+        assertEquals(100, result[0].startMs) // exact match
+        assertEquals("world", result[1].text)
+        // "world" doesn't match "worl", so it's interpolated between hello.endMs and segmentEnd
+        assertTrue(result[1].startMs >= 300)
+    }
+
+    @Test
+    fun `alignTimestamps with extra offline word interpolates`() {
+        // Streaming: "hello world" -> Offline: "hello beautiful world"
+        val transcriber = alignHelper()
+        val streaming = listOf(
+            wordInfo("hello", 100, 300),
+            wordInfo("world", 600, 800)
+        )
+        val result = transcriber.alignTimestamps(streaming, "hello beautiful world", 0, 1000)
+        assertEquals(3, result.size)
+        assertEquals("hello", result[0].text)
+        assertEquals(100, result[0].startMs)
+        assertEquals("beautiful", result[1].text)
+        // "beautiful" is between hello (endMs=300) and world (startMs=600)
+        assertTrue(result[1].startMs in 300..600)
+        assertEquals("world", result[2].text)
+        assertEquals(600, result[2].startMs)
+    }
+
+    @Test
+    fun `alignTimestamps with fewer offline words preserves matched timestamps`() {
+        // Streaming: "the hello world" -> Offline drops "the": "hello world"
+        val transcriber = alignHelper()
+        val streaming = listOf(
+            wordInfo("the", 100, 200),
+            wordInfo("hello", 300, 500),
+            wordInfo("world", 600, 800)
+        )
+        val result = transcriber.alignTimestamps(streaming, "hello world", 0, 1000)
+        assertEquals(2, result.size)
+        assertEquals("hello", result[0].text)
+        assertEquals(300, result[0].startMs)
+        assertEquals("world", result[1].text)
+        assertEquals(600, result[1].startMs)
+    }
+
+    @Test
+    fun `alignTimestamps with empty streaming words distributes evenly`() {
+        val transcriber = alignHelper()
+        val result = transcriber.alignTimestamps(emptyList(), "hello world", 0, 1000)
+        assertEquals(2, result.size)
+        assertEquals(0, result[0].startMs)
+        assertEquals(500, result[0].endMs)
+        assertEquals(500, result[1].startMs)
+        assertEquals(1000, result[1].endMs)
+    }
+
+    @Test
+    fun `alignTimestamps with empty offline text returns empty`() {
+        val transcriber = alignHelper()
+        val streaming = listOf(wordInfo("hello", 100, 300))
+        val result = transcriber.alignTimestamps(streaming, "", 0, 1000)
+        assertTrue(result.isEmpty())
+    }
+
+    @Test
+    fun `alignTimestamps with completely different words interpolates all`() {
+        val transcriber = alignHelper()
+        val streaming = listOf(
+            wordInfo("alpha", 100, 300),
+            wordInfo("beta", 400, 600)
+        )
+        val result = transcriber.alignTimestamps(streaming, "gamma delta epsilon", 0, 900)
+        assertEquals(3, result.size)
+        // No matches — all interpolated evenly across 0-900
+        assertEquals(0, result[0].startMs)
+        assertEquals(300, result[0].endMs)
+        assertEquals(300, result[1].startMs)
+        assertEquals(600, result[1].endMs)
+        assertEquals(600, result[2].startMs)
+        assertEquals(900, result[2].endMs)
+    }
+
     // ── Two-pass tests ──────────────────────────────────────────────
 
     /** Fake offline recognizer that returns improved text. */

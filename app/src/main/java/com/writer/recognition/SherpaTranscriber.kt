@@ -173,33 +173,28 @@ class SherpaTranscriber(
                     if (result.text.isNotBlank()) {
                         val offlineRec = offlineModelManager?.getRecognizer()
                         if (offlineRec != null) {
+                            // Get streaming timestamps before running offline
+                            val streamingWords = SherpaTokenMerger.mergeTokens(
+                                result.tokens, result.timestamps, audioOffsetSec
+                            )
+                            val segmentStartMs = (audioOffsetSec * 1000).toLong()
+                            val segmentEndMs = segmentStartMs + (segmentSamples * 1000L / SAMPLE_RATE)
+
                             // Two-pass: run offline second pass on buffered segment
                             val segmentPcm = flattenPcmBuffer(pcmSegmentBuffer, OVERLAP_SAMPLES)
                             val offlineResult = offlineRec.decode(segmentPcm, SAMPLE_RATE)
                             if (offlineResult.text.isNotBlank()) {
-                                val hasTokens = offlineResult.tokens.isNotEmpty() && offlineResult.timestamps.isNotEmpty()
-                                val segmentStartMs = (audioOffsetSec * 1000).toLong()
-                                val segmentEndMs = segmentStartMs + (segmentSamples * 1000L / SAMPLE_RATE)
-                                val words = if (hasTokens) {
-                                    SherpaTokenMerger.mergeTokens(offlineResult.tokens, offlineResult.timestamps, audioOffsetSec)
-                                } else {
-                                    // Offline model doesn't return per-token timestamps.
-                                    // Distribute evenly across the segment duration.
-                                    val rawWords = offlineResult.text.split(" ").filter { it.isNotBlank() }
-                                    val durationMs = segmentEndMs - segmentStartMs
-                                    rawWords.mapIndexed { i, word ->
-                                        val wordStart = segmentStartMs + (durationMs * i / rawWords.size.coerceAtLeast(1))
-                                        val wordEnd = segmentStartMs + (durationMs * (i + 1) / rawWords.size.coerceAtLeast(1))
-                                        com.writer.model.WordInfo(text = word.lowercase(), startMs = wordStart, endMs = wordEnd)
-                                    }
-                                }
+                                // Align offline words to streaming timestamps via LCS
+                                val words = alignTimestamps(
+                                    streamingWords, offlineResult.text, segmentStartMs, segmentEndMs
+                                )
                                 val text = normalizeCase(words.joinToString(" ") { it.text })
-                                Log.i(tag, "TwoPass (offset=%.2fs, tokens=%d, timestamps=%d, hasTokens=%b): \"%s\" -> \"%s\"".format(
-                                    audioOffsetSec, offlineResult.tokens.size, offlineResult.timestamps.size,
-                                    hasTokens, result.text.take(40), text.take(60)
+                                val matched = words.count { w -> streamingWords.any { it.startMs == w.startMs && it.text.lowercase() == w.text } }
+                                Log.i(tag, "TwoPass (offset=%.2fs): %d streaming -> %d offline words, %d matched".format(
+                                    audioOffsetSec, streamingWords.size, words.size, matched
                                 ))
                                 if (words.isNotEmpty()) {
-                                    Log.i(tag, "  word timestamps: ${words.take(3).map { "${it.text}@${it.startMs}ms" }}")
+                                    Log.i(tag, "  timestamps: ${words.take(3).map { "${it.text}@${it.startMs}ms" }}")
                                 }
                                 pendingFinals.add(PendingFinal(text, words))
                                 postMain { deliverPendingFinals() }
@@ -262,23 +257,20 @@ class SherpaTranscriber(
             if (result.text.isNotBlank()) {
                 val offlineRec = offlineModelManager?.getRecognizer()
                 if (offlineRec != null && pcmSegmentBuffer.isNotEmpty()) {
+                    // Get streaming timestamps before running offline
+                    val streamingWords = SherpaTokenMerger.mergeTokens(
+                        result.tokens, result.timestamps, audioOffsetSec
+                    )
+                    val segmentStartMs = (audioOffsetSec * 1000).toLong()
+
                     // Two-pass flush: offline second pass on remaining audio
                     val segmentPcm = flattenPcmBuffer(pcmSegmentBuffer, 0)
+                    val segmentEndMs = segmentStartMs + (segmentPcm.size * 1000L / SAMPLE_RATE)
                     val offlineResult = offlineRec.decode(segmentPcm, SAMPLE_RATE)
                     if (offlineResult.text.isNotBlank()) {
-                        val segmentStartMs = (audioOffsetSec * 1000).toLong()
-                        val segmentEndMs = segmentStartMs + (segmentPcm.size * 1000L / SAMPLE_RATE)
-                        val words = if (offlineResult.tokens.isNotEmpty() && offlineResult.timestamps.isNotEmpty()) {
-                            SherpaTokenMerger.mergeTokens(offlineResult.tokens, offlineResult.timestamps, audioOffsetSec)
-                        } else {
-                            val rawWords = offlineResult.text.split(" ").filter { it.isNotBlank() }
-                            val durationMs = segmentEndMs - segmentStartMs
-                            rawWords.mapIndexed { i, word ->
-                                val wordStart = segmentStartMs + (durationMs * i / rawWords.size.coerceAtLeast(1))
-                                val wordEnd = segmentStartMs + (durationMs * (i + 1) / rawWords.size.coerceAtLeast(1))
-                                com.writer.model.WordInfo(text = word.lowercase(), startMs = wordStart, endMs = wordEnd)
-                            }
-                        }
+                        val words = alignTimestamps(
+                            streamingWords, offlineResult.text, segmentStartMs, segmentEndMs
+                        )
                         val text = normalizeCase(words.joinToString(" ") { it.text })
                         Log.i(tag, "TwoPass flush (offset=%.2fs): \"%s\"".format(audioOffsetSec, text.take(60)))
                         onFinalResultWithWords?.invoke(text, words)
@@ -382,6 +374,104 @@ class SherpaTranscriber(
 
     private fun postMain(action: () -> Unit) {
         mainThreadExecutor(Runnable { action() })
+    }
+
+    /**
+     * Align offline words to streaming words' timestamps.
+     *
+     * Uses longest common subsequence (LCS) to find matching words between
+     * the streaming and offline results. Matched words inherit the streaming
+     * timestamp. Unmatched words get interpolated timestamps from their neighbors.
+     */
+    internal fun alignTimestamps(
+        streamingWords: List<com.writer.model.WordInfo>,
+        offlineText: String,
+        segmentStartMs: Long,
+        segmentEndMs: Long
+    ): List<com.writer.model.WordInfo> {
+        val offlineWords = offlineText.split(" ").filter { it.isNotBlank() }.map { it.lowercase() }
+        if (offlineWords.isEmpty()) return emptyList()
+        if (streamingWords.isEmpty()) {
+            // No streaming timestamps — distribute evenly
+            val durationMs = segmentEndMs - segmentStartMs
+            return offlineWords.mapIndexed { i, word ->
+                val start = segmentStartMs + (durationMs * i / offlineWords.size)
+                val end = segmentStartMs + (durationMs * (i + 1) / offlineWords.size)
+                com.writer.model.WordInfo(text = word, startMs = start, endMs = end)
+            }
+        }
+
+        val streamWords = streamingWords.map { it.text.lowercase() }
+
+        // Build LCS table
+        val m = streamWords.size
+        val n = offlineWords.size
+        val dp = Array(m + 1) { IntArray(n + 1) }
+        for (i in 1..m) for (j in 1..n) {
+            dp[i][j] = if (streamWords[i - 1] == offlineWords[j - 1])
+                dp[i - 1][j - 1] + 1
+            else maxOf(dp[i - 1][j], dp[i][j - 1])
+        }
+
+        // Backtrack to find matched pairs: offlineIndex -> streamingIndex
+        val matchMap = mutableMapOf<Int, Int>()
+        var i = m; var j = n
+        while (i > 0 && j > 0) {
+            if (streamWords[i - 1] == offlineWords[j - 1]) {
+                matchMap[j - 1] = i - 1
+                i--; j--
+            } else if (dp[i - 1][j] > dp[i][j - 1]) {
+                i--
+            } else {
+                j--
+            }
+        }
+
+        // Build result: matched words get streaming timestamps, others interpolate
+        val result = mutableListOf<com.writer.model.WordInfo>()
+        for (idx in offlineWords.indices) {
+            val streamIdx = matchMap[idx]
+            if (streamIdx != null) {
+                val sw = streamingWords[streamIdx]
+                result.add(com.writer.model.WordInfo(
+                    text = offlineWords[idx], confidence = sw.confidence,
+                    startMs = sw.startMs, endMs = sw.endMs
+                ))
+            } else {
+                // Placeholder — will be interpolated below
+                result.add(com.writer.model.WordInfo(
+                    text = offlineWords[idx], startMs = -1, endMs = -1
+                ))
+            }
+        }
+
+        // Interpolate unmatched words from their nearest matched neighbors
+        for (idx in result.indices) {
+            if (result[idx].startMs >= 0) continue
+            // Find previous matched word
+            var prevMs = segmentStartMs
+            for (p in idx - 1 downTo 0) {
+                if (result[p].startMs >= 0) { prevMs = result[p].endMs; break }
+            }
+            // Find next matched word
+            var nextMs = segmentEndMs
+            for (nx in idx + 1 until result.size) {
+                if (result[nx].startMs >= 0) { nextMs = result[nx].startMs; break }
+            }
+            // Count unmatched words in this gap (including this one)
+            var gapStart = idx
+            while (gapStart > 0 && result[gapStart - 1].startMs < 0) gapStart--
+            var gapEnd = idx
+            while (gapEnd < result.size - 1 && result[gapEnd + 1].startMs < 0) gapEnd++
+            val gapSize = gapEnd - gapStart + 1
+            val posInGap = idx - gapStart
+            val gapDuration = nextMs - prevMs
+            val wordStart = prevMs + (gapDuration * posInGap / gapSize)
+            val wordEnd = prevMs + (gapDuration * (posInGap + 1) / gapSize)
+            result[idx] = result[idx].copy(startMs = wordStart, endMs = wordEnd)
+        }
+
+        return result
     }
 
     /**
