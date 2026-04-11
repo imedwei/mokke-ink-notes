@@ -17,16 +17,16 @@ Cloud transcription services (Google Cloud Speech, Deepgram, AssemblyAI) would b
 I tried six approaches. Here is where I landed:
 
 ```
-Engine                    Real-time   Audio   Per-word   Model    WER
-───────────────────────────────────────────────────────────────────────
-SpeechRecognizer          ✓           ✗       ✗          0 MB      —
-whisper.cpp               ✗ (5.98x)  ✓       ✓          31 MB   20.7%
-Vosk                      ✓ (0.22x)  ✓       ✓          68 MB   30.6%
-Sherpa-ONNX (streaming)   ✓ (0.14x)  ✓       ✓          71 MB   26.0%
-Sherpa two-pass           ✓ (0.19x)  ✓       ✓         139 MB   12.3%
+Engine                          Real-time   Audio   Per-word   Size    Earn-22   TED   Avg WER
+──────────────────────────────────────────────────────────────────────────────────────────────
+SpeechRecognizer                ✓           ✗       ✗          0 MB      —       —       —
+whisper.cpp (tiny.en q5_1)      ✗ (5.98x)  ✓       ✓         31 MB   16.0%   25.4%   20.7%
+Vosk (small-en-us-0.15)         ✓ (0.22x)  ✓       ✓         68 MB   37.3%   23.8%   30.6%
+Sherpa streaming (ORT)          ✓ (0.14x)  ✓       ✓         71 MB   20.0%   32.0%   26.0%
+Sherpa two-pass (ORT+GigaS)    ✓ (0.19x)  ✓       ✓        139 MB    6.7%   18.0%   12.3%
 ```
 
-WER measured on unseen evaluation data: [Earnings-22](https://github.com/revdotcom/speech-datasets) financial conference calls + [TED-LIUM 3](https://huggingface.co/datasets/distil-whisper/tedlium-long-form) talks. None of the models were trained on this data.
+WER measured on unseen evaluation data: [Earnings-22](https://github.com/revdotcom/speech-datasets) financial conference calls (Earn-22) and [TED-LIUM 3](https://huggingface.co/datasets/distil-whisper/tedlium-long-form) talks (TED). None of the models were trained on this data. The two-pass engine uses the streaming ORT model (71 MB) for real-time partials and the GigaSpeech offline ORT model (68 MB) for second-pass re-transcription at each endpoint. Vosk performs best on TED talks (clear academic speech), while Sherpa and Whisper handle noisy conference audio better.
 
 **Device:** Boox Palma 2 Pro, Qualcomm SM6350 (Snapdragon 690), Android 15 (API 35), Kaleido 3 color e-ink display.
 
@@ -182,16 +182,16 @@ After shipping with Vosk, I benchmarked [Sherpa-ONNX](https://github.com/k2-fsa/
 Measured via `TranscriptionBenchmarkTest` on the Palma 2 Pro. Evaluation data: Earnings-22 conference calls + TED-LIUM 3 talks (unseen by all engines). Each engine ran 3 times; RTF is the median. WER computed via word-level Levenshtein distance.
 
 ```
-Engine                 Load      Size     RTF      WER
-─────────────────────────────────────────────────────────
-Sherpa-ONNX (ORT)      2,281ms   71 MB    0.14   26.0%
-Vosk (small-en-us)       848ms   68 MB    0.22   30.6%
-whisper.cpp (q5_1)       527ms   31 MB    5.98   20.7%
+Engine                       Load      Size     RTF    Earn-22   TED    Avg WER
+──────────────────────────────────────────────────────────────────────────────────
+Sherpa streaming (ORT)       2,281ms   71 MB    0.14    20.0%  32.0%    26.0%
+Vosk (small-en-us-0.15)       848ms   68 MB    0.22    37.3%  23.8%    30.6%
+whisper.cpp (tiny.en q5_1)     527ms   31 MB    5.98    16.0%  25.4%    20.7%
 ```
 
 Source: `TranscriptionBenchmarkTest#benchmark_all_engines_unseen`
 
-Sherpa's RTF is stable across runs. Both Sherpa and Vosk are well within real-time on this SoC. WER on real-world audio is higher than LibriSpeech benchmarks suggest (Sherpa 26% vs 11%, Vosk 31% vs 11%) — a reminder that clean-read-speech benchmarks don't predict field accuracy.
+Sherpa's RTF is stable across runs. Both Sherpa and Vosk are well within real-time on this SoC. The per-dataset split reveals different strengths: Vosk handles TED talks (clear academic speech) better than Sherpa (23.8% vs 32.0%), but struggles on conference calls with multiple speakers and teleconference audio quality (37.3% vs 20.0%). WER on real-world audio is significantly higher than LibriSpeech benchmarks suggested — a reminder that clean-read-speech benchmarks don't predict field accuracy.
 
 ### The API
 
