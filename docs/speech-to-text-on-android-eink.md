@@ -175,23 +175,7 @@ A foreground service (`AudioRecordingService` with `foregroundServiceType="micro
 
 ## Sherpa-ONNX: Twice as Fast as Vosk
 
-After shipping with Vosk, I benchmarked [Sherpa-ONNX](https://github.com/k2-fsa/sherpa-onnx) (from the next-gen Kaldi project). The results were striking: Sherpa processes audio at 0.14x realtime — nearly twice as fast as Vosk's 0.22x — with better WER on real-world audio.
-
-### Benchmark results
-
-Measured via `TranscriptionBenchmarkTest` on the Palma 2 Pro. Evaluation data: Earnings-22 conference calls + TED-LIUM 3 talks (unseen by all engines). Each engine ran 3 times; RTF is the median. WER computed via word-level Levenshtein distance.
-
-```
-Engine                       Load      Size     RTF    Earn-22   TED    Avg WER
-──────────────────────────────────────────────────────────────────────────────────
-Sherpa streaming (ORT)       2,281ms   71 MB    0.14    20.0%  32.0%    26.0%
-Vosk (small-en-us-0.15)       848ms   68 MB    0.22    37.3%  23.8%    30.6%
-whisper.cpp (tiny.en q5_1)     527ms   31 MB    5.98    16.0%  25.4%    20.7%
-```
-
-Source: `TranscriptionBenchmarkTest#benchmark_all_engines_unseen`
-
-Sherpa's RTF is stable across runs. Both Sherpa and Vosk are well within real-time on this SoC. The per-dataset split reveals different strengths: Vosk handles TED talks (clear academic speech) better than Sherpa (23.8% vs 32.0%), but struggles on conference calls with multiple speakers and teleconference audio quality (37.3% vs 20.0%). WER on real-world audio is significantly higher than LibriSpeech benchmarks suggested — a reminder that clean-read-speech benchmarks don't predict field accuracy.
+After shipping with Vosk, I benchmarked [Sherpa-ONNX](https://github.com/k2-fsa/sherpa-onnx) (from the next-gen Kaldi project). Sherpa processes audio at 0.14x realtime — nearly twice as fast as Vosk's 0.22x — with better WER on conference calls (see the comparison table above for full results).
 
 ### The API
 
