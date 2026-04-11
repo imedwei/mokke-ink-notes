@@ -17,16 +17,16 @@ Cloud transcription services (Google Cloud Speech, Deepgram, AssemblyAI) would b
 I tried six approaches. Here is where I landed:
 
 ```
-Engine                          Real-time   Audio   Per-word   Size    Earn-22   TED   Avg WER
-──────────────────────────────────────────────────────────────────────────────────────────────
-SpeechRecognizer                ✓           ✗       ✗          0 MB      —       —       —
-whisper.cpp (tiny.en q5_1)      ✗ (5.98x)  ✓       ✓         31 MB   16.0%   25.4%   20.7%
-Vosk (small-en-us-0.15)         ✓ (0.22x)  ✓       ✓         68 MB   37.3%   23.8%   30.6%
-Sherpa streaming (ORT)          ✓ (0.14x)  ✓       ✓         71 MB   20.0%   32.0%   26.0%
-Sherpa two-pass (ORT+GigaS)    ✓ (0.19x)  ✓       ✓        139 MB    6.7%   18.0%   12.3%
+Engine                                Real-time   Audio   Per-word   Size    Earn-22   TED   Avg WER
+─────────────────────────────────────────────────────────────────────────────────────────────────────
+SpeechRecognizer                      ✓           ✗       ✗          0 MB      —       —       —
+whisper.cpp (tiny.en q5_1)            ✗ (5.98x)  ✓       ✓          31 MB   16.0%   25.4%   20.7%
+Vosk (small-en-us-0.15)               ✓ (0.22x)  ✓       ✓          68 MB   37.3%   23.8%   30.6%
+Sherpa zipformer streaming (ORT)      ✓ (0.14x)  ✓       ✓          71 MB   20.0%   32.0%   26.0%
+Sherpa two-pass (stream+GigaSpeech)   ✓ (0.19x)  ✓       ✓         139 MB    6.7%   18.0%   12.3%
 ```
 
-WER measured on unseen evaluation data: [Earnings-22](https://github.com/revdotcom/speech-datasets) financial conference calls (Earn-22) and [TED-LIUM 3](https://huggingface.co/datasets/distil-whisper/tedlium-long-form) talks (TED). None of the models were trained on this data. The two-pass engine uses the streaming ORT model (71 MB) for real-time partials and the GigaSpeech offline ORT model (68 MB) for second-pass re-transcription at each endpoint. Vosk performs best on TED talks (clear academic speech), while Sherpa and Whisper handle noisy conference audio better.
+WER measured on unseen evaluation data: [Earnings-22](https://github.com/revdotcom/speech-datasets) financial conference calls (Earn-22) and [TED-LIUM 3](https://huggingface.co/datasets/distil-whisper/tedlium-long-form) talks (TED). None of the models were trained on this data. The two-pass engine uses the streaming zipformer ORT model (71 MB) for real-time partials and the GigaSpeech offline zipformer ORT model (68 MB) for second-pass re-transcription at each endpoint. Vosk performs best on TED talks (clear academic speech), while Sherpa and Whisper handle noisy conference audio better.
 
 **Device:** Boox Palma 2 Pro, Qualcomm SM6350 (Snapdragon 690), Android 15 (API 35), Kaleido 3 color e-ink display.
 
@@ -175,7 +175,7 @@ A foreground service (`AudioRecordingService` with `foregroundServiceType="micro
 
 ## Sherpa-ONNX: Twice as Fast as Vosk
 
-After shipping with Vosk, I benchmarked [Sherpa-ONNX](https://github.com/k2-fsa/sherpa-onnx) (from the next-gen Kaldi project). Sherpa processes audio at 0.14x realtime — nearly twice as fast as Vosk's 0.22x — with better WER on conference calls (see the comparison table above for full results).
+After shipping with Vosk, I benchmarked [Sherpa-ONNX](https://github.com/k2-fsa/sherpa-onnx) (from the next-gen Kaldi project). The streaming zipformer processes audio at 0.14x realtime — nearly twice as fast as Vosk's 0.22x — with better WER on conference calls (see the comparison table above for full results).
 
 ### The API
 
@@ -357,25 +357,28 @@ My first offline benchmark used `sherpa-onnx-zipformer-en-2023-04-01`, an offlin
 
 To get honest numbers, I benchmarked the streaming model and four offline models on data **none of them were trained on**: [Earnings-22](https://github.com/revdotcom/speech-datasets) (financial conference calls with diverse accents) and [TED-LIUM 3](https://huggingface.co/datasets/distil-whisper/tedlium-long-form) (TED talks).
 
+All models use [ORT format](https://onnxruntime.ai/docs/reference/ort-format-models.html) (pre-baked graph optimizations) for consistent load-time comparison. ORT conversion is lossless — identical WER and RTF, but ~2-4x faster model init.
+
 ```
-Model                       Load      Size   Native    RTF    Earn-22   TED    Avg WER
-────────────────────────────────────────────────────────────────────────────────────────
-Streaming ORT (LS)          2.3s     71 MB   +226 MB   0.14    20.0%   32.0%    26.0%
-─ offline models ──────────────────────────────────────────────────────────────────────
-Zipformer 2023-04-01 (LS)   8.8s   180 MB   +340 MB   0.08    13.3%   14.8%    14.0%
-Zipformer 2023-06-26 (LS)  10.9s    67 MB   +226 MB   0.06    18.7%   30.3%    24.5%
-Multidataset (LS+GS+CV)     7.6s   123 MB   +207 MB   0.08     8.0%   16.4%    12.2%
-GigaSpeech (YouTube/pod)   13.6s    68 MB   +233 MB   0.06     6.7%   18.0%    12.3%
-Parakeet TDT 0.6B             —    631 MB  +1645 MB     —       —       —       OOM
+Model                              Load    Size   Native    RTF   Earn-22   TED   Avg WER  Timestamps
+──────────────────────────────────────────────────────────────────────────────────────────────────────
+Zipformer streaming (LS)           2.3s    71 MB  +226 MB   0.14   20.0%  32.0%   26.0%      Yes
+─ offline models ─────────────────────────────────────────────────────────────────────────────────────
+Zipformer 2023-04-01 (LS)         5.5s   181 MB  +200 MB   0.08   13.3%  14.8%   14.0%       No
+Zipformer 2023-06-26 (LS)         3.4s    68 MB  +226 MB   0.06   18.7%  30.3%   24.5%       No
+Multidataset (LS+GS+CV)           3.9s   123 MB  +200 MB   0.08    8.0%  16.4%   12.2%       No
+GigaSpeech (YouTube/podcasts)     3.7s    68 MB  +216 MB   0.06    6.7%  18.0%   12.3%       No
+Paraformer (Alibaba)              4.1s   219 MB  +490 MB   0.08    8.0%  19.7%   13.8%       No
+Parakeet TDT 0.6B (NeMo)           —     631 MB +1645 MB     —      —      —      OOM        —
 ```
 
 Source: `TranscriptionBenchmarkTest#benchmark_offline_models`, `benchmark_all_engines_unseen`
 
-Training data key: LS = LibriSpeech (960h audiobooks), GS = GigaSpeech (10Kh YouTube/podcasts), CV = CommonVoice. Native = native memory delta when model is loaded (measured via `Debug.getNativeHeapAllocatedSize()`).
+Training data key: LS = LibriSpeech (960h audiobooks), GS = GigaSpeech (10Kh YouTube/podcasts), CV = CommonVoice. Native = native memory delta when model is loaded (measured via `Debug.getNativeHeapAllocatedSize()`). Timestamps = whether `OfflineRecognizerResult.getTokens()` and `getTimestamps()` return non-empty arrays (sherpa-onnx AAR v6.25.12).
 
-The Parakeet TDT 0.6B (NVIDIA's SOTA model, 120Kh training data) crashed the Palma 2 Pro — its 1.6 GB native memory footprint is too much for a 6 GB device.
+The Parakeet TDT 0.6B (NVIDIA's SOTA model, 120Kh training data) crashed the Palma 2 Pro — its 1.6 GB native memory footprint is too much for a 6 GB device. Paraformer was expected to return per-word timestamps via its CIF alignment mechanism, but the sherpa-onnx AAR does not populate them.
 
-**GigaSpeech and Multidataset tied at ~12% WER** on unseen data — roughly half the streaming model's error rate. GigaSpeech won on conference calls (6.7% — its YouTube/podcast training domain is closer to teleconference audio). At 68 MB on disk it's the smallest offline model, and I converted it to [ORT format](https://onnxruntime.ai/docs/reference/ort-format-models.html) for faster loading.
+**GigaSpeech and Multidataset tied at ~12% WER** on unseen data — roughly half the streaming model's error rate. GigaSpeech won on conference calls (6.7% — its YouTube/podcast training domain is closer to teleconference audio). At 68 MB on disk it's the smallest offline model, with the biggest ORT speedup (13.6s ONNX → 3.7s ORT, 3.7x).
 
 ### Why offline is so much better
 
@@ -393,15 +396,16 @@ This is better than the whole-recording re-transcription I originally planned. I
 
 I validated the two-pass approach on the Palma 2 Pro using LibriSpeech test data. The per-endpoint segmentation introduces zero WER degradation — every utterance matches the offline-only result. RTF overhead is small: 0.19 vs 0.16 for streaming-only.
 
-The production configuration uses the [GigaSpeech zipformer](https://huggingface.co/csukuangfj/sherpa-onnx-zipformer-gigaspeech-2023-12-12) (trained on 10,000 hours of YouTube and podcast audio) converted to ORT format. On unseen evaluation data:
+The production configuration uses the [GigaSpeech zipformer](https://huggingface.co/imedemi/sherpa-onnx-ort-zipformer-gigaspeech-2023-12-12) (trained on 10,000 hours of YouTube and podcast audio) in ORT format. On unseen evaluation data:
 
 - **6.7% WER** on financial conference calls (Earnings-22)
 - **18.0% WER** on TED talks (TED-LIUM 3)
-- **68 MB** on disk (vs 180 MB for the LibriSpeech-trained model)
+- **68 MB** on disk (vs 181 MB for the LibriSpeech-trained model)
+- **3.7s** model load time (ORT format, down from 13.6s with ONNX)
 - **0.06x RTF** — 10 seconds of audio transcribed in 0.6 seconds
-- **+233 MB** native memory during use
+- **+216 MB** native memory during use
 
-The tradeoff: 68 MB additional model storage, ~5 seconds load time (ORT), and ~233 MB native memory for the offline model. On a 6 GB device this is feasible if the offline model is loaded on-demand and released after use.
+The tradeoff: 68 MB additional model storage, ~4 seconds load time (ORT), and ~216 MB native memory for the offline model. On a 6 GB device this is feasible — the offline model loads on-demand when recording starts and is ready before the first endpoint (~4s of speech).
 
 ---
 
@@ -457,9 +461,11 @@ What's still unsolved: audio recording in `SpeechRecognizer` mode. If Google ope
 - [Sherpa-ONNX streaming zipformer model](https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-2023-06-26)
 - [Sherpa-ONNX ORT streaming zipformer model](https://huggingface.co/w11wo/sherpa-onnx-ort-streaming-zipformer-en-2023-06-26)
 - [Sherpa-ONNX two-pass Android example](https://github.com/k2-fsa/sherpa-onnx/tree/master/android/SherpaOnnx2Pass)
-- [Sherpa-ONNX GigaSpeech offline model](https://huggingface.co/csukuangfj/sherpa-onnx-zipformer-gigaspeech-2023-12-12)
 - [Sherpa-ONNX GigaSpeech ORT model](https://huggingface.co/imedemi/sherpa-onnx-ort-zipformer-gigaspeech-2023-12-12)
-- [Sherpa-ONNX offline zipformer model (LibriSpeech)](https://huggingface.co/csukuangfj/sherpa-onnx-zipformer-en-2023-04-01)
+- [Sherpa-ONNX Multidataset ORT model](https://huggingface.co/imedemi/sherpa-onnx-ort-multidataset-transducer-2023-05-04)
+- [Sherpa-ONNX Paraformer ORT model](https://huggingface.co/imedemi/sherpa-onnx-ort-paraformer-en-2024-03-09)
+- [Sherpa-ONNX offline zipformer 2023-04-01 ORT model](https://huggingface.co/imedemi/sherpa-onnx-ort-zipformer-en-2023-04-01)
+- [Sherpa-ONNX offline zipformer 2023-06-26 ORT model](https://huggingface.co/imedemi/sherpa-onnx-ort-zipformer-en-2023-06-26)
 - [Earnings-22 benchmark dataset](https://github.com/revdotcom/speech-datasets)
 - [TED-LIUM 3 (distil-whisper long-form)](https://huggingface.co/datasets/distil-whisper/tedlium-long-form)
 - [FastEmit: Low-latency Streaming ASR](https://arxiv.org/abs/2010.11148)
