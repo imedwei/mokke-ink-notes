@@ -1076,6 +1076,34 @@ class TranscriptionBenchmarkTest {
         printComparison(results)
     }
 
+    /**
+     * Benchmark all engines on unseen evaluation data (Earnings-22 + TED-LIUM).
+     * Gives fair cross-domain WER comparison — no model has seen this data in training.
+     */
+    @Test
+    fun benchmark_all_engines_unseen() {
+        val utts = evalUtterances
+        val totalSec = utts.sumOf { it.durationSec.toDouble() }
+        Log.i(TAG, "All-engine unseen benchmark (${utts.size} utterances, ${"%.1f".format(totalSec)}s)")
+        Log.i(TAG, "Evaluation data: Earnings-22 + TED-LIUM 3 (unseen by all models)")
+
+        val results = mutableListOf<EngineResult>()
+        for ((name, fn) in listOf(
+            "Vosk" to { benchmarkVosk(utts) },
+            "Sherpa ORT" to { benchmarkSherpaOrt(utts) },
+            "Whisper" to { benchmarkWhisper(utts) }
+        )) {
+            try {
+                results.add(fn())
+            } catch (e: Exception) {
+                Log.e(TAG, "$name benchmark failed", e)
+            }
+        }
+
+        assertTrue("At least one engine must complete", results.isNotEmpty())
+        printComparison(results)
+    }
+
     /** Compare ONNX vs ORT model loading for Sherpa. */
     @Test
     fun benchmark_sherpa_onnx_vs_ort() {

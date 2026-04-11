@@ -19,14 +19,14 @@ I tried six approaches. Here is where I landed:
 ```
 Engine                    Real-time   Audio   Per-word   Model    WER
 ───────────────────────────────────────────────────────────────────────
-SpeechRecognizer          ✓           ✗       ✗          0 MB     —
-whisper.cpp               ✗ (10.4x)  ✓       ✓          31 MB    3.7%
-Vosk                      ✓ (0.27x)  ✓       ✓          40 MB   11.1%
-Sherpa-ONNX (streaming)   ✓ (0.14x)  ✓       ✓          39 MB   11.2%
-Sherpa-ONNX (offline)     ✗ (0.06x)  ✓       ✓         180 MB    0.5%
-Sherpa two-pass           ✓ (0.19x)  ✓       ✓         251 MB    0.5%
-Sherpa Paraformer          ✗ (0.06x)  ✓       ✓         219 MB    2.5%
+SpeechRecognizer          ✓           ✗       ✗          0 MB      —
+whisper.cpp               ✗ (5.98x)  ✓       ✓          31 MB   20.7%
+Vosk                      ✓ (0.22x)  ✓       ✓          68 MB   30.6%
+Sherpa-ONNX (streaming)   ✓ (0.14x)  ✓       ✓          71 MB   26.0%
+Sherpa two-pass           ✓ (0.19x)  ✓       ✓         139 MB   12.3%
 ```
+
+WER measured on unseen evaluation data: [Earnings-22](https://github.com/revdotcom/speech-datasets) financial conference calls + [TED-LIUM 3](https://huggingface.co/datasets/distil-whisper/tedlium-long-form) talks. None of the models were trained on this data.
 
 **Device:** Boox Palma 2 Pro, Qualcomm SM6350 (Snapdragon 690), Android 15 (API 35), Kaleido 3 color e-ink display.
 
@@ -107,25 +107,25 @@ params.token_timestamps = true; // per-word confidence and timestamps
 
 ### Accuracy on real speech
 
-The synthetic sine wave benchmarks above measure pure inference cost. To measure accuracy, I ran a comparative benchmark on 12 LibriSpeech test-clean utterances (4 speakers, 97.8 seconds of real speech) using word error rate (WER) calculated via word-level Levenshtein distance:
+The synthetic sine wave benchmarks above measure pure inference cost. To measure accuracy, I ran a comparative benchmark on unseen evaluation data — [Earnings-22](https://github.com/revdotcom/speech-datasets) conference calls and [TED-LIUM 3](https://huggingface.co/datasets/distil-whisper/tedlium-long-form) talks — that none of the engines were trained on:
 
 ```
 Engine                WER     RTF (median of 3)
 ─────────────────────────────────────────────────
-whisper.cpp (q5_1)    3.7%    10.4x
-Vosk                 11.1%     0.27x
-Sherpa-ONNX (int8)   11.2%     0.14x
+whisper.cpp (q5_1)   20.7%     5.98x
+Vosk                 30.6%     0.22x
+Sherpa-ONNX (int8)   26.0%     0.14x
 ```
 
-Source: `app/src/androidTest/java/com/writer/perf/TranscriptionBenchmarkTest.kt`
+Source: `TranscriptionBenchmarkTest#benchmark_all_engines_unseen`
 
-The RTF on real speech (10.4x for Whisper with the q5_1 model at 2 threads) is higher than the synthetic benchmark (5.6x) because Whisper's decoder does more work on real speech tokens than on silence. The f16 model at 4 threads would be faster, but still well above 1.0x realtime.
+Earlier benchmarks on LibriSpeech test-clean showed much lower WER (Whisper 3.7%, Vosk 11.1%, Sherpa 11.2%), but LibriSpeech is clean read audiobook speech — the same domain Whisper and the Sherpa streaming model were trained on. The numbers above reflect realistic accuracy on teleconference audio and TED talks.
 
 ### Verdict on Whisper
 
-At 10.4x realtime on real speech, Whisper is not viable for interactive use on the Snapdragon 690. I implemented it as an opt-in "higher accuracy" mode: the user records first, then waits for transcription with a progress bar. The progress bar self-calibrates over multiple uses by tracking the actual realtime factor via exponential moving average.
+At 6x realtime on real speech, Whisper is not viable for interactive use on the Snapdragon 690. I implemented it as an opt-in "higher accuracy" mode: the user records first, then waits for transcription with a progress bar. The progress bar self-calibrates over multiple uses by tracking the actual realtime factor via exponential moving average.
 
-Whisper does provide excellent per-word metadata via `whisper_full_get_token_data()`: confidence scores and timestamps for every token. I use this to render red squiggly underlines on low-confidence words and to enable tap-a-word-to-seek-audio. Its 3.7% WER is 3x better than the streaming engines, so it earns its place as a batch option for users who want higher accuracy and are willing to wait.
+Whisper does provide excellent per-word metadata via `whisper_full_get_token_data()`: confidence scores and timestamps for every token. I use this to render red squiggly underlines on low-confidence words and to enable tap-a-word-to-seek-audio. At 20.7% WER on real-world audio it's better than the streaming engines (26-31%), but the two-pass approach with the GigaSpeech offline model achieves 12.3% WER at real-time speed, making Whisper's accuracy advantage less compelling.
 
 ---
 
@@ -175,21 +175,23 @@ A foreground service (`AudioRecordingService` with `foregroundServiceType="micro
 
 ## Sherpa-ONNX: Twice as Fast as Vosk
 
-After shipping with Vosk, I benchmarked [Sherpa-ONNX](https://github.com/k2-fsa/sherpa-onnx) (from the next-gen Kaldi project). The results were striking: Sherpa processes audio at 0.14x realtime — nearly twice as fast as Vosk's 0.27x — with the same ~11% WER on the LibriSpeech test set.
+After shipping with Vosk, I benchmarked [Sherpa-ONNX](https://github.com/k2-fsa/sherpa-onnx) (from the next-gen Kaldi project). The results were striking: Sherpa processes audio at 0.14x realtime — nearly twice as fast as Vosk's 0.22x — with better WER on real-world audio.
 
 ### Benchmark results
 
-Measured via `TranscriptionBenchmarkTest` on the Palma 2 Pro. 12 LibriSpeech test-clean utterances, 4 speakers, 97.8 seconds total. Each engine ran 3 times; RTF is the median. WER computed via word-level Levenshtein distance.
+Measured via `TranscriptionBenchmarkTest` on the Palma 2 Pro. Evaluation data: Earnings-22 conference calls + TED-LIUM 3 talks (unseen by all engines). Each engine ran 3 times; RTF is the median. WER computed via word-level Levenshtein distance.
 
 ```
-Engine                 Load      Size     RTF      WER    RTF variance
-─────────────────────────────────────────────────────────────────────────
-Sherpa-ONNX (int8)     6,076ms   39 MB    0.139   11.2%   0.139 / 0.139 / 0.139
-Vosk (small-en-us)       736ms   68 MB    0.274   11.1%   0.274 / 0.276 / 0.274
-whisper.cpp (q5_1)       514ms   31 MB   10.447    3.7%   10.44 / 10.47 / 10.48
+Engine                 Load      Size     RTF      WER
+─────────────────────────────────────────────────────────
+Sherpa-ONNX (ORT)      2,281ms   71 MB    0.14   26.0%
+Vosk (small-en-us)       848ms   68 MB    0.22   30.6%
+whisper.cpp (q5_1)       527ms   31 MB    5.98   20.7%
 ```
 
-Sherpa's RTF was identical across all three runs — zero measurable variance. Vosk showed the same stability. Both engines are well within real-time on this SoC.
+Source: `TranscriptionBenchmarkTest#benchmark_all_engines_unseen`
+
+Sherpa's RTF is stable across runs. Both Sherpa and Vosk are well within real-time on this SoC. WER on real-world audio is higher than LibriSpeech benchmarks suggest (Sherpa 26% vs 11%, Vosk 31% vs 11%) — a reminder that clean-read-speech benchmarks don't predict field accuracy.
 
 ### The API
 
@@ -359,27 +361,35 @@ If the model changes (different chunk size or emission-regularized training), up
 
 ---
 
-## Sherpa Offline: 0.5% WER at 16x Real-Time
+## Sherpa Offline: Choosing the Right Model
 
-After shipping with streaming Sherpa, I benchmarked the offline (non-streaming) variants. The results were dramatic.
+After shipping with streaming Sherpa, I benchmarked the offline (non-streaming) variants. Initial results on LibriSpeech test-clean were dramatic — 0.5% WER for the offline zipformer vs 11.2% for streaming. But LibriSpeech was in the training set, so those numbers were misleading.
 
-### Benchmark results
+### The LibriSpeech trap
 
-Same LibriSpeech test-clean dataset (12 utterances, 4 speakers, 97.8s). Each engine ran 3 times; RTF is the median.
+My first offline benchmark used `sherpa-onnx-zipformer-en-2023-04-01`, an offline transducer trained on LibriSpeech 960h. It achieved 0.5% WER on LibriSpeech test-clean — but this is the same acoustic domain as its training data (clean read English audiobooks). Real lectures and meetings are a different beast.
+
+### Cross-domain evaluation
+
+To get honest numbers, I benchmarked four offline models on data **none of them were trained on**: [Earnings-22](https://github.com/revdotcom/speech-datasets) (financial conference calls with diverse accents) and [TED-LIUM 3](https://huggingface.co/datasets/distil-whisper/tedlium-long-form) (TED talks).
 
 ```
-Engine                     Load      Size     RTF      WER    RTF variance
-────────────────────────────────────────────────────────────────────────────
-Sherpa streaming (int8)    5,796ms    69 MB   0.138   11.2%   0.138 / 0.139 / 0.138
-Sherpa offline (int8)      8,978ms   180 MB   0.058    0.5%   0.059 / 0.058 / 0.058
-Sherpa Paraformer (int8)   8,481ms   219 MB   0.059    2.5%   0.060 / 0.059 / 0.059
+Model                       Load      Size     RTF    Earn-22   TED    Avg WER
+────────────────────────────────────────────────────────────────────────────────
+Zipformer 2023-04-01 (LS)   8.8s    180 MB    0.08    13.3%   14.8%    14.0%
+Zipformer 2023-06-26 (LS)  10.9s     67 MB    0.06    18.7%   30.3%    24.5%
+Multidataset (LS+GS+CV)     7.6s    123 MB    0.08     8.0%   16.4%    12.2%
+GigaSpeech (YouTube/pod)   13.6s     68 MB    0.06     6.7%   18.0%    12.3%
+Parakeet TDT 0.6B             —     631 MB      —       —       —       OOM
 ```
 
-Source: `TranscriptionBenchmarkTest#benchmark_sherpa_online_vs_offline`
+Source: `TranscriptionBenchmarkTest#benchmark_offline_models`
 
-The offline zipformer achieved **0.5% WER** — a 22x improvement over streaming (11.2%), and better than Whisper (3.7%) at 60x the speed. It got 0% WER on 10 of 12 utterances. The Paraformer (Alibaba's non-autoregressive architecture) was similarly fast at 2.5% WER.
+Training data key: LS = LibriSpeech (960h audiobooks), GS = GigaSpeech (10Kh YouTube/podcasts), CV = CommonVoice.
 
-Both offline models process audio at **0.06x real-time** — 16x faster than real-time. For a 10-second memo, transcription takes 0.6 seconds. Fast enough for batch use after recording stops.
+The Parakeet TDT 0.6B (NVIDIA's SOTA model, 120Kh training data) crashed the Palma 2 Pro — its 1.6 GB native memory footprint is too much for a 6 GB device.
+
+**GigaSpeech and Multidataset tied at ~12% WER** on unseen data. GigaSpeech won on conference calls (6.7% — its YouTube/podcast training domain is closer to teleconference audio). At 68 MB on disk it's the smallest model, and I converted it to [ORT format](https://onnxruntime.ai/docs/reference/ort-format-models.html) for faster loading.
 
 ### Why offline is so much better
 
@@ -395,40 +405,17 @@ The sherpa-onnx project already ships a [two-pass Android example](https://githu
 
 This is better than the whole-recording re-transcription I originally planned. Instead of waiting until the user stops recording, each sentence is upgraded to near-perfect accuracy within a second of the user finishing it.
 
-I validated this on the Palma 2 Pro with the same LibriSpeech test set:
+I validated the two-pass approach on the Palma 2 Pro using LibriSpeech test data. The per-endpoint segmentation introduces zero WER degradation — every utterance matches the offline-only result. RTF overhead is small: 0.19 vs 0.16 for streaming-only.
 
-```
-Engine                     Load      Size     RTF      WER
-────────────────────────────────────────────────────────────
-Sherpa streaming (ORT)     2,237ms    71 MB   0.16   11.2%
-Two-pass (ORT + offline)  10,657ms   251 MB   0.19    0.5%
-Sherpa offline (int8)      9,230ms   180 MB   0.06    0.5%
-```
+The production configuration uses the [GigaSpeech zipformer](https://huggingface.co/csukuangfj/sherpa-onnx-zipformer-gigaspeech-2023-12-12) (trained on 10,000 hours of YouTube and podcast audio) converted to ORT format. On unseen evaluation data:
 
-Source: `TranscriptionBenchmarkTest#benchmark_two_pass`
+- **6.7% WER** on financial conference calls (Earnings-22)
+- **18.0% WER** on TED talks (TED-LIUM 3)
+- **68 MB** on disk (vs 180 MB for the LibriSpeech-trained model)
+- **0.06x RTF** — 10 seconds of audio transcribed in 0.6 seconds
+- **+233 MB** native memory during use
 
-The two-pass WER matched the offline WER exactly — 0.5%, with identical per-utterance results. The per-endpoint segmentation introduces zero degradation:
-
-```
-Utterance                     Stream   TwoPass   Offline
-────────────────────────────────────────────────────────
-6930-75918-0000                12.5%      0.0%      0.0%
-6930-75918-0007                11.1%      0.0%      0.0%
-6930-75918-0006                17.6%      0.0%      0.0%
-1320-122617-0003                4.5%      0.0%      0.0%
-1320-122617-0012                0.0%      0.0%      0.0%
-1320-122617-0026                6.7%      0.0%      0.0%
-5639-40744-0032                 3.6%      0.0%      0.0%
-5639-40744-0002                 8.3%      4.2%      4.2%
-5639-40744-0030                 7.0%      1.8%      1.8%
-260-123440-0018                10.0%      0.0%      0.0%
-260-123440-0004                 3.0%      0.0%      0.0%
-260-123440-0001                50.0%      0.0%      0.0%
-```
-
-The RTF overhead is small: 0.19 vs 0.16 for streaming-only. The offline second pass adds ~19% processing time on top of streaming, which is negligible since both are well under real-time.
-
-The tradeoff: 180 MB additional model storage, ~9 seconds additional load time, and ~250 MB native memory for the offline model. On a 6 GB device this is feasible if the offline model is loaded on-demand and released after use.
+The tradeoff: 68 MB additional model storage, ~5 seconds load time (ORT), and ~233 MB native memory for the offline model. On a 6 GB device this is feasible if the offline model is loaded on-demand and released after use.
 
 ---
 
@@ -462,7 +449,7 @@ Fix: replace `MediaPlayer` with [Media3 ExoPlayer](https://developer.android.com
 
 ## Where This Lands
 
-The working architecture: Sherpa-ONNX two-pass handles transcription — the streaming model provides real-time italic partials during recording, and the offline model re-transcribes each sentence at endpoint detection for 0.5% WER with no user-visible delay. Opus in an OGG container (via a custom `OggOpusWriter`) provides crash-resilient audio recording with sample-accurate seeking via granule positions. ExoPlayer handles playback with a bottom overlay bar for controls. Per-word timestamps (with 320ms latency compensation derived from the model's chunk size) enable tap-a-word-to-seek. A `PlaybackController` state machine manages the IDLE→PLAYING→PAUSED transitions.
+The working architecture: Sherpa-ONNX two-pass handles transcription — the streaming ORT model provides real-time italic partials during recording, and the offline GigaSpeech ORT model re-transcribes each sentence at endpoint detection for ~12% WER on real-world audio with no user-visible delay. Opus in an OGG container (via a custom `OggOpusWriter`) provides crash-resilient audio recording with sample-accurate seeking via granule positions. ExoPlayer handles playback with a bottom overlay bar for controls. Per-word timestamps (with 320ms latency compensation derived from the model's chunk size) enable tap-a-word-to-seek. A `PlaybackController` state machine manages the IDLE→PLAYING→PAUSED transitions.
 
 Vosk remains available as a fallback. Whisper remains the batch option for users who want maximum accuracy and are willing to wait. The engine is selectable in settings, with Sherpa streaming as the default.
 
@@ -484,8 +471,11 @@ What's still unsolved: audio recording in `SpeechRecognizer` mode. If Google ope
 - [Sherpa-ONNX streaming zipformer model](https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-2023-06-26)
 - [Sherpa-ONNX ORT streaming zipformer model](https://huggingface.co/w11wo/sherpa-onnx-ort-streaming-zipformer-en-2023-06-26)
 - [Sherpa-ONNX two-pass Android example](https://github.com/k2-fsa/sherpa-onnx/tree/master/android/SherpaOnnx2Pass)
-- [Sherpa-ONNX offline zipformer model](https://huggingface.co/csukuangfj/sherpa-onnx-zipformer-en-2023-04-01)
-- [Sherpa-ONNX Paraformer model](https://huggingface.co/csukuangfj/sherpa-onnx-paraformer-en-2024-03-09)
+- [Sherpa-ONNX GigaSpeech offline model](https://huggingface.co/csukuangfj/sherpa-onnx-zipformer-gigaspeech-2023-12-12)
+- [Sherpa-ONNX GigaSpeech ORT model](https://huggingface.co/imedemi/sherpa-onnx-ort-zipformer-gigaspeech-2023-12-12)
+- [Sherpa-ONNX offline zipformer model (LibriSpeech)](https://huggingface.co/csukuangfj/sherpa-onnx-zipformer-en-2023-04-01)
+- [Earnings-22 benchmark dataset](https://github.com/revdotcom/speech-datasets)
+- [TED-LIUM 3 (distil-whisper long-form)](https://huggingface.co/datasets/distil-whisper/tedlium-long-form)
 - [FastEmit: Low-latency Streaming ASR](https://arxiv.org/abs/2010.11148)
 - [Self-Alignment for RNN-T](https://arxiv.org/abs/2105.05005)
 - [Media3 ExoPlayer](https://developer.android.com/media/media3/exoplayer)
