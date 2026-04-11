@@ -67,6 +67,13 @@ class OfflineModelManager {
             } catch (e: Exception) {
                 Log.e(TAG, "Offline model load failed", e)
                 state = State.ERROR
+                val reason = when (e) {
+                    is java.net.UnknownHostException -> "No internet — offline model unavailable"
+                    is java.net.SocketTimeoutException -> "Download timed out"
+                    is java.io.IOException -> "Download failed: ${e.message}"
+                    else -> "Offline model failed: ${e.message}"
+                }
+                onStatusUpdate?.invoke(reason)
             }
         }, "OfflineModelLoad").start()
     }

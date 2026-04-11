@@ -177,20 +177,30 @@ class SherpaTranscriber(
                             val segmentPcm = flattenPcmBuffer(pcmSegmentBuffer, OVERLAP_SAMPLES)
                             val offlineResult = offlineRec.decode(segmentPcm, SAMPLE_RATE)
                             if (offlineResult.text.isNotBlank()) {
-                                val words = if (offlineResult.tokens.isNotEmpty() && offlineResult.timestamps.isNotEmpty()) {
+                                val hasTokens = offlineResult.tokens.isNotEmpty() && offlineResult.timestamps.isNotEmpty()
+                                val segmentStartMs = (audioOffsetSec * 1000).toLong()
+                                val segmentEndMs = segmentStartMs + (segmentSamples * 1000L / SAMPLE_RATE)
+                                val words = if (hasTokens) {
                                     SherpaTokenMerger.mergeTokens(offlineResult.tokens, offlineResult.timestamps, audioOffsetSec)
                                 } else {
-                                    // Fallback: segment-level timestamps
-                                    val segmentStartMs = (audioOffsetSec * 1000).toLong()
-                                    val segmentEndMs = segmentStartMs + (segmentSamples * 1000L / SAMPLE_RATE)
-                                    offlineResult.text.split(" ").filter { it.isNotBlank() }.map { word ->
-                                        com.writer.model.WordInfo(text = word.lowercase(), startMs = segmentStartMs, endMs = segmentEndMs)
+                                    // Offline model doesn't return per-token timestamps.
+                                    // Distribute evenly across the segment duration.
+                                    val rawWords = offlineResult.text.split(" ").filter { it.isNotBlank() }
+                                    val durationMs = segmentEndMs - segmentStartMs
+                                    rawWords.mapIndexed { i, word ->
+                                        val wordStart = segmentStartMs + (durationMs * i / rawWords.size.coerceAtLeast(1))
+                                        val wordEnd = segmentStartMs + (durationMs * (i + 1) / rawWords.size.coerceAtLeast(1))
+                                        com.writer.model.WordInfo(text = word.lowercase(), startMs = wordStart, endMs = wordEnd)
                                     }
                                 }
                                 val text = normalizeCase(words.joinToString(" ") { it.text })
-                                Log.i(tag, "TwoPass (offset=%.2fs): \"%s\" -> \"%s\"".format(
-                                    audioOffsetSec, result.text.take(40), text.take(60)
+                                Log.i(tag, "TwoPass (offset=%.2fs, tokens=%d, timestamps=%d, hasTokens=%b): \"%s\" -> \"%s\"".format(
+                                    audioOffsetSec, offlineResult.tokens.size, offlineResult.timestamps.size,
+                                    hasTokens, result.text.take(40), text.take(60)
                                 ))
+                                if (words.isNotEmpty()) {
+                                    Log.i(tag, "  word timestamps: ${words.take(3).map { "${it.text}@${it.startMs}ms" }}")
+                                }
                                 pendingFinals.add(PendingFinal(text, words))
                                 postMain { deliverPendingFinals() }
                             }
@@ -256,12 +266,17 @@ class SherpaTranscriber(
                     val segmentPcm = flattenPcmBuffer(pcmSegmentBuffer, 0)
                     val offlineResult = offlineRec.decode(segmentPcm, SAMPLE_RATE)
                     if (offlineResult.text.isNotBlank()) {
+                        val segmentStartMs = (audioOffsetSec * 1000).toLong()
+                        val segmentEndMs = segmentStartMs + (segmentPcm.size * 1000L / SAMPLE_RATE)
                         val words = if (offlineResult.tokens.isNotEmpty() && offlineResult.timestamps.isNotEmpty()) {
                             SherpaTokenMerger.mergeTokens(offlineResult.tokens, offlineResult.timestamps, audioOffsetSec)
                         } else {
-                            val segmentStartMs = (audioOffsetSec * 1000).toLong()
-                            offlineResult.text.split(" ").filter { it.isNotBlank() }.map { word ->
-                                com.writer.model.WordInfo(text = word.lowercase(), startMs = segmentStartMs, endMs = segmentStartMs)
+                            val rawWords = offlineResult.text.split(" ").filter { it.isNotBlank() }
+                            val durationMs = segmentEndMs - segmentStartMs
+                            rawWords.mapIndexed { i, word ->
+                                val wordStart = segmentStartMs + (durationMs * i / rawWords.size.coerceAtLeast(1))
+                                val wordEnd = segmentStartMs + (durationMs * (i + 1) / rawWords.size.coerceAtLeast(1))
+                                com.writer.model.WordInfo(text = word.lowercase(), startMs = wordStart, endMs = wordEnd)
                             }
                         }
                         val text = normalizeCase(words.joinToString(" ") { it.text })

@@ -100,52 +100,51 @@ class TranscriptionBenchmarkTest {
         private const val WHISPER_URL =
             "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en-q5_1.bin"
 
-        // Offline Sherpa models
+        // Offline Sherpa models — all ORT format for consistent load-time comparison
         private const val SHERPA_OFFLINE_TRANSDUCER_BASE =
-            "https://huggingface.co/csukuangfj/sherpa-onnx-zipformer-en-2023-04-01/resolve/main"
+            "https://huggingface.co/imedemi/sherpa-onnx-ort-zipformer-en-2023-04-01/resolve/main"
         private val SHERPA_OFFLINE_TRANSDUCER_FILES = listOf(
-            "encoder-epoch-99-avg-1.int8.onnx",
-            "decoder-epoch-99-avg-1.int8.onnx",
-            "joiner-epoch-99-avg-1.int8.onnx",
+            "encoder-epoch-99-avg-1.int8.ort",
+            "decoder-epoch-99-avg-1.int8.ort",
+            "joiner-epoch-99-avg-1.int8.ort",
             "tokens.txt"
         )
 
         private const val SHERPA_PARAFORMER_BASE =
-            "https://huggingface.co/csukuangfj/sherpa-onnx-paraformer-en-2024-03-09/resolve/main"
+            "https://huggingface.co/imedemi/sherpa-onnx-ort-paraformer-en-2024-03-09/resolve/main"
         private val SHERPA_PARAFORMER_FILES = listOf(
-            "model.int8.onnx",
+            "model.int8.ort",
             "tokens.txt"
         )
 
         // Offline model variants for comparison benchmark
         // 1. Newer zipformer (same architecture, newer checkpoint) — LibriSpeech trained
         private const val OFFLINE_ZIPFORMER_0626_BASE =
-            "https://huggingface.co/csukuangfj/sherpa-onnx-zipformer-en-2023-06-26/resolve/main"
+            "https://huggingface.co/imedemi/sherpa-onnx-ort-zipformer-en-2023-06-26/resolve/main"
         private val OFFLINE_ZIPFORMER_0626_FILES = listOf(
-            "encoder-epoch-99-avg-1.int8.onnx",
-            "decoder-epoch-99-avg-1.int8.onnx",
-            "joiner-epoch-99-avg-1.int8.onnx",
+            "encoder-epoch-99-avg-1.int8.ort",
+            "decoder-epoch-99-avg-1.int8.ort",
+            "joiner-epoch-99-avg-1.int8.ort",
             "tokens.txt"
         )
 
         // 2. Multidataset (LibriSpeech + GigaSpeech + CommonVoice) — best real-world generalization
         private const val OFFLINE_MULTIDATASET_BASE =
-            "https://huggingface.co/yfyeung/icefall-asr-multidataset-pruned_transducer_stateless7-2023-05-04/resolve/main"
-        // Files are in subdirectories — handled specially in ensure function
-        private val OFFLINE_MULTIDATASET_FILES = mapOf(
-            "encoder-epoch-30-avg-4.int8.onnx" to "exp/encoder-epoch-30-avg-4.int8.onnx",
-            "decoder-epoch-30-avg-4.int8.onnx" to "exp/decoder-epoch-30-avg-4.int8.onnx",
-            "joiner-epoch-30-avg-4.int8.onnx" to "exp/joiner-epoch-30-avg-4.int8.onnx",
-            "tokens.txt" to "data/lang_bpe_500/tokens.txt"
+            "https://huggingface.co/imedemi/sherpa-onnx-ort-multidataset-transducer-2023-05-04/resolve/main"
+        private val OFFLINE_MULTIDATASET_FILES = listOf(
+            "encoder-epoch-30-avg-4.int8.ort",
+            "decoder-epoch-30-avg-4.int8.ort",
+            "joiner-epoch-30-avg-4.int8.ort",
+            "tokens.txt"
         )
 
         // 3. GigaSpeech (10Kh YouTube/podcasts) — real-world audio, compact
         private const val OFFLINE_GIGASPEECH_BASE =
-            "https://huggingface.co/csukuangfj/sherpa-onnx-zipformer-gigaspeech-2023-12-12/resolve/main"
+            "https://huggingface.co/imedemi/sherpa-onnx-ort-zipformer-gigaspeech-2023-12-12/resolve/main"
         private val OFFLINE_GIGASPEECH_FILES = listOf(
-            "encoder-epoch-30-avg-1.int8.onnx",
-            "decoder-epoch-30-avg-1.int8.onnx",
-            "joiner-epoch-30-avg-1.int8.onnx",
+            "encoder-epoch-30-avg-1.int8.ort",
+            "decoder-epoch-30-avg-1.int8.ort",
+            "joiner-epoch-30-avg-1.int8.ort",
             "tokens.txt"
         )
 
@@ -683,9 +682,9 @@ class TranscriptionBenchmarkTest {
         val config = com.k2fsa.sherpa.onnx.OfflineRecognizerConfig(
             modelConfig = com.k2fsa.sherpa.onnx.OfflineModelConfig(
                 transducer = com.k2fsa.sherpa.onnx.OfflineTransducerModelConfig(
-                    encoder = File(modelDir, "encoder-epoch-99-avg-1.int8.onnx").absolutePath,
-                    decoder = File(modelDir, "decoder-epoch-99-avg-1.int8.onnx").absolutePath,
-                    joiner = File(modelDir, "joiner-epoch-99-avg-1.int8.onnx").absolutePath
+                    encoder = File(modelDir, "encoder-epoch-99-avg-1.int8.ort").absolutePath,
+                    decoder = File(modelDir, "decoder-epoch-99-avg-1.int8.ort").absolutePath,
+                    joiner = File(modelDir, "joiner-epoch-99-avg-1.int8.ort").absolutePath
                 ),
                 tokens = File(modelDir, "tokens.txt").absolutePath,
                 numThreads = 2
@@ -1553,9 +1552,9 @@ class TranscriptionBenchmarkTest {
         val config = com.k2fsa.sherpa.onnx.OfflineRecognizerConfig(
             modelConfig = com.k2fsa.sherpa.onnx.OfflineModelConfig(
                 transducer = com.k2fsa.sherpa.onnx.OfflineTransducerModelConfig(
-                    encoder = File(modelDir, "encoder-epoch-99-avg-1.int8.onnx").absolutePath,
-                    decoder = File(modelDir, "decoder-epoch-99-avg-1.int8.onnx").absolutePath,
-                    joiner = File(modelDir, "joiner-epoch-99-avg-1.int8.onnx").absolutePath
+                    encoder = File(modelDir, "encoder-epoch-99-avg-1.int8.ort").absolutePath,
+                    decoder = File(modelDir, "decoder-epoch-99-avg-1.int8.ort").absolutePath,
+                    joiner = File(modelDir, "joiner-epoch-99-avg-1.int8.ort").absolutePath
                 ),
                 tokens = File(modelDir, "tokens.txt").absolutePath,
                 numThreads = 2
@@ -1617,7 +1616,7 @@ class TranscriptionBenchmarkTest {
         val config = com.k2fsa.sherpa.onnx.OfflineRecognizerConfig(
             modelConfig = com.k2fsa.sherpa.onnx.OfflineModelConfig(
                 paraformer = com.k2fsa.sherpa.onnx.OfflineParaformerModelConfig(
-                    model = File(modelDir, "model.int8.onnx").absolutePath
+                    model = File(modelDir, "model.int8.ort").absolutePath
                 ),
                 tokens = File(modelDir, "tokens.txt").absolutePath,
                 numThreads = 2
@@ -1733,9 +1732,9 @@ class TranscriptionBenchmarkTest {
         val offlineConfig = com.k2fsa.sherpa.onnx.OfflineRecognizerConfig(
             modelConfig = com.k2fsa.sherpa.onnx.OfflineModelConfig(
                 transducer = com.k2fsa.sherpa.onnx.OfflineTransducerModelConfig(
-                    encoder = File(offlineModelDir, "encoder-epoch-99-avg-1.int8.onnx").absolutePath,
-                    decoder = File(offlineModelDir, "decoder-epoch-99-avg-1.int8.onnx").absolutePath,
-                    joiner = File(offlineModelDir, "joiner-epoch-99-avg-1.int8.onnx").absolutePath
+                    encoder = File(offlineModelDir, "encoder-epoch-99-avg-1.int8.ort").absolutePath,
+                    decoder = File(offlineModelDir, "decoder-epoch-99-avg-1.int8.ort").absolutePath,
+                    joiner = File(offlineModelDir, "joiner-epoch-99-avg-1.int8.ort").absolutePath
                 ),
                 tokens = File(offlineModelDir, "tokens.txt").absolutePath,
                 numThreads = 2
@@ -1935,19 +1934,8 @@ class TranscriptionBenchmarkTest {
     private fun ensureOfflineParakeet(): File =
         ensureModelFiles(File(benchDir, "sherpa-offline-parakeet"), OFFLINE_PARAKEET_BASE, OFFLINE_PARAKEET_FILES)
 
-    /** Download files from subdirectory paths (for multidataset model). */
-    private fun ensureOfflineMultidataset(): File {
-        val dir = File(benchDir, "sherpa-offline-multidataset").also { it.mkdirs() }
-        for ((localName, remotePath) in OFFLINE_MULTIDATASET_FILES) {
-            val file = File(dir, localName)
-            if (file.exists() && file.length() > 0) continue
-            Log.i(TAG, "Downloading $remotePath -> $localName...")
-            URL("$OFFLINE_MULTIDATASET_BASE/$remotePath").openStream().use { inp ->
-                file.outputStream().use { inp.copyTo(it) }
-            }
-        }
-        return dir
-    }
+    private fun ensureOfflineMultidataset(): File =
+        ensureModelFiles(File(benchDir, "sherpa-offline-multidataset"), OFFLINE_MULTIDATASET_BASE, OFFLINE_MULTIDATASET_FILES)
 
     /**
      * Generic offline transducer benchmark. Loads models, measures load time,
@@ -2059,6 +2047,108 @@ class TranscriptionBenchmarkTest {
     }
 
     /**
+     * Benchmark Paraformer on eval utterances. Uses OfflineParaformerModelConfig
+     * (different from transducer). Also logs whether tokens/timestamps are returned.
+     */
+    private fun benchmarkParaformerGeneric(utts: List<Utterance>): EngineResult {
+        val modelDir = ensureParaformerModel()
+        val label = "Paraformer (int8)"
+
+        val config = com.k2fsa.sherpa.onnx.OfflineRecognizerConfig(
+            modelConfig = com.k2fsa.sherpa.onnx.OfflineModelConfig(
+                paraformer = com.k2fsa.sherpa.onnx.OfflineParaformerModelConfig(
+                    model = File(modelDir, "model.int8.ort").absolutePath
+                ),
+                tokens = File(modelDir, "tokens.txt").absolutePath,
+                numThreads = 2
+            )
+        )
+
+        forceGc()
+        val memBaseline = snapshot("baseline")
+
+        Log.i(TAG, "$label: loading model...")
+        val t0 = System.currentTimeMillis()
+        val recognizer = com.k2fsa.sherpa.onnx.OfflineRecognizer(config = config)
+        val loadMs = System.currentTimeMillis() - t0
+        Log.i(TAG, "$label: loaded in ${loadMs}ms")
+        val modelSize = modelDir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+
+        forceGc()
+        val memLoaded = snapshot("model loaded")
+
+        val rtfs = mutableListOf<Float>()
+        var wers = emptyList<Pair<String, Float>>()
+
+        for (run in 1..BENCHMARK_RUNS) {
+            var audioSec = 0f; var procMs = 0L
+            val runWers = mutableListOf<Pair<String, Float>>()
+
+            for (utt in utts) {
+                val stream = recognizer.createStream()
+                stream.acceptWaveform(utt.pcm, SAMPLE_RATE)
+
+                val start = System.currentTimeMillis()
+                recognizer.decode(stream)
+                procMs += System.currentTimeMillis() - start
+                audioSec += utt.durationSec
+
+                if (run == 1) {
+                    val result = recognizer.getResult(stream)
+                    val text = result.text.trim()
+                    val wer = wordErrorRate(utt.groundTruth, text)
+                    runWers.add(utt.id to wer)
+                    val tokens = result.tokens ?: emptyArray()
+                    val timestamps = result.timestamps ?: floatArrayOf()
+                    val refWords = normalize(utt.groundTruth).split(" ").filter { it.isNotEmpty() }.size
+                    val hypWords = normalize(text).split(" ").filter { it.isNotEmpty() }.size
+                    Log.i(TAG, "$label [${utt.id}] WER=%.3f (ref=%d hyp=%d tokens=%d timestamps=%d)".format(
+                        wer, refWords, hypWords, tokens.size, timestamps.size))
+                    Log.i(TAG, "  ref: ${utt.groundTruth.take(120)}")
+                    Log.i(TAG, "  hyp: ${text.take(120)}")
+                    if (tokens.isNotEmpty()) {
+                        Log.i(TAG, "  tokens[0..2]: ${tokens.take(3).toList()}")
+                    }
+                    if (timestamps.isNotEmpty()) {
+                        Log.i(TAG, "  timestamps[0..2]: ${timestamps.take(3).toList()}")
+                    }
+                }
+            }
+
+            rtfs.add(procMs / 1000f / audioSec)
+            Log.i(TAG, "$label run $run: RTF=%.3f".format(rtfs.last()))
+            if (run == 1) wers = runWers
+        }
+
+        forceGc()
+        val memActive = snapshot("after transcription")
+        recognizer.release()
+        forceGc()
+        val memReleased = snapshot("released")
+
+        Log.i(TAG, "")
+        Log.i(TAG, "── $label MEMORY ──")
+        Log.i(TAG, "%-24s  %8s  %8s  %8s".format("Phase", "Java", "Native", "PSS"))
+        Log.i(TAG, "%-24s  %8s  %8s  %8s".format("", "(MB)", "(MB)", "(MB)"))
+        Log.i(TAG, "─".repeat(54))
+        for (s in listOf(memBaseline, memLoaded, memActive, memReleased)) {
+            Log.i(TAG, "%-24s  %7.1f  %7.1f  %7.1f".format(s.label, s.javaHeapMB, s.nativeHeapMB, s.pssMB))
+        }
+        val modelCost = memLoaded - memBaseline
+        Log.i(TAG, "%-24s  %+7.1f  %+7.1f  %+7.1f".format(
+            "Model load delta", modelCost.javaHeapMB, modelCost.nativeHeapMB, modelCost.pssMB
+        ))
+
+        return EngineResult(
+            engine = label,
+            modelLoadMs = loadMs, modelSizeBytes = modelSize,
+            rtfRuns = rtfs, rtfMedian = rtfs.sorted()[rtfs.size / 2],
+            werPerUtterance = wers,
+            werAggregate = wers.map { it.second }.average().toFloat()
+        )
+    }
+
+    /**
      * Compare all offline models on unseen evaluation data (Earnings-22 + TED-LIUM 3).
      *
      * Neither dataset was used to train any of the models under test, giving a fair
@@ -2072,43 +2162,48 @@ class TranscriptionBenchmarkTest {
 
         val results = mutableListOf<EngineResult>()
 
-        // 1. Current model (2023-04-01, LibriSpeech trained)
+        // 1. Current model (2023-04-01, LibriSpeech trained, ORT)
         try {
             val dir = ensureOfflineTransducerModel()
             results.add(benchmarkOfflineGeneric(utts, dir,
-                "encoder-epoch-99-avg-1.int8.onnx", "decoder-epoch-99-avg-1.int8.onnx",
-                "joiner-epoch-99-avg-1.int8.onnx",
+                "encoder-epoch-99-avg-1.int8.ort", "decoder-epoch-99-avg-1.int8.ort",
+                "joiner-epoch-99-avg-1.int8.ort",
                 label = "Zipformer 2023-04-01 (LibriSpeech)"))
         } catch (e: Exception) { Log.e(TAG, "Zipformer 2023-04-01 failed", e) }
 
-        // 2. Newer zipformer (2023-06-26, LibriSpeech trained)
+        // 2. Newer zipformer (2023-06-26, LibriSpeech trained, ORT)
         try {
             val dir = ensureOfflineZipformer0626()
             results.add(benchmarkOfflineGeneric(utts, dir,
-                "encoder-epoch-99-avg-1.int8.onnx", "decoder-epoch-99-avg-1.int8.onnx",
-                "joiner-epoch-99-avg-1.int8.onnx",
+                "encoder-epoch-99-avg-1.int8.ort", "decoder-epoch-99-avg-1.int8.ort",
+                "joiner-epoch-99-avg-1.int8.ort",
                 label = "Zipformer 2023-06-26 (LibriSpeech)"))
         } catch (e: Exception) { Log.e(TAG, "Zipformer 2023-06-26 failed", e) }
 
-        // 3. Multidataset (LibriSpeech + GigaSpeech + CommonVoice)
+        // 3. Multidataset (LibriSpeech + GigaSpeech + CommonVoice, ORT)
         try {
             val dir = ensureOfflineMultidataset()
             results.add(benchmarkOfflineGeneric(utts, dir,
-                "encoder-epoch-30-avg-4.int8.onnx", "decoder-epoch-30-avg-4.int8.onnx",
-                "joiner-epoch-30-avg-4.int8.onnx",
+                "encoder-epoch-30-avg-4.int8.ort", "decoder-epoch-30-avg-4.int8.ort",
+                "joiner-epoch-30-avg-4.int8.ort",
                 label = "Multidataset (LibriS+Giga+CV)"))
         } catch (e: Exception) { Log.e(TAG, "Multidataset failed", e) }
 
-        // 4. GigaSpeech (YouTube/podcasts)
+        // 4. GigaSpeech (YouTube/podcasts, ORT)
         try {
             val dir = ensureOfflineGigaSpeech()
             results.add(benchmarkOfflineGeneric(utts, dir,
-                "encoder-epoch-30-avg-1.int8.onnx", "decoder-epoch-30-avg-1.int8.onnx",
-                "joiner-epoch-30-avg-1.int8.onnx",
+                "encoder-epoch-30-avg-1.int8.ort", "decoder-epoch-30-avg-1.int8.ort",
+                "joiner-epoch-30-avg-1.int8.ort",
                 label = "GigaSpeech (YouTube/podcasts)"))
         } catch (e: Exception) { Log.e(TAG, "GigaSpeech failed", e) }
 
-        // 5. NeMo Parakeet TDT 0.6B v2 — SKIPPED: 1.6 GB native memory, OOM on 6 GB device
+        // 5. Paraformer (Alibaba, non-autoregressive — may return timestamps)
+        try {
+            results.add(benchmarkParaformerGeneric(utts))
+        } catch (e: Exception) { Log.e(TAG, "Paraformer failed", e) }
+
+        // 6. NeMo Parakeet TDT 0.6B v2 — SKIPPED: 1.6 GB native memory, OOM on 6 GB device
         Log.i(TAG, "Skipping Parakeet TDT 0.6B: 1.6 GB native memory causes OOM on Palma 2 Pro")
 
         assertTrue("At least one model must complete", results.isNotEmpty())

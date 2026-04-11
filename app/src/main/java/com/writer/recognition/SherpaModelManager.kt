@@ -53,6 +53,7 @@ class SherpaModelManager {
     /** Pre-load models asynchronously. Downloads if needed, then creates the recognizer. */
     fun preload(context: Context) {
         if (state == State.READY || state == State.LOADING) return
+        Log.i(TAG, "Preloading from state=$state")
         state = State.LOADING
         Thread({
             try {
@@ -68,6 +69,13 @@ class SherpaModelManager {
             } catch (e: Exception) {
                 Log.e(TAG, "Sherpa model load failed", e)
                 state = State.ERROR
+                val reason = when (e) {
+                    is java.net.UnknownHostException -> "No internet connection"
+                    is java.net.SocketTimeoutException -> "Download timed out"
+                    is java.io.IOException -> "Download failed: ${e.message}"
+                    else -> "Model load failed: ${e.message}"
+                }
+                onStatusUpdate?.invoke(reason)
             }
         }, "SherpaModelLoad").start()
     }

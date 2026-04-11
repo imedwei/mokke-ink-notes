@@ -38,58 +38,49 @@ object ModelDownloader {
 
         val tmpFile = File(destFile.parentFile, "$name.tmp")
 
-        // Follow redirects manually
-        var url = "$baseUrl/$name"
-        var totalBytes = -1L
-        var finalConn: HttpURLConnection? = null
-        for (i in 0 until MAX_REDIRECTS) {
-            val conn = URL(url).openConnection() as HttpURLConnection
-            conn.connectTimeout = CONNECT_TIMEOUT_MS
-            conn.readTimeout = READ_TIMEOUT_MS
-            conn.instanceFollowRedirects = false
-            val code = conn.responseCode
-            if (code in 301..308) {
-                val location = conn.getHeaderField("Location")
-                conn.disconnect()
-                url = if (location.startsWith("http")) location
-                       else URL(URL(url), location).toString()
-                continue
-            }
-            totalBytes = conn.contentLength.toLong()
-            finalConn = conn
-            break
-        }
-        val conn = finalConn ?: throw IllegalStateException("Too many redirects for $name")
+        // URL.openStream() follows redirects automatically (including cross-domain).
+        // We use it for the actual download. For progress reporting, we first do a
+        // HEAD-like probe to get Content-Length from the final URL.
+        val downloadUrl = "$baseUrl/$name"
+        val totalBytes = getContentLength(downloadUrl)
+        Log.i(TAG, "Downloading $name ($totalBytes bytes)...")
 
-        try {
-            conn.inputStream.use { input ->
-                tmpFile.outputStream().use { output ->
-                    val buffer = ByteArray(65536)
-                    var downloaded = 0L
-                    var lastReportPct = -1
-                    while (true) {
-                        val n = input.read(buffer)
-                        if (n < 0) break
-                        output.write(buffer, 0, n)
-                        downloaded += n
-                        if (totalBytes > 0) {
-                            val pct = (downloaded * 100 / totalBytes).toInt()
-                            if (pct != lastReportPct && pct % 10 == 0) {
-                                lastReportPct = pct
-                                onProgress?.invoke("Downloading $label… $pct%")
-                            }
+        URL(downloadUrl).openStream().use { input ->
+            tmpFile.outputStream().use { output ->
+                val buffer = ByteArray(65536)
+                var downloaded = 0L
+                var lastReportPct = -1
+                while (true) {
+                    val n = input.read(buffer)
+                    if (n < 0) break
+                    output.write(buffer, 0, n)
+                    downloaded += n
+                    if (totalBytes > 0) {
+                        val pct = (downloaded * 100 / totalBytes).toInt()
+                        if (pct != lastReportPct && pct % 10 == 0) {
+                            lastReportPct = pct
+                            onProgress?.invoke("Downloading $label… $pct%")
                         }
                     }
                 }
+                Log.i(TAG, "Downloaded $downloaded bytes to ${tmpFile.name}")
             }
-        } finally {
-            conn.disconnect()
         }
         if (!isValidModelFile(tmpFile, name)) {
+            val size = tmpFile.length()
+            // Log the first 4 bytes for debugging
+            val header = ByteArray(4)
+            if (size > 0) tmpFile.inputStream().use { it.read(header) }
+            val magic = String(header, Charsets.US_ASCII)
+            Log.e(TAG, "Validation failed for $name: size=$size, magic='$magic', expected ORT='ORTM'")
             tmpFile.delete()
-            throw IllegalStateException("Downloaded $name is invalid (${tmpFile.length()} bytes)")
+            throw IllegalStateException("Downloaded $name is invalid ($size bytes, magic='$magic')")
         }
-        tmpFile.renameTo(destFile)
+        if (!tmpFile.renameTo(destFile)) {
+            // renameTo can fail silently — fall back to copy+delete
+            tmpFile.copyTo(destFile, overwrite = true)
+            tmpFile.delete()
+        }
         Log.i(TAG, "Downloaded $name (${destFile.length()} bytes)")
     }
 
@@ -115,6 +106,34 @@ object ModelDownloader {
         return dir
     }
 
+    /** Get Content-Length by following redirects to the final URL. Returns -1 if unknown. */
+    private fun getContentLength(url: String): Long {
+        try {
+            var currentUrl = url
+            for (i in 0 until MAX_REDIRECTS) {
+                val conn = URL(currentUrl).openConnection() as HttpURLConnection
+                conn.connectTimeout = CONNECT_TIMEOUT_MS
+                conn.readTimeout = 5_000
+                conn.requestMethod = "HEAD"
+                conn.instanceFollowRedirects = false
+                val code = conn.responseCode
+                if (code in 301..308) {
+                    val location = conn.getHeaderField("Location")
+                    conn.disconnect()
+                    currentUrl = if (location.startsWith("http")) location
+                                 else URL(URL(currentUrl), location).toString()
+                    continue
+                }
+                val length = conn.contentLength.toLong()
+                conn.disconnect()
+                return length
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to get content length: ${e.message}")
+        }
+        return -1
+    }
+
     /** Minimum valid sizes — a truncated or redirect-page file will be smaller. */
     private val MIN_FILE_SIZES = mapOf(
         "encoder" to 25_000_000L,
@@ -123,17 +142,20 @@ object ModelDownloader {
         "tokens"  to 4_000L
     )
 
-    /** Validate a model file: check size and magic bytes. */
+    /** Validate a model file: check size and format header. */
     fun isValidModelFile(file: File, name: String): Boolean {
         val prefix = name.substringBefore("-").substringBefore(".")
         val minSize = MIN_FILE_SIZES[prefix] ?: 0L
         if (file.length() < minSize) return false
         if (name.endsWith(".ort") || name.endsWith(".onnx")) {
-            val header = ByteArray(4)
+            // ORT format: 4-byte size prefix + "ORTM" magic at offset 4
+            // ONNX format: protobuf, starts with 0x08 at offset 0
+            val header = ByteArray(8)
             file.inputStream().use { it.read(header) }
-            val magic = String(header, Charsets.US_ASCII)
-            if (name.endsWith(".ort") && magic != "ORTM") return false
-            if (name.endsWith(".onnx") && header[0] != 0x08.toByte()) return false
+            val magicAt4 = String(header, 4, 4, Charsets.US_ASCII)
+            val isOrt = magicAt4 == "ORTM"
+            val isOnnx = header[0] == 0x08.toByte()
+            if (!isOrt && !isOnnx) return false
         }
         return true
     }

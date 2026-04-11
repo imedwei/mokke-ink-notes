@@ -1185,11 +1185,9 @@ class WritingActivity : AppCompatActivity() {
             if (sherpaModelManager.getRecognizer() == null) {
                 val state = sherpaModelManager.state
                 if (state == com.writer.recognition.SherpaModelManager.State.ERROR) {
-                    Toast.makeText(this, "Speech engine failed to load \u2014 retrying\u2026", Toast.LENGTH_SHORT).show()
                     sherpaModelManager.release()
-                } else {
-                    Toast.makeText(this, "Preparing speech engine\u2026", Toast.LENGTH_SHORT).show()
                 }
+                Toast.makeText(this, "Preparing speech engine\u2026", Toast.LENGTH_SHORT).show()
                 sherpaModelManager.onStatusUpdate = { status ->
                     runOnUiThread {
                         Toast.makeText(this, status, Toast.LENGTH_SHORT).show()
