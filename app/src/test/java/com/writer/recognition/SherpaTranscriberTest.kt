@@ -93,14 +93,19 @@ class SherpaTranscriberTest {
     private fun createTranscriber(
         recognizer: StreamingRecognizer,
         pcmSource: SherpaTranscriber.PcmSource,
-        executor: (Runnable) -> Unit = capturingExecutor
+        executor: (Runnable) -> Unit = capturingExecutor,
+        offlineRecognizer: OfflineRecognizer? = null
     ): SherpaTranscriber {
         modelManager.loadWithFactory { recognizer }
+        val offlineMgr = if (offlineRecognizer != null) {
+            OfflineModelManager().also { it.loadWithFactory { offlineRecognizer } }
+        } else null
         return SherpaTranscriber(
             context = null, // not used when pcmSourceFactory is provided
             modelManager = modelManager,
             pcmSourceFactory = { pcmSource },
-            mainThreadExecutor = executor
+            mainThreadExecutor = executor,
+            offlineModelManager = offlineMgr
         )
     }
 
@@ -191,5 +196,100 @@ class SherpaTranscriberTest {
         transcriber.stop()
 
         assertTrue("Should emit partials during recording", partials.isNotEmpty())
+    }
+
+    // ── Two-pass tests ──────────────────────────────────────────────
+
+    /** Fake offline recognizer that returns improved text. */
+    private class FakeOfflineRecognizer(
+        private val improvedText: String = "improved result"
+    ) : OfflineRecognizer {
+        var decodeCalls = 0
+        var lastSamplesSize = 0
+        override fun decode(samples: FloatArray, sampleRate: Int): OfflineResult {
+            decodeCalls++
+            lastSamplesSize = samples.size
+            return OfflineResult(text = improvedText)
+        }
+        override fun release() {}
+    }
+
+    @Test
+    fun `two-pass emits offline result instead of streaming result`() {
+        val recognizer = FakeRecognizer(
+            endpointAfterChunks = 2, endpointText = "STREAMING RESULT",
+            endpointTokens = arrayOf(" STREAMING", " RESULT"),
+            endpointTimestamps = floatArrayOf(0.5f, 1.0f)
+        )
+        val offline = FakeOfflineRecognizer("IMPROVED OFFLINE RESULT")
+        val pcmSource = FakePcmSource(chunksToEmit = 4)
+
+        val transcriber = createTranscriber(recognizer, pcmSource, immediateExecutor, offline)
+        val finals = mutableListOf<String>()
+        transcriber.onFinalResultWithWords = { text, _ -> finals.add(text) }
+        transcriber.onFinalResult = {}
+
+        transcriber.start("en-US")
+        Thread.sleep(500)
+        transcriber.stop()
+
+        assertTrue("Should deliver at least one final", finals.isNotEmpty())
+        // The final should contain the offline result, not the streaming result
+        assertTrue(
+            "Final should be from offline model, got: ${finals}",
+            finals.any { it.contains("improved", ignoreCase = true) }
+        )
+        assertFalse(
+            "Should not contain raw streaming result",
+            finals.any { it.contains("streaming", ignoreCase = true) }
+        )
+        assertTrue("Offline recognizer should have been called", offline.decodeCalls > 0)
+    }
+
+    @Test
+    fun `two-pass buffers PCM and sends to offline recognizer`() {
+        val recognizer = FakeRecognizer(
+            endpointAfterChunks = 3, endpointText = "SOME TEXT",
+            endpointTokens = arrayOf(" SOME", " TEXT"),
+            endpointTimestamps = floatArrayOf(0.5f, 1.0f)
+        )
+        val offline = FakeOfflineRecognizer("better text")
+        val pcmSource = FakePcmSource(chunksToEmit = 5)
+
+        val transcriber = createTranscriber(recognizer, pcmSource, immediateExecutor, offline)
+        transcriber.onFinalResultWithWords = { _, _ -> }
+        transcriber.onFinalResult = {}
+
+        transcriber.start("en-US")
+        Thread.sleep(500)
+        transcriber.stop()
+
+        assertTrue("Offline should receive PCM samples", offline.lastSamplesSize > 0)
+    }
+
+    @Test
+    fun `without offline model, streaming result is used as before`() {
+        val recognizer = FakeRecognizer(
+            endpointAfterChunks = 2, endpointText = "STREAMING ONLY",
+            endpointTokens = arrayOf(" STREAMING", " ONLY"),
+            endpointTimestamps = floatArrayOf(0.5f, 1.0f)
+        )
+        val pcmSource = FakePcmSource(chunksToEmit = 4)
+
+        // No offline recognizer — should behave as before
+        val transcriber = createTranscriber(recognizer, pcmSource, immediateExecutor, offlineRecognizer = null)
+        val finals = mutableListOf<String>()
+        transcriber.onFinalResultWithWords = { text, _ -> finals.add(text) }
+        transcriber.onFinalResult = {}
+
+        transcriber.start("en-US")
+        Thread.sleep(500)
+        transcriber.stop()
+
+        assertTrue("Should deliver streaming result", finals.isNotEmpty())
+        assertTrue(
+            "Should contain streaming result",
+            finals.any { it.contains("streaming", ignoreCase = true) }
+        )
     }
 }

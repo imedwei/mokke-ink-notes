@@ -27,7 +27,8 @@ class SherpaTranscriber(
     private val pcmSourceFactory: (() -> PcmSource)? = null,
     private val mainThreadExecutor: (Runnable) -> Unit = { action ->
         android.os.Handler(android.os.Looper.getMainLooper()).post(action)
-    }
+    },
+    private val offlineModelManager: OfflineModelManager? = null
 ) : AudioTranscriber {
 
     /** Abstraction over AudioRecord for testability. */
@@ -46,6 +47,9 @@ class SherpaTranscriber(
     @Volatile private var recording = false
     @Volatile private var audioOffsetSec = 0f
     private var floatBuffer = FloatArray(BUFFER_SIZE / 2)
+
+    /** PCM buffer for two-pass: accumulates float samples between endpoints. */
+    private val pcmSegmentBuffer = mutableListOf<FloatArray>()
 
     private data class PendingFinal(val text: String, val words: List<com.writer.model.WordInfo>)
     private val pendingFinals = ConcurrentLinkedQueue<PendingFinal>()
@@ -155,6 +159,11 @@ class SherpaTranscriber(
                 bytesToFloat(buffer, read, floatBuffer)
                 onlineStream.acceptWaveform(floatBuffer, SAMPLE_RATE)
 
+                // Buffer PCM for two-pass offline re-transcription
+                if (offlineModelManager != null) {
+                    pcmSegmentBuffer.add(floatBuffer.copyOf())
+                }
+
                 while (recognizer.isReady(onlineStream)) {
                     recognizer.decode(onlineStream)
                 }
@@ -162,18 +171,43 @@ class SherpaTranscriber(
                 if (recognizer.isEndpoint(onlineStream)) {
                     val result = recognizer.getResult(onlineStream)
                     if (result.text.isNotBlank()) {
-                        val words = SherpaTokenMerger.mergeTokens(
-                            result.tokens, result.timestamps, audioOffsetSec
-                        )
-                        // Reconstruct text from merged words so word count matches
-                        // for tap-to-seek indexing. result.text may have different
-                        // word boundaries than the token merger.
-                        val text = normalizeCase(words.joinToString(" ") { it.text })
-                        Log.i(tag, "Final (offset=%.2fs): %d words, text=\"%s\"".format(
-                            audioOffsetSec, words.size, text.take(60)
-                        ))
-                        pendingFinals.add(PendingFinal(text, words))
-                        postMain { deliverPendingFinals() }
+                        val offlineRec = offlineModelManager?.getRecognizer()
+                        if (offlineRec != null) {
+                            // Two-pass: run offline second pass on buffered segment
+                            val segmentPcm = flattenPcmBuffer(pcmSegmentBuffer, OVERLAP_SAMPLES)
+                            val offlineResult = offlineRec.decode(segmentPcm, SAMPLE_RATE)
+                            if (offlineResult.text.isNotBlank()) {
+                                val words = if (offlineResult.tokens.isNotEmpty() && offlineResult.timestamps.isNotEmpty()) {
+                                    SherpaTokenMerger.mergeTokens(offlineResult.tokens, offlineResult.timestamps, audioOffsetSec)
+                                } else {
+                                    // Fallback: segment-level timestamps
+                                    val segmentStartMs = (audioOffsetSec * 1000).toLong()
+                                    val segmentEndMs = segmentStartMs + (segmentSamples * 1000L / SAMPLE_RATE)
+                                    offlineResult.text.split(" ").filter { it.isNotBlank() }.map { word ->
+                                        com.writer.model.WordInfo(text = word.lowercase(), startMs = segmentStartMs, endMs = segmentEndMs)
+                                    }
+                                }
+                                val text = normalizeCase(words.joinToString(" ") { it.text })
+                                Log.i(tag, "TwoPass (offset=%.2fs): \"%s\" -> \"%s\"".format(
+                                    audioOffsetSec, result.text.take(40), text.take(60)
+                                ))
+                                pendingFinals.add(PendingFinal(text, words))
+                                postMain { deliverPendingFinals() }
+                            }
+                        } else {
+                            // Streaming-only fallback
+                            val words = SherpaTokenMerger.mergeTokens(
+                                result.tokens, result.timestamps, audioOffsetSec
+                            )
+                            val text = normalizeCase(words.joinToString(" ") { it.text })
+                            Log.i(tag, "Final (offset=%.2fs): %d words, text=\"%s\"".format(
+                                audioOffsetSec, words.size, text.take(60)
+                            ))
+                            pendingFinals.add(PendingFinal(text, words))
+                            postMain { deliverPendingFinals() }
+                        }
+                    } else {
+                        pcmSegmentBuffer.clear()
                     }
                     audioOffsetSec += segmentSamples.toFloat() / SAMPLE_RATE
                     segmentSamples = 0
@@ -216,17 +250,39 @@ class SherpaTranscriber(
             }
             val result = recognizer.getResult(onlineStream)
             if (result.text.isNotBlank()) {
-                val words = SherpaTokenMerger.mergeTokens(
-                    result.tokens, result.timestamps, audioOffsetSec
-                )
-                val text = normalizeCase(words.joinToString(" ") { it.text })
-                Log.i(tag, "Final (flush, offset=%.2fs): %d words".format(audioOffsetSec, words.size))
-                onFinalResultWithWords?.invoke(text, words)
-                onFinalResult?.invoke(text)
+                val offlineRec = offlineModelManager?.getRecognizer()
+                if (offlineRec != null && pcmSegmentBuffer.isNotEmpty()) {
+                    // Two-pass flush: offline second pass on remaining audio
+                    val segmentPcm = flattenPcmBuffer(pcmSegmentBuffer, 0)
+                    val offlineResult = offlineRec.decode(segmentPcm, SAMPLE_RATE)
+                    if (offlineResult.text.isNotBlank()) {
+                        val words = if (offlineResult.tokens.isNotEmpty() && offlineResult.timestamps.isNotEmpty()) {
+                            SherpaTokenMerger.mergeTokens(offlineResult.tokens, offlineResult.timestamps, audioOffsetSec)
+                        } else {
+                            val segmentStartMs = (audioOffsetSec * 1000).toLong()
+                            offlineResult.text.split(" ").filter { it.isNotBlank() }.map { word ->
+                                com.writer.model.WordInfo(text = word.lowercase(), startMs = segmentStartMs, endMs = segmentStartMs)
+                            }
+                        }
+                        val text = normalizeCase(words.joinToString(" ") { it.text })
+                        Log.i(tag, "TwoPass flush (offset=%.2fs): \"%s\"".format(audioOffsetSec, text.take(60)))
+                        onFinalResultWithWords?.invoke(text, words)
+                        onFinalResult?.invoke(text)
+                    }
+                } else {
+                    val words = SherpaTokenMerger.mergeTokens(
+                        result.tokens, result.timestamps, audioOffsetSec
+                    )
+                    val text = normalizeCase(words.joinToString(" ") { it.text })
+                    Log.i(tag, "Final (flush, offset=%.2fs): %d words".format(audioOffsetSec, words.size))
+                    onFinalResultWithWords?.invoke(text, words)
+                    onFinalResult?.invoke(text)
+                }
             }
             onlineStream.release()
         }
         stream = null
+        pcmSegmentBuffer.clear()
 
         pcmSource?.stop() // idempotent — already called before join, but needed for release
         pcmSource?.release()
@@ -313,6 +369,27 @@ class SherpaTranscriber(
         mainThreadExecutor(Runnable { action() })
     }
 
+    /**
+     * Flatten buffered PCM chunks into a single array, keeping an overlap tail
+     * for the next segment (same as SherpaOnnx2Pass: 500ms = 8000 samples at 16kHz).
+     */
+    private fun flattenPcmBuffer(buffer: MutableList<FloatArray>, overlapSamples: Int): FloatArray {
+        val totalSamples = buffer.sumOf { it.size }
+        val samples = FloatArray(totalSamples)
+        var i = 0
+        for (chunk in buffer) {
+            chunk.copyInto(samples, i)
+            i += chunk.size
+        }
+        // Keep overlap for next segment
+        val n = maxOf(0, samples.size - overlapSamples)
+        buffer.clear()
+        if (overlapSamples > 0 && n < samples.size) {
+            buffer.add(samples.copyOfRange(n, samples.size))
+        }
+        return if (overlapSamples > 0) samples.copyOfRange(0, maxOf(1, n)) else samples
+    }
+
     companion object {
         private const val SAMPLE_RATE = 16000
         private const val BUFFER_SIZE = 4000
@@ -320,5 +397,6 @@ class SherpaTranscriber(
         private const val PARTIAL_THROTTLE_CHUNKS = 4
         private const val MAX_READ_ERRORS = 10 // consecutive read() failures before giving up
         private const val SILENT_CHUNKS_WARNING = 40 // ~5s of silence before warning (40 × 0.125s)
+        private const val OVERLAP_SAMPLES = 8000 // 500ms at 16kHz, same as SherpaOnnx2Pass
     }
 }

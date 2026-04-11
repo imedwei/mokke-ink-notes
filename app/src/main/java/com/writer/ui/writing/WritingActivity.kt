@@ -100,6 +100,7 @@ class WritingActivity : AppCompatActivity() {
                 com.writer.ui.settings.SettingsActivity.ENGINE_SHERPA)
             ?: com.writer.ui.settings.SettingsActivity.ENGINE_SHERPA
     private val sherpaModelManager = com.writer.recognition.SherpaModelManager()
+    private val offlineModelManager = com.writer.recognition.OfflineModelManager()
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())
     private lateinit var playbackOverlay: com.writer.view.PlaybackOverlayView
     private lateinit var recordingOverlay: com.writer.view.RecordingOverlayView
@@ -1299,7 +1300,14 @@ class WritingActivity : AppCompatActivity() {
             return
         }
 
-        val transcriber = com.writer.recognition.SherpaTranscriber(this, sherpaModelManager)
+        // Start loading offline model for two-pass (non-blocking, ~9s)
+        if (offlineModelManager.state == com.writer.recognition.OfflineModelManager.State.UNLOADED) {
+            offlineModelManager.preload(this)
+        }
+
+        val transcriber = com.writer.recognition.SherpaTranscriber(
+            this, sherpaModelManager, offlineModelManager = offlineModelManager
+        )
         audioTranscriber = transcriber
 
         transcriber.onStatusUpdate = { status ->
@@ -2121,7 +2129,10 @@ class WritingActivity : AppCompatActivity() {
     override fun onStop() {
         super.onStop()
         // Release Sherpa model when backgrounded (unless recording)
-        if (!lectureMode) sherpaModelManager.release()
+        if (!lectureMode) {
+            sherpaModelManager.release()
+            offlineModelManager.release()
+        }
         orientationManager.stop()
         snapshotAndSaveBlocking()
     }
@@ -2320,6 +2331,7 @@ class WritingActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         sherpaModelManager.release()
+        offlineModelManager.release()
         if (lectureMode) stopLectureCapture()
         recordingBackCallback.isEnabled = false
         unregisterReceiver(bugReportReceiver)

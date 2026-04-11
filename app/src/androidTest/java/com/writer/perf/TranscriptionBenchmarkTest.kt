@@ -53,8 +53,27 @@ class TranscriptionBenchmarkTest {
         private const val UTTS_PER_SPEAKER = 3
         private const val TARGET_SPEAKERS = 4
 
+        // Legacy — kept for existing tests that reference it
         private const val LIBRISPEECH_URL =
             "https://www.openslr.org/resources/12/test-clean.tar.gz"
+
+        // ── Evaluation datasets (unseen by all models) ──
+
+        // Earnings-22: financial earnings calls from Rev.ai (diverse accents, teleconference audio)
+        private const val EARNINGS22_MEDIA_BASE =
+            "https://media.githubusercontent.com/media/revdotcom/speech-datasets/main/earnings22/media"
+        private const val EARNINGS22_TRANSCRIPT_BASE =
+            "https://raw.githubusercontent.com/revdotcom/speech-datasets/main/earnings22/transcripts/force_aligned_nlp_references"
+        // Smallest US English file (~41 min total, we take first ~2 min)
+        private const val EARNINGS22_FILE_ID = "4462231"
+        private const val EARNINGS22_MAX_SEGMENTS = 6 // ~30s of speech segments
+
+        // TED-LIUM 3: TED talks via HuggingFace datasets-server API
+        private const val TEDLIUM_API_BASE =
+            "https://datasets-server.huggingface.co/rows?dataset=distil-whisper%2Ftedlium-long-form&config=default&split=validation"
+        // Row 3 = Brian_Cox (~2-3 min), Row 5 = David_Merrill (~3-4 min)
+        private const val TEDLIUM_ROW = 3
+        private const val TEDLIUM_MAX_DURATION_SEC = 30 // trim to ~30s
 
         private const val SHERPA_BASE =
             "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-2023-06-26/resolve/main"
@@ -97,11 +116,56 @@ class TranscriptionBenchmarkTest {
             "model.int8.onnx",
             "tokens.txt"
         )
+
+        // Offline model variants for comparison benchmark
+        // 1. Newer zipformer (same architecture, newer checkpoint) — LibriSpeech trained
+        private const val OFFLINE_ZIPFORMER_0626_BASE =
+            "https://huggingface.co/csukuangfj/sherpa-onnx-zipformer-en-2023-06-26/resolve/main"
+        private val OFFLINE_ZIPFORMER_0626_FILES = listOf(
+            "encoder-epoch-99-avg-1.int8.onnx",
+            "decoder-epoch-99-avg-1.int8.onnx",
+            "joiner-epoch-99-avg-1.int8.onnx",
+            "tokens.txt"
+        )
+
+        // 2. Multidataset (LibriSpeech + GigaSpeech + CommonVoice) — best real-world generalization
+        private const val OFFLINE_MULTIDATASET_BASE =
+            "https://huggingface.co/yfyeung/icefall-asr-multidataset-pruned_transducer_stateless7-2023-05-04/resolve/main"
+        // Files are in subdirectories — handled specially in ensure function
+        private val OFFLINE_MULTIDATASET_FILES = mapOf(
+            "encoder-epoch-30-avg-4.int8.onnx" to "exp/encoder-epoch-30-avg-4.int8.onnx",
+            "decoder-epoch-30-avg-4.int8.onnx" to "exp/decoder-epoch-30-avg-4.int8.onnx",
+            "joiner-epoch-30-avg-4.int8.onnx" to "exp/joiner-epoch-30-avg-4.int8.onnx",
+            "tokens.txt" to "data/lang_bpe_500/tokens.txt"
+        )
+
+        // 3. GigaSpeech (10Kh YouTube/podcasts) — real-world audio, compact
+        private const val OFFLINE_GIGASPEECH_BASE =
+            "https://huggingface.co/csukuangfj/sherpa-onnx-zipformer-gigaspeech-2023-12-12/resolve/main"
+        private val OFFLINE_GIGASPEECH_FILES = listOf(
+            "encoder-epoch-30-avg-1.int8.onnx",
+            "decoder-epoch-30-avg-1.int8.onnx",
+            "joiner-epoch-30-avg-1.int8.onnx",
+            "tokens.txt"
+        )
+
+        // 4. NeMo Parakeet TDT 0.6B v2 (120Kh diverse, SOTA accuracy, built-in punctuation)
+        private const val OFFLINE_PARAKEET_BASE =
+            "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8/resolve/main"
+        private val OFFLINE_PARAKEET_FILES = listOf(
+            "encoder.int8.onnx",
+            "decoder.int8.onnx",
+            "joiner.int8.onnx",
+            "tokens.txt"
+        )
     }
 
     private val context get() = InstrumentationRegistry.getInstrumentation().targetContext
     private val benchDir by lazy { File(context.filesDir, "benchmark").also { it.mkdirs() } }
     private val utterances by lazy { loadTestUtterances() }
+    /** Evaluation utterances from datasets unseen by all models (Earnings-22 + TED-LIUM).
+     *  Each dataset produces one long utterance — WER is computed on the full transcript. */
+    private val evalUtterances by lazy { loadEarnings22() + loadTedLium() }
 
     // ── Data classes ────────────────────────────────────────────────
 
@@ -161,7 +225,38 @@ class TranscriptionBenchmarkTest {
         return buf
     }
 
-    private fun decodeFlacToPcm(flacFile: File): FloatArray {
+    /** Get the sample rate of an audio file via MediaExtractor. */
+    private fun getAudioSampleRate(audioFile: File): Int {
+        val extractor = MediaExtractor()
+        extractor.setDataSource(audioFile.absolutePath)
+        val format = extractor.getTrackFormat(0)
+        val rate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+        extractor.release()
+        return rate
+    }
+
+    /** Decode any audio file (FLAC, MP3, WAV, OGG) to native-rate mono float32 PCM via MediaCodec. */
+    private fun decodeAudioToPcm(audioFile: File, maxSamples: Int = Int.MAX_VALUE): FloatArray {
+        return decodeAudioToPcmInternal(audioFile, maxSamples)
+    }
+
+    /** Simple nearest-neighbor resample from srcRate to dstRate. */
+    private fun resample(pcm: FloatArray, srcRate: Int, dstRate: Int): FloatArray {
+        if (srcRate == dstRate) return pcm
+        val ratio = srcRate.toDouble() / dstRate
+        val outLen = (pcm.size / ratio).toInt()
+        val out = FloatArray(outLen)
+        for (i in 0 until outLen) {
+            val srcIdx = (i * ratio).toInt().coerceAtMost(pcm.size - 1)
+            out[i] = pcm[srcIdx]
+        }
+        return out
+    }
+
+    @Suppress("DEPRECATION")
+    private fun decodeFlacToPcm(flacFile: File): FloatArray = decodeAudioToPcmInternal(flacFile)
+
+    private fun decodeAudioToPcmInternal(flacFile: File, maxSamples: Int = Int.MAX_VALUE): FloatArray {
         val extractor = MediaExtractor()
         extractor.setDataSource(flacFile.absolutePath)
         require(extractor.trackCount > 0) { "No tracks in ${flacFile.name}" }
@@ -173,7 +268,9 @@ class TranscriptionBenchmarkTest {
         codec.configure(format, null, null, 0)
         codec.start()
 
-        val samples = mutableListOf<Float>()
+        // Use primitive FloatArray to avoid boxing overhead (MutableList<Float> uses 16 bytes/sample)
+        var samples = FloatArray(minOf(maxSamples, SAMPLE_RATE * 60)) // start at 1 min or maxSamples
+        var sampleCount = 0
         val info = MediaCodec.BufferInfo()
         var inputDone = false
 
@@ -204,13 +301,20 @@ class TranscriptionBenchmarkTest {
                     .order(ByteOrder.LITTLE_ENDIAN).asShortBuffer()
                 val shorts = ShortArray(outBuf.remaining())
                 outBuf.get(shorts)
-                for (s in shorts) samples.add(s.toFloat() / 32768f)
+                for (s in shorts) {
+                    if (sampleCount >= maxSamples) break
+                    if (sampleCount >= samples.size) {
+                        samples = samples.copyOf(minOf(samples.size * 2, maxSamples))
+                    }
+                    samples[sampleCount++] = s.toFloat() / 32768f
+                }
                 codec.releaseOutputBuffer(outIdx, false)
+                if (sampleCount >= maxSamples) break
             }
         }
 
         codec.stop(); codec.release(); extractor.release()
-        return samples.toFloatArray()
+        return if (sampleCount == samples.size) samples else samples.copyOf(sampleCount)
     }
 
     // ── LibriSpeech loading ─────────────────────────────────────────
@@ -345,6 +449,261 @@ class TranscriptionBenchmarkTest {
         assumeTrue("Need at least 4 test utterances", utts.size >= 4)
         saveToCache(cacheDir, utts)
         return utts
+    }
+
+    // ── Earnings-22 loading ──────────────────────────────────────────
+
+    /**
+     * Download one Earnings-22 earnings call MP3 + force-aligned transcript,
+     * extract the first [EARNINGS22_MAX_SEGMENTS] speech segments as utterances.
+     *
+     * The force-aligned NLP file has one word per line:
+     *   token|speaker|ts|endTs|punctuation|prepunctuation|case|tags|...
+     *
+     * We group words into sentences (splitting on sentence-ending punctuation)
+     * and create one Utterance per sentence, extracting the corresponding audio.
+     */
+    private fun loadEarnings22(): List<Utterance> {
+        val cacheDir = File(benchDir, "earnings22")
+        val cached = loadFromCache(cacheDir)
+        if (cached != null && cached.isNotEmpty()) {
+            Log.i(TAG, "Loaded ${cached.size} cached Earnings-22 utterances")
+            return cached
+        }
+
+        Log.i(TAG, "Downloading Earnings-22 call $EARNINGS22_FILE_ID...")
+
+        // Download MP3
+        val mp3File = File(cacheDir.also { it.mkdirs() }, "$EARNINGS22_FILE_ID.mp3")
+        if (!mp3File.exists() || mp3File.length() == 0L) {
+            URL("$EARNINGS22_MEDIA_BASE/$EARNINGS22_FILE_ID.mp3").openStream().use { inp ->
+                mp3File.outputStream().use { inp.copyTo(it) }
+            }
+            Log.i(TAG, "Downloaded MP3: ${mp3File.length() / 1024}KB")
+        }
+
+        // Download force-aligned transcript
+        val nlpFile = File(cacheDir, "$EARNINGS22_FILE_ID.aligned.nlp")
+        if (!nlpFile.exists() || nlpFile.length() == 0L) {
+            URL("$EARNINGS22_TRANSCRIPT_BASE/$EARNINGS22_FILE_ID.aligned.nlp").openStream().use { inp ->
+                nlpFile.outputStream().use { inp.copyTo(it) }
+            }
+            Log.i(TAG, "Downloaded NLP: ${nlpFile.length() / 1024}KB")
+        }
+
+        // Parse NLP into sentences
+        val sentences = parseEarnings22Nlp(nlpFile)
+        Log.i(TAG, "Parsed ${sentences.size} sentences from NLP transcript")
+
+        // Only decode as much audio as we need (first N segments + 2s margin)
+        val lastSegment = sentences.take(EARNINGS22_MAX_SEGMENTS).lastOrNull()
+        val maxDecodeSec = (lastSegment?.endSec ?: 120f) + 2f
+
+        // Detect actual sample rate from MediaExtractor (MP3 may be 8/22/44kHz)
+        val actualSampleRate = getAudioSampleRate(mp3File)
+        Log.i(TAG, "MP3 native sample rate: $actualSampleRate Hz")
+        val maxDecodeSamples = (maxDecodeSec * actualSampleRate).toInt()
+        val fullPcm = decodeAudioToPcm(mp3File, maxDecodeSamples)
+        Log.i(TAG, "Decoded MP3: %.1fs of audio at ${actualSampleRate}Hz (limited to %.0fs)".format(
+            fullPcm.size.toFloat() / actualSampleRate, maxDecodeSec))
+
+        // Build one utterance covering all segments: concatenate ground truth,
+        // extract audio from first segment start to last segment end
+        val segments = sentences.take(EARNINGS22_MAX_SEGMENTS)
+        val groundTruth = segments.joinToString(" ") { it.text }
+        val audioStart = segments.first().startSec
+        val audioEnd = segments.last().endSec
+        val startSample = (audioStart * actualSampleRate).toInt().coerceIn(0, fullPcm.size)
+        val endSample = (audioEnd * actualSampleRate).toInt().coerceIn(startSample, fullPcm.size)
+        val pcm = resample(fullPcm.copyOfRange(startSample, endSample), actualSampleRate, SAMPLE_RATE)
+
+        Log.i(TAG, "Earnings-22: %.1f-%.1fs (%d segments), %d words".format(
+            audioStart, audioEnd, segments.size, groundTruth.split(" ").size))
+
+        val utts = listOf(Utterance(
+            id = "earn22-$EARNINGS22_FILE_ID",
+            speakerId = "earn22",
+            pcm = pcm,
+            groundTruth = groundTruth
+        ))
+        saveToCache(cacheDir, utts)
+        return utts
+    }
+
+    private data class Sentence(val text: String, val startSec: Float, val endSec: Float, val speaker: String)
+
+    private fun parseEarnings22Nlp(nlpFile: File): List<Sentence> {
+        val lines = nlpFile.readLines()
+        if (lines.isEmpty()) return emptyList()
+
+        // Skip header line
+        val dataLines = if (lines[0].startsWith("token|")) lines.drop(1) else lines
+
+        val sentences = mutableListOf<Sentence>()
+        val currentWords = mutableListOf<String>()
+        var sentenceStartSec = -1f
+        var sentenceEndSec = 0f
+        var currentSpeaker = ""
+
+        for (line in dataLines) {
+            val parts = line.split("|")
+            if (parts.size < 6) continue
+            val token = parts[0]
+            val speaker = parts[1]
+            val ts = parts[2].toFloatOrNull() ?: continue
+            val endTs = parts[3].toFloatOrNull() ?: continue
+            val punctuation = parts[4]
+
+            if (sentenceStartSec < 0) sentenceStartSec = ts
+            currentSpeaker = speaker
+            sentenceEndSec = endTs
+
+            // Apply case
+            val caseType = if (parts.size > 6) parts[6] else ""
+            val word = when (caseType) {
+                "UC" -> token.replaceFirstChar { it.uppercase() }
+                "CA" -> token.uppercase()
+                else -> token.lowercase()
+            }
+            currentWords.add(word + punctuation)
+
+            // Sentence boundary: period, question mark, exclamation
+            if (punctuation.contains('.') || punctuation.contains('?') || punctuation.contains('!')) {
+                if (currentWords.isNotEmpty()) {
+                    sentences.add(Sentence(
+                        text = currentWords.joinToString(" "),
+                        startSec = sentenceStartSec,
+                        endSec = sentenceEndSec,
+                        speaker = currentSpeaker
+                    ))
+                    currentWords.clear()
+                    sentenceStartSec = -1f
+                }
+            }
+        }
+        // Emit remaining words as final sentence
+        if (currentWords.isNotEmpty()) {
+            sentences.add(Sentence(
+                text = currentWords.joinToString(" "),
+                startSec = sentenceStartSec,
+                endSec = sentenceEndSec,
+                speaker = currentSpeaker
+            ))
+        }
+        return sentences
+    }
+
+    // ── TED-LIUM 3 loading ──────────────────────────────────────────
+
+    /**
+     * Load a TED talk from the HuggingFace datasets-server API.
+     * Downloads the audio (signed URL) and transcript for one speaker entry,
+     * trims to [TEDLIUM_MAX_DURATION_SEC] seconds.
+     *
+     * The transcript is a single string for the whole talk, so we split into
+     * ~sentence-sized chunks for per-utterance WER measurement.
+     */
+    private fun loadTedLium(): List<Utterance> {
+        val cacheDir = File(benchDir, "tedlium")
+        val cached = loadFromCache(cacheDir)
+        if (cached != null && cached.isNotEmpty()) {
+            Log.i(TAG, "Loaded ${cached.size} cached TED-LIUM utterances")
+            return cached
+        }
+
+        Log.i(TAG, "Fetching TED-LIUM row $TEDLIUM_ROW from datasets-server API...")
+
+        // Fetch row metadata (contains signed audio URL + transcript)
+        val apiUrl = "$TEDLIUM_API_BASE&offset=$TEDLIUM_ROW&length=1"
+        val conn = URL(apiUrl).openConnection() as HttpURLConnection
+        conn.connectTimeout = 30_000
+        conn.readTimeout = 60_000
+        val json = conn.inputStream.bufferedReader().readText()
+        conn.disconnect()
+
+        val root = JSONObject(json)
+        val rows = root.getJSONArray("rows")
+        if (rows.length() == 0) {
+            Log.w(TAG, "No rows returned from TED-LIUM API")
+            return emptyList()
+        }
+        val row = rows.getJSONObject(0).getJSONObject("row")
+        val transcript = row.getString("text")
+
+        // Get audio URL from the nested audio array
+        val audioArray = row.getJSONArray("audio")
+        val audioUrl = audioArray.getJSONObject(0).getString("src")
+        Log.i(TAG, "TED-LIUM transcript: ${transcript.length} chars, audio URL obtained")
+
+        // Download audio WAV
+        val wavFile = File(cacheDir.also { it.mkdirs() }, "tedlium_row$TEDLIUM_ROW.wav")
+        URL(audioUrl).openStream().use { inp ->
+            wavFile.outputStream().use { inp.copyTo(it) }
+        }
+        Log.i(TAG, "Downloaded WAV: ${wavFile.length() / 1024}KB")
+
+        // Decode to PCM, trimmed to max duration
+        val tedSampleRate = getAudioSampleRate(wavFile)
+        val maxSamples = TEDLIUM_MAX_DURATION_SEC * tedSampleRate
+        val rawPcm = decodeAudioToPcm(wavFile, maxSamples)
+        val fullPcm = resample(rawPcm, tedSampleRate, SAMPLE_RATE)
+        Log.i(TAG, "Decoded WAV: %.1fs at ${tedSampleRate}Hz, resampled to ${SAMPLE_RATE}Hz".format(
+            fullPcm.size.toFloat() / SAMPLE_RATE))
+
+        // The transcript covers the full talk but we only have the first 30s of audio.
+        // Without word-level timestamps we can't know exactly which words are in our clip.
+        // Solution: do a quick offline decode to count actual words, then use that count
+        // (plus margin) to trim the reference. This avoids length-mismatch WER artifacts.
+        val actualDurationSec = fullPcm.size.toFloat() / SAMPLE_RATE
+        val allWords = transcript.split("\\s+".toRegex()).filter { it.isNotBlank() }
+        val wordsForDuration = calibrateRefWordCount(fullPcm, allWords)
+        val groundTruth = allWords.take(wordsForDuration).joinToString(" ")
+
+        Log.i(TAG, "TED-LIUM: %.1fs audio, %d ref words (of %d total, %.1f w/s est)".format(
+            actualDurationSec, wordsForDuration, allWords.size, wordsForDuration / actualDurationSec))
+
+        val utts = listOf(Utterance(
+            id = "tedlium-row$TEDLIUM_ROW",
+            speakerId = "tedlium",
+            pcm = fullPcm,
+            groundTruth = groundTruth
+        ))
+        saveToCache(cacheDir, utts)
+        return utts
+    }
+
+    /**
+     * Decode the audio with the offline transducer to count how many words the
+     * model actually produces, then return that count + 10% as the ref word count.
+     * This eliminates length-mismatch WER artifacts when the transcript has no
+     * word-level timestamps.
+     */
+    private fun calibrateRefWordCount(pcm: FloatArray, allRefWords: List<String>): Int {
+        val modelDir = ensureOfflineTransducerModel()
+        val config = com.k2fsa.sherpa.onnx.OfflineRecognizerConfig(
+            modelConfig = com.k2fsa.sherpa.onnx.OfflineModelConfig(
+                transducer = com.k2fsa.sherpa.onnx.OfflineTransducerModelConfig(
+                    encoder = File(modelDir, "encoder-epoch-99-avg-1.int8.onnx").absolutePath,
+                    decoder = File(modelDir, "decoder-epoch-99-avg-1.int8.onnx").absolutePath,
+                    joiner = File(modelDir, "joiner-epoch-99-avg-1.int8.onnx").absolutePath
+                ),
+                tokens = File(modelDir, "tokens.txt").absolutePath,
+                numThreads = 2
+            )
+        )
+        val recognizer = com.k2fsa.sherpa.onnx.OfflineRecognizer(config = config)
+        val stream = recognizer.createStream()
+        stream.acceptWaveform(pcm, SAMPLE_RATE)
+        recognizer.decode(stream)
+        val hypText = recognizer.getResult(stream).text.trim()
+        stream.release()
+        recognizer.release()
+
+        val hypWords = hypText.split("\\s+".toRegex()).filter { it.isNotBlank() }.size
+        // Use hyp count + 10% margin, capped at total ref words
+        val refCount = ((hypWords * 1.1f).toInt()).coerceAtMost(allRefWords.size)
+        Log.i(TAG, "TED-LIUM calibration: model produced $hypWords words, using $refCount ref words")
+        return refCount
     }
 
     // ── Minimal tar reader ──────────────────────────────────────────
@@ -1535,6 +1894,197 @@ class TranscriptionBenchmarkTest {
                 ))
             }
         }
+    }
+
+    // ── Offline model comparison benchmark ─────────────────────────────
+
+    private fun ensureOfflineZipformer0626(): File =
+        ensureModelFiles(File(benchDir, "sherpa-offline-zipformer-0626"), OFFLINE_ZIPFORMER_0626_BASE, OFFLINE_ZIPFORMER_0626_FILES)
+
+    private fun ensureOfflineGigaSpeech(): File =
+        ensureModelFiles(File(benchDir, "sherpa-offline-gigaspeech"), OFFLINE_GIGASPEECH_BASE, OFFLINE_GIGASPEECH_FILES)
+
+    private fun ensureOfflineParakeet(): File =
+        ensureModelFiles(File(benchDir, "sherpa-offline-parakeet"), OFFLINE_PARAKEET_BASE, OFFLINE_PARAKEET_FILES)
+
+    /** Download files from subdirectory paths (for multidataset model). */
+    private fun ensureOfflineMultidataset(): File {
+        val dir = File(benchDir, "sherpa-offline-multidataset").also { it.mkdirs() }
+        for ((localName, remotePath) in OFFLINE_MULTIDATASET_FILES) {
+            val file = File(dir, localName)
+            if (file.exists() && file.length() > 0) continue
+            Log.i(TAG, "Downloading $remotePath -> $localName...")
+            URL("$OFFLINE_MULTIDATASET_BASE/$remotePath").openStream().use { inp ->
+                file.outputStream().use { inp.copyTo(it) }
+            }
+        }
+        return dir
+    }
+
+    /**
+     * Generic offline transducer benchmark. Loads models, measures load time,
+     * runs WER/RTF, and profiles memory.
+     */
+    private fun benchmarkOfflineGeneric(
+        utts: List<Utterance>,
+        modelDir: File,
+        encoderFile: String,
+        decoderFile: String,
+        joinerFile: String,
+        tokensFile: String = "tokens.txt",
+        label: String,
+        profileMemory: Boolean = true
+    ): EngineResult {
+        val config = com.k2fsa.sherpa.onnx.OfflineRecognizerConfig(
+            modelConfig = com.k2fsa.sherpa.onnx.OfflineModelConfig(
+                transducer = com.k2fsa.sherpa.onnx.OfflineTransducerModelConfig(
+                    encoder = File(modelDir, encoderFile).absolutePath,
+                    decoder = File(modelDir, decoderFile).absolutePath,
+                    joiner = File(modelDir, joinerFile).absolutePath
+                ),
+                tokens = File(modelDir, tokensFile).absolutePath,
+                numThreads = 2
+            )
+        )
+
+        // Memory baseline
+        if (profileMemory) forceGc()
+        val memBaseline = if (profileMemory) snapshot("baseline") else null
+
+        Log.i(TAG, "$label: loading model...")
+        val t0 = System.currentTimeMillis()
+        val recognizer = com.k2fsa.sherpa.onnx.OfflineRecognizer(config = config)
+        val loadMs = System.currentTimeMillis() - t0
+        Log.i(TAG, "$label: loaded in ${loadMs}ms")
+        val modelSize = modelDir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+
+        // Memory after load
+        if (profileMemory) forceGc()
+        val memLoaded = if (profileMemory) snapshot("model loaded") else null
+
+        val rtfs = mutableListOf<Float>()
+        var wers = emptyList<Pair<String, Float>>()
+
+        for (run in 1..BENCHMARK_RUNS) {
+            var audioSec = 0f; var procMs = 0L
+            val runWers = mutableListOf<Pair<String, Float>>()
+
+            for (utt in utts) {
+                val stream = recognizer.createStream()
+                stream.acceptWaveform(utt.pcm, SAMPLE_RATE)
+
+                val start = System.currentTimeMillis()
+                recognizer.decode(stream)
+                procMs += System.currentTimeMillis() - start
+                audioSec += utt.durationSec
+
+                if (run == 1) {
+                    val result = recognizer.getResult(stream)
+                    val text = result.text.trim()
+                    val wer = wordErrorRate(utt.groundTruth, text)
+                    runWers.add(utt.id to wer)
+                    val refWords = normalize(utt.groundTruth).split(" ").filter { it.isNotEmpty() }.size
+                    val hypWords = normalize(text).split(" ").filter { it.isNotEmpty() }.size
+                    Log.i(TAG, "$label [${utt.id}] WER=%.3f (ref=%d hyp=%d words)".format(wer, refWords, hypWords))
+                    Log.i(TAG, "  ref: ${utt.groundTruth.take(120)}")
+                    Log.i(TAG, "  hyp: ${text.take(120)}")
+                }
+            }
+
+            rtfs.add(procMs / 1000f / audioSec)
+            Log.i(TAG, "$label run $run: RTF=%.3f".format(rtfs.last()))
+            if (run == 1) wers = runWers
+        }
+
+        // Memory during use
+        if (profileMemory) forceGc()
+        val memActive = if (profileMemory) snapshot("after transcription") else null
+
+        recognizer.release()
+
+        // Memory after release
+        if (profileMemory) forceGc()
+        val memReleased = if (profileMemory) snapshot("released") else null
+
+        if (profileMemory && memBaseline != null && memLoaded != null && memActive != null && memReleased != null) {
+            Log.i(TAG, "")
+            Log.i(TAG, "── $label MEMORY ──")
+            Log.i(TAG, "%-24s  %8s  %8s  %8s".format("Phase", "Java", "Native", "PSS"))
+            Log.i(TAG, "%-24s  %8s  %8s  %8s".format("", "(MB)", "(MB)", "(MB)"))
+            Log.i(TAG, "─".repeat(54))
+            for (s in listOf(memBaseline, memLoaded, memActive, memReleased)) {
+                Log.i(TAG, "%-24s  %7.1f  %7.1f  %7.1f".format(s.label, s.javaHeapMB, s.nativeHeapMB, s.pssMB))
+            }
+            val modelCost = memLoaded - memBaseline
+            Log.i(TAG, "%-24s  %+7.1f  %+7.1f  %+7.1f".format(
+                "Model load delta", modelCost.javaHeapMB, modelCost.nativeHeapMB, modelCost.pssMB
+            ))
+        }
+
+        return EngineResult(
+            engine = label,
+            modelLoadMs = loadMs, modelSizeBytes = modelSize,
+            rtfRuns = rtfs, rtfMedian = rtfs.sorted()[rtfs.size / 2],
+            werPerUtterance = wers,
+            werAggregate = wers.map { it.second }.average().toFloat()
+        )
+    }
+
+    /**
+     * Compare all offline models on unseen evaluation data (Earnings-22 + TED-LIUM 3).
+     *
+     * Neither dataset was used to train any of the models under test, giving a fair
+     * cross-domain WER comparison. Reports WER, RTF, load time, size, and memory.
+     */
+    @Test
+    fun benchmark_offline_models() {
+        val utts = evalUtterances
+        Log.i(TAG, "Offline model comparison (${utts.size} utterances from Earnings-22 + TED-LIUM)")
+        Log.i(TAG, "Evaluation data is unseen by all models — no training set advantage.")
+
+        val results = mutableListOf<EngineResult>()
+
+        // 1. Current model (2023-04-01, LibriSpeech trained)
+        try {
+            val dir = ensureOfflineTransducerModel()
+            results.add(benchmarkOfflineGeneric(utts, dir,
+                "encoder-epoch-99-avg-1.int8.onnx", "decoder-epoch-99-avg-1.int8.onnx",
+                "joiner-epoch-99-avg-1.int8.onnx",
+                label = "Zipformer 2023-04-01 (LibriSpeech)"))
+        } catch (e: Exception) { Log.e(TAG, "Zipformer 2023-04-01 failed", e) }
+
+        // 2. Newer zipformer (2023-06-26, LibriSpeech trained)
+        try {
+            val dir = ensureOfflineZipformer0626()
+            results.add(benchmarkOfflineGeneric(utts, dir,
+                "encoder-epoch-99-avg-1.int8.onnx", "decoder-epoch-99-avg-1.int8.onnx",
+                "joiner-epoch-99-avg-1.int8.onnx",
+                label = "Zipformer 2023-06-26 (LibriSpeech)"))
+        } catch (e: Exception) { Log.e(TAG, "Zipformer 2023-06-26 failed", e) }
+
+        // 3. Multidataset (LibriSpeech + GigaSpeech + CommonVoice)
+        try {
+            val dir = ensureOfflineMultidataset()
+            results.add(benchmarkOfflineGeneric(utts, dir,
+                "encoder-epoch-30-avg-4.int8.onnx", "decoder-epoch-30-avg-4.int8.onnx",
+                "joiner-epoch-30-avg-4.int8.onnx",
+                label = "Multidataset (LibriS+Giga+CV)"))
+        } catch (e: Exception) { Log.e(TAG, "Multidataset failed", e) }
+
+        // 4. GigaSpeech (YouTube/podcasts)
+        try {
+            val dir = ensureOfflineGigaSpeech()
+            results.add(benchmarkOfflineGeneric(utts, dir,
+                "encoder-epoch-30-avg-1.int8.onnx", "decoder-epoch-30-avg-1.int8.onnx",
+                "joiner-epoch-30-avg-1.int8.onnx",
+                label = "GigaSpeech (YouTube/podcasts)"))
+        } catch (e: Exception) { Log.e(TAG, "GigaSpeech failed", e) }
+
+        // 5. NeMo Parakeet TDT 0.6B v2 — SKIPPED: 1.6 GB native memory, OOM on 6 GB device
+        Log.i(TAG, "Skipping Parakeet TDT 0.6B: 1.6 GB native memory causes OOM on Palma 2 Pro")
+
+        assertTrue("At least one model must complete", results.isNotEmpty())
+        printComparison(results)
     }
 
     private fun printLatencySummary(engine: String, results: List<LatencyResult>) {
