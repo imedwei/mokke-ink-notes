@@ -355,25 +355,27 @@ My first offline benchmark used `sherpa-onnx-zipformer-en-2023-04-01`, an offlin
 
 ### Cross-domain evaluation
 
-To get honest numbers, I benchmarked four offline models on data **none of them were trained on**: [Earnings-22](https://github.com/revdotcom/speech-datasets) (financial conference calls with diverse accents) and [TED-LIUM 3](https://huggingface.co/datasets/distil-whisper/tedlium-long-form) (TED talks).
+To get honest numbers, I benchmarked the streaming model and four offline models on data **none of them were trained on**: [Earnings-22](https://github.com/revdotcom/speech-datasets) (financial conference calls with diverse accents) and [TED-LIUM 3](https://huggingface.co/datasets/distil-whisper/tedlium-long-form) (TED talks).
 
 ```
-Model                       Load      Size     RTF    Earn-22   TED    Avg WER
-────────────────────────────────────────────────────────────────────────────────
-Zipformer 2023-04-01 (LS)   8.8s    180 MB    0.08    13.3%   14.8%    14.0%
-Zipformer 2023-06-26 (LS)  10.9s     67 MB    0.06    18.7%   30.3%    24.5%
-Multidataset (LS+GS+CV)     7.6s    123 MB    0.08     8.0%   16.4%    12.2%
-GigaSpeech (YouTube/pod)   13.6s     68 MB    0.06     6.7%   18.0%    12.3%
-Parakeet TDT 0.6B             —     631 MB      —       —       —       OOM
+Model                       Load      Size   Native    RTF    Earn-22   TED    Avg WER
+────────────────────────────────────────────────────────────────────────────────────────
+Streaming ORT (LS)          2.3s     71 MB   +226 MB   0.14    20.0%   32.0%    26.0%
+─ offline models ──────────────────────────────────────────────────────────────────────
+Zipformer 2023-04-01 (LS)   8.8s   180 MB   +340 MB   0.08    13.3%   14.8%    14.0%
+Zipformer 2023-06-26 (LS)  10.9s    67 MB   +226 MB   0.06    18.7%   30.3%    24.5%
+Multidataset (LS+GS+CV)     7.6s   123 MB   +207 MB   0.08     8.0%   16.4%    12.2%
+GigaSpeech (YouTube/pod)   13.6s    68 MB   +233 MB   0.06     6.7%   18.0%    12.3%
+Parakeet TDT 0.6B             —    631 MB  +1645 MB     —       —       —       OOM
 ```
 
-Source: `TranscriptionBenchmarkTest#benchmark_offline_models`
+Source: `TranscriptionBenchmarkTest#benchmark_offline_models`, `benchmark_all_engines_unseen`
 
-Training data key: LS = LibriSpeech (960h audiobooks), GS = GigaSpeech (10Kh YouTube/podcasts), CV = CommonVoice.
+Training data key: LS = LibriSpeech (960h audiobooks), GS = GigaSpeech (10Kh YouTube/podcasts), CV = CommonVoice. Native = native memory delta when model is loaded (measured via `Debug.getNativeHeapAllocatedSize()`).
 
 The Parakeet TDT 0.6B (NVIDIA's SOTA model, 120Kh training data) crashed the Palma 2 Pro — its 1.6 GB native memory footprint is too much for a 6 GB device.
 
-**GigaSpeech and Multidataset tied at ~12% WER** on unseen data. GigaSpeech won on conference calls (6.7% — its YouTube/podcast training domain is closer to teleconference audio). At 68 MB on disk it's the smallest model, and I converted it to [ORT format](https://onnxruntime.ai/docs/reference/ort-format-models.html) for faster loading.
+**GigaSpeech and Multidataset tied at ~12% WER** on unseen data — roughly half the streaming model's error rate. GigaSpeech won on conference calls (6.7% — its YouTube/podcast training domain is closer to teleconference audio). At 68 MB on disk it's the smallest offline model, and I converted it to [ORT format](https://onnxruntime.ai/docs/reference/ort-format-models.html) for faster loading.
 
 ### Why offline is so much better
 
