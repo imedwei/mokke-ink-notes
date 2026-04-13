@@ -8,6 +8,7 @@ import com.writer.model.DocumentModel
 import com.writer.model.InkStroke
 import com.writer.model.StrokePoint
 import com.writer.model.StrokeType
+import com.writer.model.TextBlock
 import com.writer.model.minX
 import com.writer.model.minY
 import com.writer.model.maxX
@@ -64,6 +65,17 @@ class WritingCoordinator(
     private var highestLineIndex = -1
     // Track which line the user is currently writing on
     private var currentLineIndex = -1
+    // Audio recordings associated with this document
+    private val audioRecordings = mutableListOf<com.writer.model.AudioRecording>()
+    /** Audio player for TextBlock playback — lifecycle tied to document. */
+    val audioPlayer = com.writer.audio.AudioPlayer(inkCanvas.context)
+
+    /** Lecture capture state — document-scoped. */
+    var audioTranscriber: com.writer.recognition.AudioTranscriber? = null
+    var lectureMode = false
+    var lectureRecordingStartMs = 0L
+    val audioQualityMonitor = com.writer.audio.AudioQualityMonitor()
+
     // Whether the user has manually renamed this document
     var userRenamed = false
     // Callback to notify activity when heading-based rename should happen
@@ -188,6 +200,10 @@ class WritingCoordinator(
     }
 
     fun stop() {
+        audioPlayer.release()
+        audioTranscriber?.close()
+        audioTranscriber = null
+        lectureMode = false
         displayManager.stop()
         diagramManager.stop()
         inkCanvas.onStrokeCompleted = null
@@ -215,7 +231,9 @@ class WritingCoordinator(
         userRenamed = false
         columnModel.activeStrokes.clear()
         columnModel.diagramAreas.clear()
+        columnModel.textBlocks.clear()
         inkCanvas.diagramAreas = emptyList()
+        inkCanvas.textBlocks = emptyList()
     }
 
     private fun onStrokeCompleted(stroke: InkStroke) {
@@ -229,6 +247,14 @@ class WritingCoordinator(
         }
 
         val lineIdx = lineSegmenter.getStrokeLineIndex(stroke)
+
+        // Check if stroke lands on a TextBlock line — treat as replacement text
+        val targetBlock = columnModel.textBlocks.find { it.containsLine(lineIdx) }
+        if (targetBlock != null) {
+            onTextBlockReplacementStroke(stroke, targetBlock, lineIdx, elapsedMs)
+            return
+        }
+
         saveSnapshot(UndoCoalescer.ActionType.STROKE_ADDED, lineIdx)
         columnModel.activeStrokes.add(stroke)
         eventLog.recordEvent(lastStrokeIndex, StrokeEventLog.EventType.ADDED, "line=$lineIdx", elapsedMs = elapsedMs)
@@ -297,7 +323,57 @@ class WritingCoordinator(
         val overlapping = StrokeEraser.findOverlappingStrokes(
             scratchPoints, columnModel.activeStrokes, left, top, right, bottom, radius
         )
-        if (overlapping.isEmpty()) return
+
+        // Check if scratch-out hits a TextBlock (even if no strokes overlap)
+        if (overlapping.isEmpty()) {
+            val tbResult = TextBlockEraser.findAndErase(
+                left, top, right, bottom,
+                columnModel.textBlocks,
+                HandwritingCanvasView.LINE_SPACING,
+                HandwritingCanvasView.TOP_MARGIN,
+                canvasWidth = inkCanvas.width.toFloat()
+            )
+            if (tbResult != null) {
+                val (block, eraseResult) = tbResult
+                saveSnapshot(UndoCoalescer.ActionType.SCRATCH_OUT)
+                if (eraseResult.deleteBlock) {
+                    columnModel.textBlocks.remove(block)
+                    activeGap = null
+                } else {
+                    val idx = columnModel.textBlocks.indexOf(block)
+                    if (idx >= 0) {
+                        // Insert placeholder spaces matching the visual width of the removed word + padding
+                        val paint = android.text.TextPaint().apply { textSize = com.writer.view.ScreenMetrics.textBody }
+                        val removedWidth = paint.measureText(eraseResult.removedWords)
+                        val spaceWidth = paint.measureText(" ")
+                        val targetWidth = removedWidth + spaceWidth * 4 // original width + padding
+                        val numSpaces = (targetWidth / spaceWidth).toInt().coerceAtLeast(6)
+                        val gapPlaceholder = " ".repeat(numSpaces)
+                        val newText = if (eraseResult.gapCharIndex <= 0) {
+                            "$gapPlaceholder ${eraseResult.newText}"
+                        } else if (eraseResult.gapCharIndex >= eraseResult.newText.length) {
+                            "${eraseResult.newText} $gapPlaceholder"
+                        } else {
+                            val before = eraseResult.newText.substring(0, eraseResult.gapCharIndex).trimEnd()
+                            val after = eraseResult.newText.substring(eraseResult.gapCharIndex).trimStart()
+                            "$before $gapPlaceholder $after"
+                        }
+                        updateTextBlockText(idx, newText)
+                        activeGap = TextBlockGap(
+                            blockId = block.id,
+                            gapCharIndex = eraseResult.gapCharIndex,
+                            removedWord = eraseResult.removedWords
+                        )
+                    }
+                }
+                inkCanvas.textBlocks = columnModel.textBlocks.toList()
+                inkCanvas.drawToSurface()
+                displayManager.displayHiddenLines()
+                onUndoRedoStateChanged?.invoke()
+                Log.i(TAG, "Scratch-out on TextBlock: ${if (eraseResult.deleteBlock) "deleted" else "gap for '${eraseResult.removedWords}'"}")
+            }
+            return
+        }
 
         val expanded = StrokeEraser.expandToConnectedWord(
             overlapping, columnModel.activeStrokes,
@@ -404,6 +480,7 @@ class WritingCoordinator(
         lineTextCache.keys.filter { it >= anchorLine }.forEach { lineTextCache.remove(it) }
         inkCanvas.loadStrokes(columnModel.activeStrokes.toList())
         inkCanvas.diagramAreas = columnModel.diagramAreas.toList()
+        inkCanvas.textBlocks = columnModel.textBlocks.toList()
         displayManager.clearEverHiddenLines()
         displayManager.displayHiddenLines()
     }
@@ -419,7 +496,7 @@ class WritingCoordinator(
 
     fun getMarkdownBlocks(): List<MarkdownExporter.MdBlock> = MarkdownExporter.buildBlocks(
         lineTextCache, columnModel.activeStrokes, columnModel.diagramAreas,
-        inkCanvas.width.toFloat(), paragraphBuilder, lineSegmenter,
+        columnModel.textBlocks, inkCanvas.width.toFloat(), paragraphBuilder, lineSegmenter,
         isDiagramLine = { diagramManager.isDiagramLine(it) }
     )
 
@@ -461,9 +538,12 @@ class WritingCoordinator(
         columnModel.activeStrokes.addAll(snapshot.strokes)
         columnModel.diagramAreas.clear()
         columnModel.diagramAreas.addAll(snapshot.diagramAreas)
+        columnModel.textBlocks.clear()
+        columnModel.textBlocks.addAll(snapshot.textBlocks)
         diagramManager.clearTextCache()
         rebuildDiagramNodes(snapshot.strokes)
         inkCanvas.diagramAreas = snapshot.diagramAreas
+        inkCanvas.textBlocks = snapshot.textBlocks
         inkCanvas.loadStrokes(snapshot.strokes)
 
         val scrollDecision = UndoScrollCalculator.computeScroll(
@@ -485,7 +565,8 @@ class WritingCoordinator(
         strokes = columnModel.activeStrokes.toList(),
         scrollOffsetY = inkCanvas.scrollOffsetY,
         lineTextCache = lineTextCache.toMap(),
-        diagramAreas = columnModel.diagramAreas.toList()
+        diagramAreas = columnModel.diagramAreas.toList(),
+        textBlocks = columnModel.textBlocks.toList()
     )
 
     fun canUndo(): Boolean = undoManager.canUndo()
@@ -556,7 +637,8 @@ class WritingCoordinator(
             strokes = inkCanvas.getStrokes(),
             lineTextCache = lineTextCache.toMap(),
             everHiddenLines = displayManager.getEverHiddenLinesSnapshot(),
-            diagramAreas = columnModel.diagramAreas.toList()
+            diagramAreas = columnModel.diagramAreas.toList(),
+            textBlocks = columnModel.textBlocks.toList()
         )
     }
 
@@ -566,7 +648,8 @@ class WritingCoordinator(
             scrollOffsetY = inkCanvas.scrollOffsetY,
             highestLineIndex = highestLineIndex,
             currentLineIndex = currentLineIndex,
-            userRenamed = userRenamed
+            userRenamed = userRenamed,
+            audioRecordings = audioRecordings.toList()
         )
     }
 
@@ -575,6 +658,195 @@ class WritingCoordinator(
         highestLineIndex = data.highestLineIndex
         currentLineIndex = data.currentLineIndex
         userRenamed = data.userRenamed
+        audioRecordings.clear()
+        audioRecordings.addAll(data.audioRecordings)
+    }
+
+    fun addAudioRecording(recording: com.writer.model.AudioRecording) {
+        audioRecordings.add(recording)
+    }
+
+    // Debounce timer for TextBlock replacement recognition
+    private var textBlockReplaceJob: kotlinx.coroutines.Job? = null
+    private var pendingReplaceBlock: TextBlock? = null
+    private var pendingReplaceLineIdx: Int = -1
+    private val REPLACE_DEBOUNCE_MS = 800L
+
+    /**
+     * Active gap in a TextBlock from scratch-out, awaiting replacement strokes.
+     * The gap is rendered as blank space on the canvas so the user can write in it.
+     */
+    data class TextBlockGap(
+        val blockId: String,
+        val gapCharIndex: Int,
+        val removedWord: String
+    )
+    private var activeGap: TextBlockGap? = null
+
+    /**
+     * Handle a stroke written on a TextBlock line — accumulate strokes and
+     * debounce recognition until the user pauses writing.
+     */
+    private fun onTextBlockReplacementStroke(
+        stroke: InkStroke, block: TextBlock, lineIdx: Int, elapsedMs: Long
+    ) {
+        saveSnapshot(UndoCoalescer.ActionType.STROKE_ADDED, lineIdx)
+        columnModel.activeStrokes.add(stroke)
+        pendingReplaceBlock = block
+        pendingReplaceLineIdx = lineIdx
+
+        // Cancel previous debounce and restart
+        textBlockReplaceJob?.cancel()
+        textBlockReplaceJob = scope.launch {
+            kotlinx.coroutines.delay(REPLACE_DEBOUNCE_MS)
+            commitTextBlockReplacement()
+        }
+
+        eventLog.recordEvent(lastStrokeIndex, StrokeEventLog.EventType.ADDED,
+            "textblock_replace line=$lineIdx", elapsedMs = elapsedMs)
+    }
+
+    private suspend fun commitTextBlockReplacement() {
+        val savedBlock = pendingReplaceBlock ?: return
+        val lineIdx = pendingReplaceLineIdx
+        pendingReplaceBlock = null
+        // Look up the current version of the block (may have been modified by scratch-out gap insertion)
+        val block = columnModel.textBlocks.find { it.id == savedBlock.id } ?: return
+
+        val lineStrokes = columnModel.activeStrokes.filter {
+            lineSegmenter.getStrokeLineIndex(it) == lineIdx
+        }
+        if (lineStrokes.isEmpty()) return
+
+        // Compute pre-context from the TextBlock text
+        val textLeftMargin = HandwritingCanvasView.LINE_SPACING * 0.3f
+        val strokeMinX = lineStrokes.minOf { it.minX }
+        val strokeMaxX = lineStrokes.maxOf { it.maxX }
+        val strokeCenterX = (strokeMinX + strokeMaxX) / 2f
+        val relativeX = strokeCenterX - textLeftMargin
+        val charWidth = TextBlockEraser.estimateCharWidth(
+            block.text, inkCanvas.width.toFloat(), textLeftMargin
+        )
+        val approxCharPos = (relativeX / charWidth).toInt().coerceIn(0, block.text.length)
+        val preContext = block.text.take(approxCharPos).takeLast(20)
+
+        val recognized = try {
+            val line = lineSegmenter.buildInkLine(lineStrokes, lineIdx)
+            recognizer.recognizeLine(line, preContext)
+        } catch (e: Exception) {
+            Log.w(TAG, "Recognition failed for replacement stroke", e)
+            ""
+        }
+
+        // Remove all replacement strokes from the canvas
+        val idsToRemove = lineStrokes.map { it.strokeId }.toSet()
+        columnModel.activeStrokes.removeAll { it.strokeId in idsToRemove }
+        inkCanvas.removeStrokes(idsToRemove)
+
+        if (recognized.isBlank()) {
+            inkCanvas.pauseRawDrawing()
+            inkCanvas.drawToSurface()
+            inkCanvas.resumeRawDrawing()
+            return
+        }
+
+        // Replace the gap placeholder with the recognized text.
+        // The gap is a run of spaces inserted during scratch-out.
+        val newText = if (activeGap != null && activeGap!!.blockId == block.id) {
+            // Find and replace the gap placeholder (run of spaces) with recognized text
+            val gapRegex = Regex("  +") // 2+ consecutive spaces = gap placeholder
+            val currentText = block.text
+            val match = gapRegex.find(currentText)
+            if (match != null) {
+                val before = currentText.substring(0, match.range.first).trimEnd()
+                val after = currentText.substring(match.range.last + 1).trimStart()
+                "$before ${recognized.trim()} $after"
+            } else {
+                // Fallback: append
+                "${block.text} ${recognized.trim()}"
+            }
+        } else {
+            // No active gap — insert at X position using measured word widths
+            val paint = android.text.TextPaint().apply { textSize = com.writer.view.ScreenMetrics.textBody }
+            val spaceW = paint.measureText(" ")
+            val words = block.text.split(" ").filter { it.isNotEmpty() }.toMutableList()
+            var xPos = 0f
+            var insertIdx = words.size
+            for (i in words.indices) {
+                val wordEnd = xPos + paint.measureText(words[i])
+                if (relativeX < wordEnd) { insertIdx = i; break }
+                xPos = wordEnd + spaceW
+            }
+            words.add(insertIdx, recognized.trim())
+            words.joinToString(" ")
+        }
+
+        // Clean up gap state
+        activeGap = null
+
+        val idx = columnModel.textBlocks.indexOfFirst { it.id == block.id }
+        if (idx >= 0) {
+            updateTextBlockText(idx, newText.replace(Regex("  +"), " ").trim())
+        }
+
+        inkCanvas.textBlocks = columnModel.textBlocks.toList()
+        inkCanvas.pauseRawDrawing()
+        inkCanvas.drawToSurface()
+        inkCanvas.resumeRawDrawing()
+        displayManager.displayHiddenLines()
+        onUndoRedoStateChanged?.invoke()
+        Log.i(TAG, "TextBlock replacement: inserted '$recognized' → '$newText'")
+    }
+
+    /** Compute the number of wrapped lines for [text] at the current canvas width. */
+    private fun computeHeightInLines(text: String): Int {
+        if (text.isBlank()) return 1
+        val canvasWidth = inkCanvas.width.toFloat().takeIf { it > 0 } ?: 800f
+        val textLeftMargin = HandwritingCanvasView.LINE_SPACING * 0.3f
+        val textWidth = (canvasWidth - 2 * textLeftMargin).toInt().coerceAtLeast(100)
+        val paint = android.text.TextPaint().apply { textSize = com.writer.view.ScreenMetrics.textBody }
+        val layout = android.text.StaticLayout.Builder
+            .obtain(text, 0, text.length, paint, textWidth)
+            .setAlignment(android.text.Layout.Alignment.ALIGN_NORMAL)
+            .build()
+        return layout.lineCount.coerceAtLeast(1)
+    }
+
+    /** Update a TextBlock's text and recalculate its heightInLines. */
+    private fun updateTextBlockText(index: Int, newText: String) {
+        val block = columnModel.textBlocks[index]
+        columnModel.textBlocks[index] = block.copy(
+            text = newText,
+            heightInLines = computeHeightInLines(newText)
+        )
+    }
+
+    /** Insert a transcribed text block after all existing content. */
+    fun insertTextBlock(text: String, audioFile: String = "", startMs: Long = 0, endMs: Long = 0, words: List<com.writer.model.WordInfo> = emptyList()) {
+        // Place after the highest stroke or text block content
+        val highestStrokeLine = if (columnModel.activeStrokes.isNotEmpty()) {
+            columnModel.activeStrokes.maxOf { lineSegmenter.getStrokeLineIndex(it) }
+        } else -1
+        val highestTextBlockLine = if (columnModel.textBlocks.isNotEmpty()) {
+            columnModel.textBlocks.maxOf { it.endLineIndex }
+        } else -1
+        val lineIndex = maxOf(highestStrokeLine, highestTextBlockLine) + 1
+
+        val block = TextBlock(
+            startLineIndex = lineIndex,
+            heightInLines = computeHeightInLines(text),
+            text = text,
+            audioFile = audioFile,
+            audioStartMs = startMs,
+            audioEndMs = endMs,
+            words = words
+        )
+        saveSnapshot(UndoCoalescer.ActionType.STROKE_ADDED, lineIndex)
+        columnModel.textBlocks.add(block)
+        inkCanvas.textBlocks = columnModel.textBlocks.toList()
+        inkCanvas.drawToSurface()
+        displayManager.displayHiddenLines()
+        onUndoRedoStateChanged?.invoke()
     }
 
     /** Restore state for this coordinator's column from a ColumnData snapshot. */
@@ -583,7 +855,10 @@ class WritingCoordinator(
         displayManager.addEverHiddenLines(col.everHiddenLines)
         columnModel.diagramAreas.clear()
         columnModel.diagramAreas.addAll(col.diagramAreas)
+        columnModel.textBlocks.clear()
+        columnModel.textBlocks.addAll(col.textBlocks)
         inkCanvas.diagramAreas = col.diagramAreas
+        inkCanvas.textBlocks = col.textBlocks
         rebuildDiagramNodes(columnModel.activeStrokes)
         displayManager.displayHiddenLines()
     }
