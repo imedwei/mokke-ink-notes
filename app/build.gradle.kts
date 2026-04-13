@@ -196,7 +196,7 @@ dependencies {
     // implementation("com.google.mlkit:genai-speech-recognition:1.0.0-alpha1")
 
     // Automerge CRDT (incremental persistence, versioning, future sync)
-    implementation("org.automerge:automerge:0.0.7")
+    implementation("org.automerge:automerge:0.0.8")
 
     // Room (persistence)
     implementation("androidx.room:room-runtime:2.6.1")
