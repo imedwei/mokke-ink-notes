@@ -13,6 +13,7 @@ class DocumentStorageSink(private val context: Context) : AutoSaver.Sink {
     }
 
     override fun export(name: String, state: DocumentData, markdown: String, syncUri: Uri) {
-        DocumentStorage.exportToSyncFolder(context, name, state, markdown, syncUri)
+        val audioFiles = DocumentStorage.getAudioFiles(context, name)
+        DocumentStorage.exportToSyncFolder(context, name, state, markdown, syncUri, audioFiles)
     }
 }

@@ -178,6 +178,19 @@ object DocumentStorage {
     private fun audioCacheDir(mokFile: File): File =
         File(mokFile.parentFile, ".audio-${mokFile.nameWithoutExtension}")
 
+    /** Return cached audio files for a document (from the sidecar directory). */
+    fun getAudioFiles(context: Context, name: String): Map<String, ByteArray> {
+        val mok = mokFile(context, name)
+        val sidecar = audioCacheDir(mok)
+        if (!sidecar.isDirectory) return emptyMap()
+        val files = sidecar.listFiles() ?: return emptyMap()
+        val result = mutableMapOf<String, ByteArray>()
+        for (f in files) {
+            if (f.isFile && f.length() > 0) result[f.name] = f.readBytes()
+        }
+        return result
+    }
+
     fun load(context: Context, name: String): DocumentData? {
         return loadBundle(context, name)?.data
     }
