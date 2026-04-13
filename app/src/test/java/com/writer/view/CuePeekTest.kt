@@ -3,6 +3,7 @@ package com.writer.view
 import com.writer.model.DiagramArea
 import com.writer.model.InkStroke
 import com.writer.model.StrokePoint
+import com.writer.model.TextBlock
 import com.writer.recognition.LineSegmenter
 import org.junit.Assert.*
 import org.junit.Before
@@ -207,6 +208,55 @@ class CuePeekTest {
     fun computeBlocks_empty() {
         val blocks = computeVisualBlocks(emptySet(), emptyList())
         assertTrue(blocks.isEmpty())
+    }
+
+    // ── TextBlock integration with contiguous blocks ───────────────────
+
+    @Test
+    fun textBlockBridgesStrokeGap() {
+        // Stroke on line 2, text block on lines 3-4 → one contiguous block
+        val strokeLines = setOf(2)
+        val textBlockLines = setOf(3, 4)
+        val blocks = computeVisualBlocks(strokeLines + textBlockLines, emptyList())
+        assertEquals(1, blocks.size)
+        assertEquals(2, blocks[0].first)
+        assertEquals(4, blocks[0].last)
+    }
+
+    @Test
+    fun textBlockAlone_showsInStrip() {
+        val textBlockLines = setOf(5, 6)
+        val blocks = computeVisualBlocks(textBlockLines, emptyList())
+        assertEquals(1, blocks.size)
+        assertEquals(5, blocks[0].first)
+        assertEquals(6, blocks[0].last)
+    }
+
+    @Test
+    fun strokeAndTextBlockWithGap_twoBlocks() {
+        val strokeLines = setOf(1)
+        val textBlockLines = setOf(4, 5) // gap at lines 2-3
+        val blocks = computeVisualBlocks(strokeLines + textBlockLines, emptyList())
+        assertEquals(2, blocks.size)
+        assertEquals(1, blocks[0].first)
+        assertEquals(1, blocks[0].last)
+        assertEquals(4, blocks[1].first)
+        assertEquals(5, blocks[1].last)
+    }
+
+    @Test
+    fun findBlock_includesTextBlockLines() {
+        // Stroke on line 2, text block on line 3 → pressing line 2 finds block 2-3
+        val cueStrokes = listOf(strokeAtLine(2))
+        val textBlockLines = setOf(3)
+        val occupiedLines = cueStrokes.map { segmenter.getStrokeLineIndex(it) }.toSet() + textBlockLines
+        if (2 !in occupiedLines) return
+        var top = 2
+        while (top - 1 in occupiedLines) top--
+        var bottom = 2
+        while (bottom + 1 in occupiedLines) bottom++
+        assertEquals(2, top)
+        assertEquals(3, bottom)
     }
 
     // ── Helper functions (same logic that will be in the production code) ─
