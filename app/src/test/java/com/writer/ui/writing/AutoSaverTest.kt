@@ -6,9 +6,11 @@ import com.writer.model.ColumnData
 import com.writer.model.DocumentData
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -22,7 +24,8 @@ import org.robolectric.annotation.Config
 class AutoSaverTest {
 
     private lateinit var sink: FakeSink
-    private val testScope = TestScope()
+    private val testDispatcher = UnconfinedTestDispatcher()
+    private val testScope = TestScope(testDispatcher)
 
     private fun makeSnapshot(name: String = "doc", withSync: Boolean = false) =
         AutoSaver.Snapshot(
@@ -50,13 +53,12 @@ class AutoSaverTest {
     }
 
     @Test
-    fun `saveBlocking exports when sync is configured`() {
+    fun `saveBlocking does not export even when sync is configured`() {
         val saver = AutoSaver(testScope, sink)
         saver.saveBlocking(makeSnapshot("doc", withSync = true))
 
         assertEquals(1, sink.saves.size)
-        assertEquals(1, sink.exports.size)
-        assertEquals("doc", sink.exports[0])
+        assertTrue("export should not happen during save", sink.exports.isEmpty())
     }
 
     @Test
@@ -82,7 +84,7 @@ class AutoSaverTest {
 
     @Test
     fun `saveAsync saves on background thread`() = testScope.runTest {
-        val saver = AutoSaver(testScope, sink)
+        val saver = AutoSaver(testScope, sink, ioDispatcher = testDispatcher)
         saver.saveAsync(makeSnapshot("async-doc"))
         advanceUntilIdle()
 
@@ -98,6 +100,54 @@ class AutoSaverTest {
         advanceUntilIdle()
 
         assertTrue(sink.saves.isEmpty())
+    }
+
+    // --- Phase 1.1: SAF decoupling tests ---
+
+    @Test
+    fun `saveAsync does not export even with sync configured`() = testScope.runTest {
+        val saver = AutoSaver(testScope, sink, ioDispatcher = testDispatcher)
+        saver.saveAsync(makeSnapshot("doc", withSync = true))
+        advanceUntilIdle()
+
+        assertEquals(1, sink.saves.size)
+        assertTrue("export should NOT be called during save", sink.exports.isEmpty())
+    }
+
+    @Test
+    fun `exportIfDirty exports when dirty`() {
+        val saver = AutoSaver(testScope, sink)
+        saver.syncDirty = true
+        saver.exportIfDirty { makeSnapshot("doc", withSync = true) }
+
+        assertEquals(1, sink.exports.size)
+        assertEquals("doc", sink.exports[0])
+    }
+
+    @Test
+    fun `exportIfDirty skips when clean`() {
+        val saver = AutoSaver(testScope, sink)
+        saver.syncDirty = false
+        saver.exportIfDirty { makeSnapshot("doc", withSync = true) }
+
+        assertTrue(sink.exports.isEmpty())
+    }
+
+    @Test
+    fun `exportIfDirty clears dirty flag`() {
+        val saver = AutoSaver(testScope, sink)
+        saver.syncDirty = true
+        saver.exportIfDirty { makeSnapshot("doc", withSync = true) }
+
+        assertFalse(saver.syncDirty)
+    }
+
+    @Test
+    fun `syncDirty set true on schedule`() {
+        val saver = AutoSaver(testScope, sink)
+        assertFalse(saver.syncDirty)
+        saver.schedule { makeSnapshot("doc") }
+        assertTrue(saver.syncDirty)
     }
 
     private class FakeSink : AutoSaver.Sink {

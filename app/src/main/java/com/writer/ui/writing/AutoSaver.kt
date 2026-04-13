@@ -4,6 +4,7 @@ import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import com.writer.model.DocumentData
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -18,6 +19,7 @@ class AutoSaver(
     private val scope: CoroutineScope,
     private val sink: Sink,
     private val delayMs: Long = 5000L,
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) {
     /** Performs the actual I/O — extracted so tests can substitute a fake. */
     interface Sink {
@@ -31,6 +33,9 @@ class AutoSaver(
         val markdown: String? = null,
         val syncUri: Uri? = null,
     )
+
+    /** True when content has changed since last SAF export. */
+    var syncDirty: Boolean = false
 
     private val handler = Handler(Looper.getMainLooper())
     private var saveJob: Job? = null
@@ -47,6 +52,7 @@ class AutoSaver(
      * Resets the timer if already pending.
      */
     fun schedule(snapshotProvider: () -> Snapshot?) {
+        syncDirty = true
         pendingSnapshot = snapshotProvider
         handler.removeCallbacks(debounceRunnable)
         handler.postDelayed(debounceRunnable, delayMs)
@@ -56,7 +62,7 @@ class AutoSaver(
     fun saveAsync(snapshot: Snapshot) {
         handler.removeCallbacks(debounceRunnable)
         saveJob?.cancel()
-        saveJob = scope.launch(Dispatchers.IO) {
+        saveJob = scope.launch(ioDispatcher) {
             performSave(snapshot)
         }
     }
@@ -66,7 +72,7 @@ class AutoSaver(
         handler.removeCallbacks(debounceRunnable)
         saveJob?.cancel()
         saveJob = null
-        runBlocking(Dispatchers.IO) {
+        runBlocking(ioDispatcher) {
             performSave(snapshot)
         }
     }
@@ -78,11 +84,21 @@ class AutoSaver(
         pendingSnapshot = null
     }
 
-    private fun performSave(snapshot: Snapshot): Boolean {
-        val saved = sink.save(snapshot.name, snapshot.state)
-        if (saved && snapshot.syncUri != null && snapshot.markdown != null) {
+    /**
+     * Export to SAF if content has changed since last export.
+     * Called on document close / app background — not during auto-save.
+     */
+    fun exportIfDirty(snapshotProvider: () -> Snapshot?) {
+        if (!syncDirty) return
+        val snapshot = snapshotProvider() ?: return
+        if (snapshot.syncUri != null && snapshot.markdown != null) {
             sink.export(snapshot.name, snapshot.state, snapshot.markdown, snapshot.syncUri)
         }
-        return saved
+        syncDirty = false
+    }
+
+    /** Local save only — no SAF export. */
+    private fun performSave(snapshot: Snapshot): Boolean {
+        return sink.save(snapshot.name, snapshot.state)
     }
 }
