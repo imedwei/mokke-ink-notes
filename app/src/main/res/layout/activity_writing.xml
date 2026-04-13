@@ -155,6 +155,17 @@
             />
 
         <ImageView
+            android:id="@+id/micButton"
+            android:layout_marginTop="16dp"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:padding="6dp"
+            android:src="@drawable/ic_mic"
+            android:background="?android:attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Voice memo"
+            />
+
+        <ImageView
             android:id="@+id/viewToggleButton"
             android:layout_marginTop="16dp"
             android:layout_width="40dp"
@@ -178,6 +189,30 @@
             />
 
     </LinearLayout>
+
+    <!-- Recording overlay bar (bottom, shown during recording) -->
+    <com.writer.view.RecordingOverlayView
+        android:id="@+id/recordingOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:layout_marginStart="8dp"
+        android:layout_marginEnd="8dp"
+        android:layout_marginBottom="8dp"
+        android:elevation="2dp"
+        android:visibility="gone" />
+
+    <!-- Playback overlay bar (bottom, shown during playback) -->
+    <com.writer.view.PlaybackOverlayView
+        android:id="@+id/playbackOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:layout_marginStart="8dp"
+        android:layout_marginEnd="8dp"
+        android:layout_marginBottom="8dp"
+        android:elevation="2dp"
+        android:visibility="gone" />
 
     <!-- Tutorial overlay: dimmed background + cutout + tooltip (covers entire screen) -->
     <com.writer.view.TutorialOverlay

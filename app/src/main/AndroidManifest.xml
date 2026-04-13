@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+
     <permission
         android:name="${applicationId}.permission.DEBUG"
         android:protectionLevel="signature" />
@@ -33,6 +37,11 @@
             android:windowSoftInputMode="stateHidden" />
 
         <activity
+            android:name=".ui.settings.SettingsActivity"
+            android:configChanges="orientation|screenSize|screenLayout"
+            android:windowSoftInputMode="stateHidden" />
+
+        <activity
             android:name=".ui.writing.SaveAsActivity"
             android:theme="@style/Theme.Writer.FullscreenDialog"
             android:configChanges="orientation|screenSize|screenLayout"
@@ -47,6 +56,11 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
         </provider>
+
+        <service
+            android:name=".audio.AudioRecordingService"
+            android:foregroundServiceType="microphone"
+            android:exported="false" />
 
         <provider
             android:name=".ui.writing.DebugBugReportProvider"

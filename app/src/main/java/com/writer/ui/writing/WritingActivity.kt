@@ -52,6 +52,7 @@ class WritingActivity : AppCompatActivity() {
         private const val PREF_CURRENT_DOC = "current_document"
         private const val PREF_SYNC_FOLDER = "sync_folder_uri"
         private const val UNDO_REDO_DEBOUNCE_MS = 300L
+        private const val MEMO_AUTO_STOP_DELAY_MS = 2000L
     }
 
     private lateinit var inkCanvas: HandwritingCanvasView
@@ -89,6 +90,34 @@ class WritingActivity : AppCompatActivity() {
     private lateinit var undoButton: ImageView
     private lateinit var redoButton: ImageView
     private lateinit var spaceInsertButton: ImageView
+    private lateinit var micButton: ImageView
+    private var audioCaptureManager: com.writer.audio.AudioCaptureManager? = null
+    private var audioRecordCapture: com.writer.audio.AudioRecordCapture? = null
+    private val sherpaModelManager = com.writer.recognition.SherpaModelManager()
+    private val offlineModelManager = com.writer.recognition.OfflineModelManager()
+    private val handler = android.os.Handler(android.os.Looper.getMainLooper())
+    private lateinit var playbackOverlay: com.writer.view.PlaybackOverlayView
+    private lateinit var recordingOverlay: com.writer.view.RecordingOverlayView
+    private val playbackController = com.writer.audio.PlaybackController(
+        onPlay = { file, seekMs -> playAudio(file, seekMs) },
+        onSeek = { seekMs -> onPlaybackSeek(seekMs) },
+        onPause = { onPlaybackPause() },
+        onResume = { onPlaybackResume() },
+        onStop = { stopAudio() }
+    )
+    // Delegate to coordinator for document-scoped state
+    private var lectureMode: Boolean
+        get() = coordinator?.lectureMode ?: false
+        set(value) { coordinator?.lectureMode = value }
+    private var audioTranscriber: com.writer.recognition.AudioTranscriber?
+        get() = coordinator?.audioTranscriber
+        set(value) { coordinator?.audioTranscriber = value }
+    private var lectureRecordingStartMs: Long
+        get() = coordinator?.lectureRecordingStartMs ?: 0L
+        set(value) { coordinator?.lectureRecordingStartMs = value }
+    private val audioQualityMonitor get() = coordinator?.audioQualityMonitor ?: com.writer.audio.AudioQualityMonitor()
+    private var audioQualityWarned = false
+    private var audioPlaybackFile: java.io.File? = null
 
     /** True while the stylus is actively drawing — reject finger taps on gutter. */
     private fun isPenBusy(): Boolean =
@@ -171,8 +200,46 @@ class WritingActivity : AppCompatActivity() {
         inkCanvas.resumeRawDrawing()
     }
 
+    // Settings activity result
+    private val settingsLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val data = result.data
+            if (data?.getBooleanExtra(com.writer.ui.settings.SettingsActivity.RESULT_SHOW_TUTORIAL, false) == true) {
+                showTutorial()
+                return@registerForActivityResult
+            }
+            if (data?.getBooleanExtra(com.writer.ui.settings.SettingsActivity.RESULT_DEBUG_RESET, false) == true) {
+                getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().clear().apply()
+                tutorialManager.resetSeen()
+                val docsDir = java.io.File(filesDir, "documents")
+                docsDir.listFiles()?.forEach { it.delete() }
+                Toast.makeText(this, "Reset to pristine state — restarting", Toast.LENGTH_SHORT).show()
+                val intent = packageManager.getLaunchIntentForPackage(packageName)
+                intent?.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK or Intent.FLAG_ACTIVITY_NEW_TASK)
+                startActivity(intent)
+                finish()
+                return@registerForActivityResult
+            }
+        }
+        inkCanvas.reopenRawDrawing()
+    }
+
+    // Audio recording permission
+    private val requestAudioPermission = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            startVoiceMemo()
+        } else {
+            Toast.makeText(this, "Microphone permission required for voice memo", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        onBackPressedDispatcher.addCallback(this, recordingBackCallback)
 
         val filter = android.content.IntentFilter("${packageName}.GENERATE_BUG_REPORT")
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
@@ -235,10 +302,13 @@ class WritingActivity : AppCompatActivity() {
             maxTapMs = android.view.ViewConfiguration.getLongPressTimeout().toLong(),
             isPenBusy = ::isPenBusy
         )
+        var lastButtonTouchMajor = 0f
         val palmGuard = android.view.View.OnTouchListener { _, event ->
             when (event.actionMasked) {
-                android.view.MotionEvent.ACTION_DOWN ->
+                android.view.MotionEvent.ACTION_DOWN -> {
+                    lastButtonTouchMajor = event.touchMajor
                     touchGuard.evaluateDown(event.touchMajor) == GutterTouchGuard.Decision.REJECT
+                }
                 android.view.MotionEvent.ACTION_UP ->
                     touchGuard.evaluateUp(event.downTime, event.eventTime) == GutterTouchGuard.Decision.REJECT
                 else -> false
@@ -248,11 +318,12 @@ class WritingActivity : AppCompatActivity() {
         undoButton = findViewById(R.id.undoButton)
         redoButton = findViewById(R.id.redoButton)
         spaceInsertButton = findViewById(R.id.spaceInsertButton)
+        micButton = findViewById(R.id.micButton)
         viewToggleButton = findViewById(R.id.viewToggleButton)
         val rotateButton = findViewById<ImageView>(R.id.rotateButton)
         orientationManager = OrientationManager(this, rotateButton)
 
-        for (btn in listOf(menuButton, undoButton, redoButton, spaceInsertButton, viewToggleButton, rotateButton)) {
+        for (btn in listOf(menuButton, undoButton, redoButton, spaceInsertButton, micButton, viewToggleButton, rotateButton)) {
             btn.setOnTouchListener(palmGuard)
         }
 
@@ -262,9 +333,29 @@ class WritingActivity : AppCompatActivity() {
         undoButton.setOnClickListener { debounceUndoRedo { activeCoordinator?.undo(); updateUndoRedoButtons() } }
         redoButton.setOnClickListener { debounceUndoRedo { activeCoordinator?.redo(); updateUndoRedoButtons() } }
         spaceInsertButton.setOnClickListener { inkCanvas.spaceInsertMode = !inkCanvas.spaceInsertMode }
+        micButton.setOnClickListener { toggleVoiceMemo() }
+        micButton.setOnLongClickListener {
+            // Reject palm — long-press fires before ACTION_UP, so palmGuard can't block it
+            if (lastButtonTouchMajor > touchGuard.palmThresholdPx || isPenBusy()) {
+                false
+            } else {
+                startLectureCapture(); true
+            }
+        }
         viewToggleButton.setOnClickListener { toggleNotesCues() }
         rotateButton.setOnClickListener { orientationManager.toggleOrientation() }
 
+        inkCanvas.onTextBlockTap = { block, wordStartMs -> handleTextBlockTap(block, wordStartMs) }
+        inkCanvas.onPlaybackStop = { playbackController.onTapOutside() }
+
+        playbackOverlay = findViewById(R.id.playbackOverlay)
+        playbackOverlay.onPauseToggle = { playbackController.onPauseToggle() }
+
+        recordingOverlay = findViewById(R.id.recordingOverlay)
+        recordingOverlay.onAutoStopChanged = { enabled ->
+            autoStopOnSilence = enabled
+            android.util.Log.i("WritingActivity", "Auto-stop toggled: $enabled")
+        }
         inkCanvas.onSpaceInsert = { anchorLine, lines ->
             if (lines > 0) {
                 coordinator?.insertSpace(anchorLine, lines)
@@ -678,7 +769,28 @@ class WritingActivity : AppCompatActivity() {
         }
     }
 
+    /** Confirm before interrupting an active recording. */
+    private fun confirmIfRecording(action: () -> Unit) {
+        if (!lectureMode) {
+            action()
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Recording in progress")
+            .setMessage("Stop the current recording?")
+            .setPositiveButton("Stop") { _, _ ->
+                stopLectureCapture()
+                action()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
     private fun newDocument() {
+        confirmIfRecording { newDocumentImpl() }
+    }
+
+    private fun newDocumentImpl() {
         snapshotAndSaveBlocking()
 
         coordinator?.stop()
@@ -909,6 +1021,312 @@ class WritingActivity : AppCompatActivity() {
         renameLauncher.launch(intent)
     }
 
+    // --- Audio Playback ---
+
+    private fun handleTextBlockTap(block: com.writer.model.TextBlock, wordStartMs: Long? = null) {
+        if (block.audioFile.isEmpty()) return
+        val seekMs = wordStartMs ?: block.audioStartMs
+        playbackController.onWordTapped(block.audioFile, seekMs, block.id)
+    }
+
+    private fun playAudio(audioFileName: String, seekMs: Long) {
+        val coord = activeCoordinator ?: return
+        val player = coord.audioPlayer
+        val audioFile = ensureAudioFile(audioFileName)
+        if (audioFile == null) {
+            Toast.makeText(this, "Audio file not found", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        player.onPositionChanged = { posMs ->
+            playbackController.onProgressUpdate(posMs, player.durationMs)
+            playbackOverlay.updateProgress(posMs, player.durationMs)
+
+            // Update which text block is visually highlighted
+            val allBlocks = documentModel.main.textBlocks.filter { it.audioFile.isNotEmpty() }
+            val activeBlock = allBlocks.find { posMs >= it.audioStartMs && posMs < it.audioEndMs }
+            if (activeBlock != null && activeBlock.id != inkCanvas.playingTextBlockId) {
+                inkCanvas.playingTextBlockId = activeBlock.id
+            }
+        }
+
+        player.onCompleted = {
+            playbackController.onPlaybackCompleted()
+            inkCanvas.playingTextBlockId = null
+            playbackOverlay.hide()
+        }
+
+        inkCanvas.playingTextBlockId = playbackController.playingBlockId
+        playbackOverlay.setPaused(false)
+        playbackOverlay.updateProgress(0, 0)
+        playbackOverlay.show()
+
+        player.play(audioFile, seekMs)
+    }
+
+    private fun stopAudio() {
+        activeCoordinator?.audioPlayer?.stop()
+        inkCanvas.playingTextBlockId = null
+        playbackOverlay.hide()
+    }
+
+    private fun onPlaybackSeek(seekMs: Long) {
+        activeCoordinator?.audioPlayer?.seekTo(seekMs)
+        inkCanvas.playingTextBlockId = playbackController.playingBlockId
+    }
+
+    private fun onPlaybackPause() {
+        activeCoordinator?.audioPlayer?.pause()
+        playbackOverlay.setPaused(true)
+    }
+
+    private fun onPlaybackResume() {
+        activeCoordinator?.audioPlayer?.resume()
+        playbackOverlay.setPaused(false)
+    }
+
+    /** Extract audio file from the document bundle to a temp file for MediaPlayer. */
+    private fun ensureAudioFile(audioFileName: String): java.io.File? {
+        val cacheFile = java.io.File(cacheDir, "audio_playback/$audioFileName")
+        if (cacheFile.exists() && cacheFile.length() > 0) return cacheFile
+
+        // Load from document bundle
+        val bundle = DocumentStorage.loadBundle(this, currentDocumentName)
+        if (bundle == null) {
+            android.util.Log.w("WritingActivity", "ensureAudioFile: bundle null for '$currentDocumentName'")
+            return null
+        }
+        val audioBytes = bundle.audioFiles[audioFileName]
+        if (audioBytes == null) {
+            android.util.Log.w("WritingActivity", "ensureAudioFile: '$audioFileName' not in bundle. Available: ${bundle.audioFiles.keys}")
+            return null
+        }
+
+        cacheFile.parentFile?.mkdirs()
+        cacheFile.writeBytes(audioBytes)
+        return cacheFile
+    }
+
+    /** Advance the recording placeholder past all current content. */
+    private fun updateRecordingPlaceholder() {
+        if (!lectureMode) return
+        val segmenter = com.writer.recognition.LineSegmenter()
+        val highestStroke = if (documentModel.main.activeStrokes.isNotEmpty())
+            documentModel.main.activeStrokes.maxOf { segmenter.getStrokeLineIndex(it) } else -1
+        val highestBlock = if (documentModel.main.textBlocks.isNotEmpty())
+            documentModel.main.textBlocks.maxOf { it.endLineIndex } else -1
+        inkCanvas.recordingPlaceholderLine = maxOf(highestStroke, highestBlock) + 1
+    }
+
+    // --- Voice Memo ---
+
+    private fun toggleVoiceMemo() {
+        android.util.Log.i("WritingActivity", "toggleVoiceMemo: lectureMode=$lectureMode audioTranscriber=${audioTranscriber != null} isListening=${audioTranscriber?.isListening}")
+        // If in lecture mode, stop it
+        if (lectureMode) {
+            stopLectureCapture()
+            return
+        }
+
+        val transcriber = audioTranscriber
+        if (transcriber != null && transcriber.isListening) {
+            stopLectureCapture()
+            return
+        }
+
+        // Check permission
+        if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)
+            != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            requestAudioPermission.launch(android.Manifest.permission.RECORD_AUDIO)
+            return
+        }
+
+        startVoiceMemo()
+    }
+
+    private var memoAutoStopRunnable: Runnable? = null
+    private var autoStopOnSilence = false
+
+    /**
+     * Quick voice memo — starts lecture capture with auto-stop on silence.
+     * Same pipeline: Sherpa + audio recording + partial display + audio save.
+     */
+    private fun startVoiceMemo() {
+        autoStopOnSilence = true
+        startLectureCapture()
+    }
+
+    // --- Lecture Capture ---
+
+    private fun startLectureCapture() {
+        if (lectureMode) return
+
+        // Check permission
+        if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)
+            != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            requestAudioPermission.launch(android.Manifest.permission.RECORD_AUDIO)
+            return
+        }
+
+        // Ensure model is ready before entering lecture mode.
+        // If not ready, show download progress and defer until the model loads.
+        if (sherpaModelManager.getRecognizer() == null) {
+            val state = sherpaModelManager.state
+            if (state == com.writer.recognition.SherpaModelManager.State.ERROR) {
+                sherpaModelManager.release()
+            }
+            Toast.makeText(this, "Preparing speech engine\u2026", Toast.LENGTH_SHORT).show()
+            sherpaModelManager.onStatusUpdate = { status ->
+                runOnUiThread {
+                    Toast.makeText(this, status, Toast.LENGTH_SHORT).show()
+                }
+            }
+            sherpaModelManager.onReady = {
+                runOnUiThread {
+                    sherpaModelManager.onReady = null
+                    sherpaModelManager.onStatusUpdate = null
+                    startLectureCapture() // retry the full flow
+                }
+            }
+            if (sherpaModelManager.state != com.writer.recognition.SherpaModelManager.State.LOADING) {
+                sherpaModelManager.preload(this)
+            }
+            return
+        }
+
+        lectureMode = true
+        lectureRecordingStartMs = System.currentTimeMillis()
+        audioQualityMonitor.reset()
+        recordingBackCallback.isEnabled = true
+        audioQualityWarned = false
+        micButton.setImageResource(R.drawable.ic_mic_active)
+        inkCanvas.lectureRecording = true
+        recordingOverlay.show(autoStopOnSilence)
+
+        // Show placeholder at the line where TextBlocks will be inserted
+        updateRecordingPlaceholder()
+
+        val serviceIntent = android.content.Intent(this, com.writer.audio.AudioRecordingService::class.java)
+        startForegroundService(serviceIntent)
+        startSherpaLectureRecognition()
+    }
+
+    private fun startSherpaLectureRecognition() {
+        // Streaming model is guaranteed ready — startLectureCapture checks before entering lectureMode
+        val recognizer = sherpaModelManager.getRecognizer()
+            ?: run {
+                Log.e("WritingActivity", "Sherpa model not ready in startSherpaLectureRecognition — should not happen")
+                return
+            }
+
+        // Start loading offline model for two-pass (non-blocking, best-effort)
+        val offlineState = offlineModelManager.state
+        if (offlineState == com.writer.recognition.OfflineModelManager.State.UNLOADED ||
+            offlineState == com.writer.recognition.OfflineModelManager.State.ERROR) {
+            if (offlineState == com.writer.recognition.OfflineModelManager.State.ERROR) {
+                offlineModelManager.release()
+            }
+            offlineModelManager.preload(this)
+        }
+
+        val transcriber = com.writer.recognition.SherpaTranscriber(
+            this, sherpaModelManager, offlineModelManager = offlineModelManager
+        )
+        audioTranscriber = transcriber
+
+        transcriber.onStatusUpdate = { status ->
+            Toast.makeText(this, status, Toast.LENGTH_SHORT).show()
+        }
+
+        transcriber.onRmsChanged = { rmsdB ->
+            audioQualityMonitor.onRmsChanged(rmsdB)
+            if (audioQualityMonitor.shouldWarn && !audioQualityWarned) {
+                audioQualityWarned = true
+                Toast.makeText(this, audioQualityMonitor.qualityMessage, Toast.LENGTH_LONG).show()
+            }
+        }
+
+        // Capture recording name at wire time — must not read lectureRecordingStartMs lazily
+        // inside the callback, as it may change between recordings in the same session
+        val recordingName = "rec-${lectureRecordingStartMs}.ogg"
+
+        transcriber.onPartialResult = { text ->
+            if (text.isNotBlank() && lectureMode) {
+                inkCanvas.partialTranscriptionText = text
+            }
+        }
+
+        transcriber.onFinalResultWithWords = { text, words ->
+            if (text.isNotBlank() && lectureMode) {
+                inkCanvas.partialTranscriptionText = ""
+                val startMs = words.firstOrNull()?.startMs ?: 0L
+                val endMs = words.lastOrNull()?.endMs ?: 0L
+                activeCoordinator?.insertTextBlock(
+                    text, audioFile = recordingName, startMs = startMs, endMs = endMs, words = words
+                )
+                updateCueIndicatorStrip()
+                updateRecordingPlaceholder()
+                android.util.Log.i("WritingActivity", "Sherpa transcribed: $text (${words.size} words) audio=$recordingName")
+
+                // Auto-stop memo after silence following speech
+                if (autoStopOnSilence) {
+                    memoAutoStopRunnable?.let { handler.removeCallbacks(it) }
+                    val stopRunnable = Runnable { stopLectureCapture(); autoStopOnSilence = false }
+                    memoAutoStopRunnable = stopRunnable
+                    handler.postDelayed(stopRunnable, MEMO_AUTO_STOP_DELAY_MS)
+                }
+            }
+        }
+
+        transcriber.onFinalResult = { _ -> }
+
+        transcriber.onError = { errorCode ->
+            android.util.Log.w("WritingActivity", "Sherpa error: $errorCode")
+        }
+
+        transcriber.start(documentModel.language)
+    }
+
+    private fun stopLectureCapture() {
+        if (!lectureMode) return
+
+        // Clear auto-stop timer if active (memo mode)
+        memoAutoStopRunnable?.let { handler.removeCallbacks(it) }
+        memoAutoStopRunnable = null
+        autoStopOnSilence = false
+
+        micButton.setImageResource(R.drawable.ic_mic)
+        inkCanvas.lectureRecording = false
+        inkCanvas.recordingPlaceholderLine = -1
+        recordingOverlay.hide()
+        recordingBackCallback.isEnabled = false
+
+        inkCanvas.partialTranscriptionText = ""
+
+        val transcriber = audioTranscriber
+        transcriber?.stop()
+
+        val audioBytes = transcriber?.readRecordedBytes()
+        lectureMode = false
+        audioTranscriber?.close()
+        audioTranscriber = null
+
+        val serviceIntent = android.content.Intent(this, com.writer.audio.AudioRecordingService::class.java)
+        stopService(serviceIntent)
+
+        if (audioBytes != null) {
+            val recordingName = "rec-${lectureRecordingStartMs}.ogg"
+            val snapshot = createSaveSnapshot()
+            if (snapshot != null) {
+                DocumentStorage.save(this, snapshot.name, snapshot.state, mapOf(recordingName to audioBytes))
+            }
+            android.util.Log.i("WritingActivity", "Saved ${audioBytes.size} bytes audio as $recordingName")
+        } else {
+            snapshotAndSaveBlocking()
+        }
+        Toast.makeText(this, "Lecture capture stopped", Toast.LENGTH_SHORT).show()
+    }
+
     // --- Menu ---
 
     private fun showMenu() {
@@ -943,45 +1361,20 @@ class WritingActivity : AppCompatActivity() {
         }
         popupView.findViewById<android.view.View>(R.id.menuOpen).setOnClickListener {
             popup.dismiss()
-            showOpenDialog()
+            confirmIfRecording { showOpenDialog() }
         }
         popupView.findViewById<android.view.View>(R.id.menuRename).setOnClickListener {
             launchingSaveAs = true
             popup.dismiss()
             showRenameDialog()
         }
-        popupView.findViewById<android.view.View>(R.id.menuSyncFolder).setOnClickListener {
-            launchingSaf = true
-            popup.dismiss()
-            pickSyncFolder.launch(null)
-        }
-popupView.findViewById<android.view.View>(R.id.menuTutorial).setOnClickListener {
-            openingTutorial = true
-            popup.dismiss()
-            showTutorial()
-        }
         popupView.findViewById<android.view.View>(R.id.menuBugReport).setOnClickListener {
             popup.dismiss()
             generateAndShareBugReport()
         }
-        popupView.findViewById<android.view.View>(R.id.menuClose).setOnClickListener {
+        popupView.findViewById<android.view.View>(R.id.menuSettings).setOnClickListener {
             popup.dismiss()
-            snapshotAndSaveBlocking()
-            finish()
-        }
-        popupView.findViewById<android.view.View>(R.id.menuDebugReset).setOnClickListener {
-            popup.dismiss()
-            // Full pristine reset: clear all prefs, delete all local docs, restart
-            getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().clear().apply()
-            tutorialManager.resetSeen()
-            val docsDir = java.io.File(filesDir, "documents")
-            docsDir.listFiles()?.forEach { it.delete() }
-            Toast.makeText(this, "Reset to pristine state — restarting", Toast.LENGTH_SHORT).show()
-            // Restart the app from the launcher activity
-            val intent = packageManager.getLaunchIntentForPackage(packageName)
-            intent?.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK or Intent.FLAG_ACTIVITY_NEW_TASK)
-            startActivity(intent)
-            finish()
+            settingsLauncher.launch(android.content.Intent(this, com.writer.ui.settings.SettingsActivity::class.java))
         }
 
         // Position to the left of the menu button so it stays visible
@@ -1413,12 +1806,12 @@ popupView.findViewById<android.view.View>(R.id.menuTutorial).setOnClickListener 
 
     /** Show a floating preview of main content strokes (from context rail long-press). */
     private fun showMainPeek(lineIndex: Int, screenY: Float) {
-        showStrokePeek(lineIndex, screenY, documentModel.main.activeStrokes, documentModel.main.diagramAreas, contextRail)
+        showStrokePeek(lineIndex, screenY, documentModel.main.activeStrokes, documentModel.main.diagramAreas, documentModel.main.textBlocks, contextRail)
     }
 
     /** Show a floating preview of cue strokes (from cue indicator strip long-press). */
     private fun showCuePeek(lineIndex: Int, screenY: Float) {
-        showStrokePeek(lineIndex, screenY, documentModel.cue.activeStrokes, documentModel.cue.diagramAreas, cueIndicatorStrip)
+        showStrokePeek(lineIndex, screenY, documentModel.cue.activeStrokes, documentModel.cue.diagramAreas, documentModel.cue.textBlocks, cueIndicatorStrip)
     }
 
     /** Show a floating preview of strokes for a contiguous block around [lineIndex]. */
@@ -1426,6 +1819,7 @@ popupView.findViewById<android.view.View>(R.id.menuTutorial).setOnClickListener 
         lineIndex: Int, screenY: Float,
         strokes: List<com.writer.model.InkStroke>,
         diagramAreas: List<com.writer.model.DiagramArea>,
+        textBlocks: List<com.writer.model.TextBlock>,
         anchorView: View
     ) {
         val segmenter = com.writer.recognition.LineSegmenter()
@@ -1435,7 +1829,8 @@ popupView.findViewById<android.view.View>(R.id.menuTutorial).setOnClickListener 
         for (area in diagramAreas) {
             for (l in area.startLineIndex..area.endLineIndex) diagramLines.add(l)
         }
-        val occupiedLines = strokeLines + diagramLines
+        val textBlockLines = textBlocks.flatMap { it.startLineIndex..it.endLineIndex }.toSet()
+        val occupiedLines = strokeLines + diagramLines + textBlockLines
         if (lineIndex !in occupiedLines) return
 
         var top = lineIndex
@@ -1445,11 +1840,12 @@ popupView.findViewById<android.view.View>(R.id.menuTutorial).setOnClickListener 
 
         val blockLines = (top..bottom).toSet()
         val blockStrokes = strokes.filter { segmenter.getStrokeLineIndex(it) in blockLines }
-        if (blockStrokes.isEmpty()) return
+        val blockTextBlocks = textBlocks.filter { tb -> (tb.startLineIndex..tb.endLineIndex).any { it in blockLines } }
+        if (blockStrokes.isEmpty() && blockTextBlocks.isEmpty()) return
 
         val previewWidth = (inkCanvas.width * 0.6f).toInt()
         val previewView = com.writer.view.CuePreviewView(this)
-        previewView.setStrokes(blockStrokes, previewWidth)
+        previewView.setStrokes(blockStrokes, previewWidth, blockTextBlocks, inkCanvas.width.toFloat())
 
         previewView.measure(
             View.MeasureSpec.makeMeasureSpec(previewWidth, View.MeasureSpec.EXACTLY),
@@ -1488,7 +1884,8 @@ popupView.findViewById<android.view.View>(R.id.menuTutorial).setOnClickListener 
     /** Populate the context rail with main content indicators (dots/segments). */
     private fun populateContextRail() {
         val segmenter = com.writer.recognition.LineSegmenter()
-        val mainLines = documentModel.main.activeStrokes.map { segmenter.getStrokeLineIndex(it) }.toSet()
+        val mainLines = documentModel.main.activeStrokes.map { segmenter.getStrokeLineIndex(it) }.toSet() +
+            documentModel.main.textBlocks.flatMap { it.startLineIndex..it.endLineIndex }.toSet()
         contextRail.cueLineIndices = mainLines
         contextRail.cueDiagramAreas = documentModel.main.diagramAreas.toList()
         contextRail.scrollOffsetY = cueInkCanvas.scrollOffsetY
@@ -1507,7 +1904,8 @@ popupView.findViewById<android.view.View>(R.id.menuTutorial).setOnClickListener 
         val segmenter = com.writer.recognition.LineSegmenter()
         val cueLines = documentModel.cue.activeStrokes.map { stroke ->
             segmenter.getStrokeLineIndex(stroke)
-        }.toSet()
+        }.toSet() +
+            documentModel.cue.textBlocks.flatMap { it.startLineIndex..it.endLineIndex }.toSet()
         cueIndicatorStrip.cueLineIndices = cueLines
         cueIndicatorStrip.cueDiagramAreas = documentModel.cue.diagramAreas.toList()
         cueIndicatorStrip.scrollOffsetY = inkCanvas.scrollOffsetY
@@ -1523,6 +1921,8 @@ popupView.findViewById<android.view.View>(R.id.menuTutorial).setOnClickListener 
 
     override fun onResume() {
         super.onResume()
+        // Pre-load Sherpa model so recording starts instantly
+        sherpaModelManager.preload(this)
         if (!tutorialManager.isActive) {
             inkCanvas.reinitializeRawDrawing()
         }
@@ -1531,6 +1931,11 @@ popupView.findViewById<android.view.View>(R.id.menuTutorial).setOnClickListener 
 
     override fun onStop() {
         super.onStop()
+        // Release Sherpa model when backgrounded (unless recording)
+        if (!lectureMode) {
+            sherpaModelManager.release()
+            offlineModelManager.release()
+        }
         orientationManager.stop()
         snapshotAndSaveBlocking()
     }
@@ -1719,11 +2124,22 @@ popupView.findViewById<android.view.View>(R.id.menuTutorial).setOnClickListener 
         }
     }
 
+    /** During lecture recording, back button moves to background instead of closing. */
+    private val recordingBackCallback = object : androidx.activity.OnBackPressedCallback(false) {
+        override fun handleOnBackPressed() {
+            moveTaskToBack(true)
+        }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
+        sherpaModelManager.release()
+        offlineModelManager.release()
+        if (lectureMode) stopLectureCapture()
+        recordingBackCallback.isEnabled = false
         unregisterReceiver(bugReportReceiver)
         closeDualCanvasOnyx()
-        coordinator?.stop()
+        coordinator?.stop()  // releases audioPlayer, audioTranscriber, lectureMode
         cueCoordinator?.stop()
         recognizer.close()
     }

@@ -68,46 +68,6 @@
         android:layout_marginEnd="16dp" />
 
     <TextView
-        android:id="@+id/menuSyncFolder"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="Set Sync Folder"
-        android:textSize="22sp"
-        android:textColor="@color/black"
-        android:paddingStart="24dp"
-        android:paddingEnd="24dp"
-        android:paddingTop="16dp"
-        android:paddingBottom="16dp"
-        android:background="?attr/selectableItemBackground" />
-
-    <View
-        android:layout_width="match_parent"
-        android:layout_height="1dp"
-        android:background="#AAAAAA"
-        android:layout_marginStart="16dp"
-        android:layout_marginEnd="16dp" />
-
-    <TextView
-        android:id="@+id/menuTutorial"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="Tutorial"
-        android:textSize="22sp"
-        android:textColor="@color/black"
-        android:paddingStart="24dp"
-        android:paddingEnd="24dp"
-        android:paddingTop="16dp"
-        android:paddingBottom="16dp"
-        android:background="?attr/selectableItemBackground" />
-
-    <View
-        android:layout_width="match_parent"
-        android:layout_height="1dp"
-        android:background="#AAAAAA"
-        android:layout_marginStart="16dp"
-        android:layout_marginEnd="16dp" />
-
-    <TextView
         android:id="@+id/menuBugReport"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -128,36 +88,16 @@
         android:layout_marginEnd="16dp" />
 
     <TextView
-        android:id="@+id/menuClose"
+        android:id="@+id/menuSettings"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Close"
+        android:text="Settings"
         android:textSize="22sp"
         android:textColor="@color/black"
         android:paddingStart="24dp"
         android:paddingEnd="24dp"
         android:paddingTop="16dp"
         android:paddingBottom="16dp"
-        android:background="?attr/selectableItemBackground" />
-
-    <View
-        android:layout_width="match_parent"
-        android:layout_height="1dp"
-        android:background="#AAAAAA"
-        android:layout_marginStart="16dp"
-        android:layout_marginEnd="16dp" />
-
-    <TextView
-        android:id="@+id/menuDebugReset"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="Debug Reset"
-        android:textSize="18sp"
-        android:textColor="#888888"
-        android:paddingStart="24dp"
-        android:paddingEnd="24dp"
-        android:paddingTop="12dp"
-        android:paddingBottom="12dp"
         android:background="?attr/selectableItemBackground" />
 
 </LinearLayout>

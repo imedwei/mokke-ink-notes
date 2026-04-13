@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "android": {
+      "command": "C:\\Users\\imedw\\AppData\\Local\\Programs\\Python\\Python313\\Scripts\\uv.exe",
+      "args": ["--directory", "C:\\Users\\imedw\\Projects\\android-mcp-server", "run", "server.py"]
+    },
+    "codanna": {
+      "command": "codanna",
+      "args": ["serve", "--watch"]
+    }
+  }
+}
