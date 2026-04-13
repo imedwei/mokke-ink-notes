@@ -21,7 +21,9 @@ import com.onyx.android.sdk.data.note.TouchPoint
 import com.onyx.android.sdk.pen.RawInputCallback
 import com.onyx.android.sdk.pen.TouchHelper
 import com.onyx.android.sdk.pen.data.TouchPointList
+import android.text.TextPaint
 import com.writer.model.DiagramArea
+import com.writer.model.TextBlock
 import com.writer.ui.writing.DiagramStrokeClassifier
 import com.writer.ui.writing.SpaceInsertMode
 import com.writer.model.ColumnModel
@@ -86,6 +88,144 @@ class HandwritingCanvasView @JvmOverloads constructor(
 
     /** Diagram areas in the current document. */
     var diagramAreas: List<DiagramArea> = emptyList()
+
+    /** Text blocks (transcribed audio) in the current document. */
+    var textBlocks: List<TextBlock> = emptyList()
+
+    /** Called when user finger-taps a TextBlock with linked audio. Second param is word-level startMs if available. */
+    var onTextBlockTap: ((TextBlock, Long?) -> Unit)? = null
+
+    /** Called when user taps the pause/play toggle in the playback overlay bar. */
+    var onPlaybackPauseToggle: (() -> Unit)? = null
+
+    /** Called when user taps outside text blocks while audio is playing. */
+    var onPlaybackStop: (() -> Unit)? = null
+
+    /** ID of the TextBlock currently playing audio (for visual indicator). */
+    var playingTextBlockId: String? = null
+        set(value) { field = value; drawToSurface() }
+
+
+    private val textBlockPaint = TextPaint().apply {
+        color = Color.BLACK
+        textSize = ScreenMetrics.textBody
+        isAntiAlias = false
+    }
+
+    /** Whether lecture capture is active — shows a recording indicator. */
+    var lectureRecording: Boolean = false
+        set(value) {
+            field = value
+            if (value) startRecordingIndicator() else stopRecordingIndicator()
+        }
+
+    private val recordingDotPaint = Paint().apply {
+        color = Color.RED
+        style = Paint.Style.FILL
+        isAntiAlias = true
+    }
+
+    private val recordingTextPaint = Paint().apply {
+        color = Color.RED
+        textSize = ScreenMetrics.dp(12f)
+        isAntiAlias = true
+    }
+
+    private var recordingDotVisible = true
+    private val recordingBlinkRunnable = object : Runnable {
+        override fun run() {
+            recordingDotVisible = !recordingDotVisible
+            drawToSurface()
+            if (lectureRecording) handler.postDelayed(this, 1000)
+        }
+    }
+
+    private fun startRecordingIndicator() {
+        recordingDotVisible = true
+        handler.removeCallbacks(recordingBlinkRunnable)
+        handler.postDelayed(recordingBlinkRunnable, 1000)
+        drawToSurface()
+    }
+
+    private fun stopRecordingIndicator() {
+        handler.removeCallbacks(recordingBlinkRunnable)
+        drawToSurface()
+    }
+
+    /** Line index where a recording placeholder should be shown (-1 = none). */
+    var recordingPlaceholderLine: Int = -1
+        set(value) { field = value; drawToSurface() }
+
+    /** Live partial transcription text shown inside the recording placeholder. */
+    var partialTranscriptionText: String = ""
+        set(value) { if (field != value) { field = value; drawToSurface() } }
+
+
+    private val placeholderBorderPaint = Paint().apply {
+        color = Color.DKGRAY
+        style = Paint.Style.STROKE
+        strokeWidth = ScreenMetrics.dp(1.5f)
+        pathEffect = DashPathEffect(floatArrayOf(ScreenMetrics.dp(8f), ScreenMetrics.dp(6f)), 0f)
+    }
+
+    private val partialTextPaint = TextPaint().apply {
+        color = Color.BLACK
+        textSize = ScreenMetrics.textBody
+        isAntiAlias = false
+        typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.ITALIC)
+    }
+
+    private val placeholderTextPaint = Paint().apply {
+        color = Color.BLACK
+        textSize = ScreenMetrics.dp(13f)
+        isAntiAlias = false
+    }
+
+    /** Transcription progress state for inline progress bar. */
+    data class TranscriptionProgress(
+        val lineIndex: Int,
+        val audioDurationSec: Float,
+        val progress: Float, // 0.0 to 1.0
+        val label: String
+    )
+    var transcriptionProgress: TranscriptionProgress? = null
+        set(value) { field = value; drawToSurface() }
+
+    private val progressBgPaint = Paint().apply {
+        color = Color.LTGRAY
+        style = Paint.Style.FILL
+    }
+
+    private val progressFillPaint = Paint().apply {
+        color = Color.DKGRAY
+        style = Paint.Style.FILL
+    }
+
+    private val progressLabelPaint = Paint().apply {
+        color = Color.BLACK
+        textSize = ScreenMetrics.dp(14f)
+        isAntiAlias = false
+    }
+
+    private val squigglePaint = Paint().apply {
+        color = 0xFFD32F2F.toInt() // Material Red 700 — visible on Kaleido 3 color e-ink
+        style = Paint.Style.STROKE
+        strokeWidth = ScreenMetrics.dp(1.5f)
+        isAntiAlias = false // sharper on e-ink
+    }
+    private val confidenceThreshold = 0.5f
+
+    private val audioIconPaint = Paint().apply {
+        color = Color.GRAY
+        style = Paint.Style.FILL
+        isAntiAlias = true
+    }
+
+    private val playbackAccentPaint = Paint().apply {
+        color = Color.DKGRAY
+        style = Paint.Style.FILL
+        strokeWidth = ScreenMetrics.dp(3f)
+    }
 
     /** Column model reference for magnetic snap access. */
     var columnModel: ColumnModel? = null
@@ -539,6 +679,79 @@ class HandwritingCanvasView @JvmOverloads constructor(
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 if (!fingerScrollActive) return false
                 fingerScrollActive = false
+
+                // Detect tap (no scroll movement) on a TextBlock with audio
+                if (event.action == MotionEvent.ACTION_UP && tf != null && !tf.hasMovedPastSlop()) {
+                    val docY = event.y + scrollOffsetY
+                    val tapLine = ((docY - TOP_MARGIN) / LINE_SPACING).toInt().coerceAtLeast(0)
+                    val tappedBlock = textBlocks.find {
+                        it.containsLine(tapLine) && it.audioFile.isNotEmpty()
+                    }
+                    if (tappedBlock != null) {
+                        if (!tutorialMode) resumeRawDrawing()
+                        // Map tap X to a specific word for word-level audio seek
+                        val tapDocX = event.x
+                        var wordStartMs: Long? = null
+                        if (tappedBlock.words.isNotEmpty()) {
+                            val margin = LINE_SPACING * 0.3f
+                            val fullText = tappedBlock.text.trimStart()
+                            val textW = (width.toFloat() - 2 * margin).toInt().coerceAtLeast(1)
+
+                            // Use StaticLayout to find which wrapped line the tap is on
+                            val layout = android.text.StaticLayout.Builder
+                                .obtain(fullText, 0, fullText.length, textBlockPaint, textW)
+                                .setAlignment(android.text.Layout.Alignment.ALIGN_NORMAL)
+                                .build()
+
+                            // Which wrapped line did the user tap?
+                            val tappedWrappedLine = tapLine - tappedBlock.startLineIndex
+                            if (tappedWrappedLine in 0 until layout.lineCount) {
+                                val lineStart = layout.getLineStart(tappedWrappedLine)
+                                val lineEnd = layout.getLineEnd(tappedWrappedLine)
+                                val lineText = fullText.substring(lineStart, lineEnd).trimEnd()
+                                val lineLeftOffset = layout.getLineLeft(tappedWrappedLine)
+
+                                // Map tap X to a word on this wrapped line
+                                val tapXInLine = tapDocX - margin - lineLeftOffset
+                                val lineWords = lineText.split(" ").filter { it.isNotEmpty() }
+
+                                // Count words before this line to index into block.words
+                                val wordsBefore = fullText.substring(0, lineStart)
+                                    .split(" ").filter { it.isNotEmpty() }.size
+
+                                var charInLine = 0
+                                for ((j, wordText) in lineWords.withIndex()) {
+                                    val wordIdx = wordsBefore + j
+                                    if (wordIdx >= tappedBlock.words.size) break
+                                    val wx = textBlockPaint.measureText(lineText, 0, charInLine)
+                                    val ww = textBlockPaint.measureText(wordText)
+                                    if (tapXInLine >= wx - ww * 0.15f && tapXInLine <= wx + ww * 1.15f) {
+                                        val word = tappedBlock.words[wordIdx]
+                                        wordStartMs = word.startMs
+                                        android.util.Log.i("TextBlockTap",
+                                            "Tapped word[$wordIdx]=\"${word.text}\" startMs=${word.startMs} endMs=${word.endMs} " +
+                                            "tapX=%.1f wordX=%.1f..%.1f".format(tapXInLine, wx, wx + ww))
+                                        break
+                                    }
+                                    charInLine += wordText.length + 1
+                                }
+                            }
+                        }
+                        if (wordStartMs == null && tappedBlock.words.isNotEmpty()) {
+                            android.util.Log.w("TextBlockTap",
+                                "No word matched tap. Falling back to block startMs=${tappedBlock.audioStartMs}. " +
+                                "Words: ${tappedBlock.words.joinToString { "${it.text}@${it.startMs}ms" }}")
+                        }
+                        onTextBlockTap?.invoke(tappedBlock, wordStartMs)
+                        return true
+                    }
+                }
+
+                // Tapped outside any text block — stop playback if active
+                if (playingTextBlockId != null) {
+                    onPlaybackStop?.invoke()
+                }
+
                 if (textOverscroll == 0f) {
                     scrollOffsetY = snapToLine(scrollOffsetY)
                 }
@@ -568,7 +781,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
                 spaceInsertDragActive = true
 
                 // If anchor is inside a diagram, scan from the diagram's top edge
-                val scanFrom = SpaceInsertMode.effectiveShiftLine(lineIndex, diagramAreas)
+                val scanFrom = SpaceInsertMode.effectiveShiftLine(lineIndex, diagramAreas, textBlocks)
 
                 // Compute max allowed upward shift by counting empty lines above scanFrom
                 val occupiedLines = completedStrokes.map { s ->
@@ -579,6 +792,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
                     val checkLine = scanFrom - i
                     if (checkLine in occupiedLines) break
                     if (diagramAreas.any { it.containsLine(checkLine) }) break
+                    if (textBlocks.any { it.containsLine(checkLine) }) break
                     emptyAbove++
                 }
                 spaceInsertMaxUpPx = emptyAbove * LINE_SPACING
@@ -977,7 +1191,25 @@ class HandwritingCanvasView @JvmOverloads constructor(
 
     /** Check if the completed stroke is a scratch-out erase gesture. */
     private fun checkPostStrokeScratchOut(): Boolean {
-        if (!ScratchOutDetection.isScratchOut(currentStrokePoints, completedStrokes, LINE_SPACING)) return false
+        // Standard scratch-out check against existing ink strokes
+        var isScratch = ScratchOutDetection.isScratchOut(currentStrokePoints, completedStrokes, LINE_SPACING)
+
+        // If not a scratch-out over strokes, check if the gesture shape is a scratch-out
+        // over a TextBlock (TextBlocks aren't strokes so the focus check doesn't apply)
+        if (!isScratch && textBlocks.isNotEmpty()) {
+            val xs = FloatArray(currentStrokePoints.size) { currentStrokePoints[it].x }
+            val yRange = currentStrokePoints.maxOf { it.y } - currentStrokePoints.minOf { it.y }
+            if (ScratchOutDetection.detect(xs, yRange, LINE_SPACING, false)) {
+                // Check if scratch bbox overlaps a TextBlock
+                val scratchCenterY = (strokeMinY + strokeMaxY) / 2
+                val scratchLine = ((scratchCenterY - TOP_MARGIN) / LINE_SPACING).toInt().coerceAtLeast(0)
+                if (textBlocks.any { it.containsLine(scratchLine) }) {
+                    isScratch = true
+                }
+            }
+        }
+
+        if (!isScratch) return false
 
         val scratchPoints = currentStrokePoints.toList()
         val left = strokeMinX; val top = strokeMinY
@@ -1140,7 +1372,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
         // If anchor is inside a diagram, shift from the diagram's top edge so all
         // strokes in the diagram preview-shift together (mirrors SpaceInsertMode logic).
         val shiftFromLine = if (spaceInsertAnchorLine >= 0) {
-            SpaceInsertMode.effectiveShiftLine(spaceInsertAnchorLine, diagramAreas)
+            SpaceInsertMode.effectiveShiftLine(spaceInsertAnchorLine, diagramAreas, textBlocks)
         } else Int.MAX_VALUE
         val anchorY = if (shiftFromLine < Int.MAX_VALUE) {
             TOP_MARGIN + shiftFromLine * LINE_SPACING
@@ -1186,6 +1418,96 @@ class HandwritingCanvasView @JvmOverloads constructor(
             }
         }
 
+        // Draw text blocks (transcribed audio) at their line positions,
+        // with each wrapped line aligned to a ruled line on the canvas.
+        val textLeftMargin = LINE_SPACING * 0.3f
+        val textWidth = (canvasRight - 2 * textLeftMargin).toInt().coerceAtLeast(1)
+        for (block in textBlocks) {
+            if (block.text.isBlank()) continue
+            val blockShift = if (spaceInsertMode && spaceInsertDragActive &&
+                block.startLineIndex >= spaceInsertAnchorLine
+            ) previewShiftPx else 0f
+
+            // Build a StaticLayout for word wrapping
+            val layout = android.text.StaticLayout.Builder
+                .obtain(block.text, 0, block.text.length, textBlockPaint, textWidth)
+                .setAlignment(android.text.Layout.Alignment.ALIGN_NORMAL)
+                .build()
+
+            // Draw each wrapped line with its baseline on the ruled line.
+            // Ruled line is at TOP_MARGIN + (lineIndex+1) * LINE_SPACING.
+            // Descenders naturally hang below the baseline (below the ruled line).
+            for (i in 0 until layout.lineCount) {
+                val lineText = block.text.substring(layout.getLineStart(i), layout.getLineEnd(i)).trimEnd()
+                val ruledLineIndex = block.startLineIndex + i
+                val baselineY = TOP_MARGIN + (ruledLineIndex + 1) * LINE_SPACING + blockShift
+                canvas.drawText(lineText, textLeftMargin, baselineY, textBlockPaint)
+            }
+
+            // Draw red squiggly underline on low-confidence words
+            if (block.words.isNotEmpty()) {
+                val fullText = block.text.trimStart()
+                val wordsInText = fullText.split(" ").filter { it.isNotEmpty() }
+                var charPos = 0
+                for ((i, wordText) in wordsInText.withIndex()) {
+                    if (i >= block.words.size) break
+                    val word = block.words[i]
+                    if (word.confidence < confidenceThreshold) {
+                        val wordX = textLeftMargin + textBlockPaint.measureText(fullText, 0, charPos)
+                        val wordWidth = textBlockPaint.measureText(wordText)
+                        val wordLine = block.startLineIndex
+                        val baselineY = TOP_MARGIN + (wordLine + 1) * LINE_SPACING + blockShift
+                        val squiggleY = baselineY + ScreenMetrics.dp(2f)
+                        val amplitude = ScreenMetrics.dp(2f)
+                        val period = ScreenMetrics.dp(6f)
+                        val squigglePath = android.graphics.Path()
+                        squigglePath.moveTo(wordX, squiggleY)
+                        var sx = wordX
+                        var phase = 0
+                        while (sx < wordX + wordWidth) {
+                            val nextX = (sx + period / 2).coerceAtMost(wordX + wordWidth)
+                            val dy = if (phase % 2 == 0) amplitude else -amplitude
+                            squigglePath.lineTo(nextX, squiggleY + dy)
+                            sx = nextX
+                            phase++
+                        }
+                        canvas.drawPath(squigglePath, squigglePaint)
+                    }
+                    charPos += wordText.length + 1
+                }
+            }
+
+            // Draw audio indicators
+            if (block.audioFile.isNotEmpty()) {
+                val iconSize = LINE_SPACING * 0.25f
+                val iconX = textLeftMargin * 0.15f
+                val iconCenterY = TOP_MARGIN + block.startLineIndex * LINE_SPACING + LINE_SPACING * 0.5f + blockShift
+                val isPlaying = block.id == playingTextBlockId
+
+                if (isPlaying) {
+                    // Pause icon (two vertical bars)
+                    val barW = iconSize * 0.25f
+                    val barH = iconSize * 0.8f
+                    canvas.drawRect(iconX, iconCenterY - barH / 2, iconX + barW, iconCenterY + barH / 2, audioIconPaint)
+                    canvas.drawRect(iconX + barW * 2, iconCenterY - barH / 2, iconX + barW * 3, iconCenterY + barH / 2, audioIconPaint)
+
+                    // Accent bar on left edge
+                    val topY = TOP_MARGIN + block.startLineIndex * LINE_SPACING + blockShift
+                    val bottomY = TOP_MARGIN + (block.endLineIndex + 1) * LINE_SPACING + blockShift
+                    canvas.drawRect(0f, topY, ScreenMetrics.dp(3f), bottomY, playbackAccentPaint)
+                } else {
+                    // Speaker icon (triangle + arcs approximated as a simple triangle)
+                    val path = android.graphics.Path()
+                    path.moveTo(iconX, iconCenterY - iconSize * 0.3f)
+                    path.lineTo(iconX + iconSize * 0.6f, iconCenterY - iconSize * 0.5f)
+                    path.lineTo(iconX + iconSize * 0.6f, iconCenterY + iconSize * 0.5f)
+                    path.lineTo(iconX, iconCenterY + iconSize * 0.3f)
+                    path.close()
+                    canvas.drawPath(path, audioIconPaint)
+                }
+            }
+        }
+
         // Draw space-insert mode: dashed line boundaries (skip inside diagram areas)
         if (spaceInsertMode) {
             var handleY = TOP_MARGIN + LINE_SPACING
@@ -1208,7 +1530,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
                 // When clamped at content, highlight the barrier line and blocking strokes
                 if (isClamped) {
                     val emptyAbove = (spaceInsertMaxUpPx / LINE_SPACING).toInt()
-                    val barrierLine = SpaceInsertMode.barrierLine(spaceInsertAnchorLine, diagramAreas, emptyAbove)
+                    val barrierLine = SpaceInsertMode.barrierLine(spaceInsertAnchorLine, diagramAreas, emptyAbove, textBlocks)
                     if (barrierLine >= 0) {
                         val barrierY = TOP_MARGIN + (barrierLine + 1) * LINE_SPACING
                         canvas.drawLine(0f, barrierY, canvasRight, barrierY, spaceInsertBarrierPaint)
@@ -1242,7 +1564,75 @@ class HandwritingCanvasView @JvmOverloads constructor(
             }
         }
 
+        // Draw recording placeholder — dashed border showing where TextBlock will go
+        if (recordingPlaceholderLine >= 0 && transcriptionProgress == null) {
+            val phMargin = LINE_SPACING * 0.2f
+            val textLeftMarginPh = LINE_SPACING * 0.4f
+            val textWidthPh = (canvasRight - 2 * textLeftMarginPh).toInt().coerceAtLeast(1)
+
+            if (partialTranscriptionText.isNotBlank()) {
+                // Live partial text — italic inside dashed border
+                val layout = android.text.StaticLayout.Builder
+                    .obtain(partialTranscriptionText, 0, partialTranscriptionText.length, partialTextPaint, textWidthPh)
+                    .setAlignment(android.text.Layout.Alignment.ALIGN_NORMAL)
+                    .build()
+                val lineCount = layout.lineCount.coerceAtLeast(2)
+                val phTop = TOP_MARGIN + recordingPlaceholderLine * LINE_SPACING + phMargin
+                val phBottom = TOP_MARGIN + (recordingPlaceholderLine + lineCount) * LINE_SPACING - phMargin
+                canvas.drawRect(phMargin, phTop, canvasRight - phMargin, phBottom, placeholderBorderPaint)
+
+                for (i in 0 until layout.lineCount) {
+                    val lineText = partialTranscriptionText.substring(
+                        layout.getLineStart(i), layout.getLineEnd(i)
+                    ).trimEnd()
+                    val ruledLineIndex = recordingPlaceholderLine + i
+                    val baselineY = TOP_MARGIN + (ruledLineIndex + 1) * LINE_SPACING
+                    canvas.drawText(lineText, textLeftMarginPh, baselineY, partialTextPaint)
+                }
+            } else {
+                // No partial yet — show placeholder label
+                val phTop = TOP_MARGIN + recordingPlaceholderLine * LINE_SPACING + phMargin
+                val phBottom = TOP_MARGIN + (recordingPlaceholderLine + 2) * LINE_SPACING - phMargin
+                canvas.drawRect(phMargin, phTop, canvasRight - phMargin, phBottom, placeholderBorderPaint)
+
+                val labelY = TOP_MARGIN + recordingPlaceholderLine * LINE_SPACING + LINE_SPACING * 0.85f
+                canvas.drawText("\uD83C\uDFA4  Recording \u2014 transcription will appear here", textLeftMarginPh, labelY, placeholderTextPaint)
+            }
+        }
+
+        // Draw transcription progress bar at the line where TextBlock will appear
+        // Spans two ruled lines: bar on first line, label on second line
+        transcriptionProgress?.let { prog ->
+            val barLeftMargin = LINE_SPACING * 0.3f
+            val barY = TOP_MARGIN + prog.lineIndex * LINE_SPACING + LINE_SPACING * 0.35f
+            val barWidth = canvasRight - 2 * barLeftMargin
+            val barHeight = ScreenMetrics.dp(10f)
+
+            // Background track
+            canvas.drawRect(barLeftMargin, barY, barLeftMargin + barWidth, barY + barHeight, progressBgPaint)
+            // Filled portion
+            canvas.drawRect(barLeftMargin, barY, barLeftMargin + barWidth * prog.progress, barY + barHeight, progressFillPaint)
+
+            // Percentage text right-aligned on the bar
+            val pctText = "%d%%".format((prog.progress * 100).toInt())
+            val pctWidth = progressLabelPaint.measureText(pctText)
+            canvas.drawText(pctText, barLeftMargin + barWidth - pctWidth, barY - ScreenMetrics.dp(3f), progressLabelPaint)
+
+            // Label on the next line
+            val labelY = TOP_MARGIN + (prog.lineIndex + 1) * LINE_SPACING + LINE_SPACING * 0.5f
+            canvas.drawText(prog.label, barLeftMargin, labelY, progressLabelPaint)
+        }
+
         canvas.restore()
+
+        // Draw recording indicator (screen-space, not scrolled)
+        if (lectureRecording && recordingDotVisible) {
+            val dotX = ScreenMetrics.dp(20f)
+            val dotY = ScreenMetrics.dp(20f)
+            val dotR = ScreenMetrics.dp(5f)
+            canvas.drawCircle(dotX, dotY, dotR, recordingDotPaint)
+            canvas.drawText("REC", dotX + dotR + ScreenMetrics.dp(6f), dotY + ScreenMetrics.dp(4f), recordingTextPaint)
+        }
 
         // Draw tutorial annotations on top of everything
         if (annotationStrokes.isNotEmpty() || textAnnotations.isNotEmpty()) {
@@ -1374,6 +1764,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
         scrollOffsetY = 0f
         textOverscroll = 0f
         diagramAreas = emptyList()
+        textBlocks = emptyList()
         handler.removeCallbacks(idleRunnable)
         drawToSurface()
     }

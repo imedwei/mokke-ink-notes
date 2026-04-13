@@ -3,6 +3,7 @@ package com.writer.ui.writing
 import com.writer.model.DiagramArea
 import com.writer.model.InkStroke
 import com.writer.model.StrokePoint
+import com.writer.model.TextBlock
 import com.writer.recognition.LineSegmenter
 import com.writer.recognition.StrokeClassifier
 import com.writer.view.HandwritingCanvasView
@@ -219,5 +220,68 @@ class MarkdownExporterTest {
     fun `empty main blocks returns empty string`() {
         val result = MarkdownExporter.buildText(emptyList(), listOf(block(0, 0, "Orphan cue")))
         assertEquals("", result)
+    }
+
+    // --- TextBlock support ---
+
+    @Test
+    fun `textBlock appears at correct line position`() {
+        val textBlocks = listOf(
+            TextBlock(id = "tb1", startLineIndex = 3, heightInLines = 1, text = "voice memo")
+        )
+        val result = MarkdownExporter.buildBlocks(
+            lineTextCache = emptyMap(),
+            activeStrokes = emptyList(),
+            diagramAreas = emptyList(),
+            textBlocks = textBlocks,
+            writingWidth = 800f,
+            paragraphBuilder = paragraphBuilder,
+            lineSegmenter = lineSegmenter,
+            isDiagramLine = { false }
+        )
+        assertEquals(1, result.size)
+        assertEquals("voice memo", result[0].text)
+        assertEquals(3, result[0].startLine)
+        assertEquals(3, result[0].endLine)
+    }
+
+    @Test
+    fun `textBlock with empty text is skipped`() {
+        val textBlocks = listOf(
+            TextBlock(id = "tb1", startLineIndex = 2, heightInLines = 1, text = "")
+        )
+        val result = MarkdownExporter.buildBlocks(
+            lineTextCache = mapOf(0 to "hello"),
+            activeStrokes = listOf(strokeOnLine(0)),
+            diagramAreas = emptyList(),
+            textBlocks = textBlocks,
+            writingWidth = 800f,
+            paragraphBuilder = paragraphBuilder,
+            lineSegmenter = lineSegmenter,
+            isDiagramLine = { false }
+        )
+        assertTrue("Empty TextBlock should be skipped", result.none { it.startLine == 2 })
+    }
+
+    @Test
+    fun `textBlock and diagram coexist`() {
+        val diagramArea = DiagramArea(id = "d1", startLineIndex = 5, heightInLines = 3)
+        val diagramStroke = strokeOnLine(6)
+        val textBlocks = listOf(
+            TextBlock(id = "tb1", startLineIndex = 2, heightInLines = 1, text = "memo text")
+        )
+        val result = MarkdownExporter.buildBlocks(
+            lineTextCache = mapOf(0 to "hello"),
+            activeStrokes = listOf(strokeOnLine(0), diagramStroke),
+            diagramAreas = listOf(diagramArea),
+            textBlocks = textBlocks,
+            writingWidth = 800f,
+            paragraphBuilder = paragraphBuilder,
+            lineSegmenter = lineSegmenter,
+            isDiagramLine = { diagramArea.containsLine(it) },
+            svgEncoder = { _, _, _, _ -> "![diagram](data:test)" }
+        )
+        assertTrue("Should have TextBlock", result.any { it.text == "memo text" })
+        assertTrue("Should have diagram", result.any { it.text.contains("diagram") })
     }
 }

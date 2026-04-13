@@ -2,6 +2,7 @@ package com.writer.ui.writing
 
 import com.writer.model.DiagramArea
 import com.writer.model.InkStroke
+import com.writer.model.TextBlock
 import com.writer.recognition.LineSegmenter
 import com.writer.storage.SvgExporter
 import com.writer.view.HandwritingCanvasView
@@ -27,6 +28,7 @@ object MarkdownExporter {
         lineTextCache: Map<Int, String>,
         activeStrokes: List<InkStroke>,
         diagramAreas: List<DiagramArea>,
+        textBlocks: List<TextBlock> = emptyList(),
         writingWidth: Float,
         paragraphBuilder: ParagraphBuilder,
         lineSegmenter: LineSegmenter,
@@ -37,7 +39,7 @@ object MarkdownExporter {
                 "![diagram](${SvgExporter.toBase64DataUri(svg)})"
             }
     ): List<MdBlock> {
-        if (lineTextCache.isEmpty() && diagramAreas.isEmpty()) return emptyList()
+        if (lineTextCache.isEmpty() && diagramAreas.isEmpty() && textBlocks.isEmpty()) return emptyList()
 
         val strokesByLine = lineSegmenter.groupByLine(activeStrokes)
 
@@ -76,6 +78,12 @@ object MarkdownExporter {
             val areaHeight = area.heightInLines * HandwritingCanvasView.LINE_SPACING
             val text = svgEncoder(diagramStrokes, writingWidth, areaHeight, areaTop)
             blocks.add(MdBlock(area.startLineIndex, area.endLineIndex, text))
+        }
+
+        // Insert text blocks at correct positions
+        for (tb in textBlocks.sortedBy { it.startLineIndex }) {
+            if (tb.text.isBlank()) continue
+            blocks.add(MdBlock(tb.startLineIndex, tb.endLineIndex, tb.text))
         }
 
         return blocks.sortedBy { it.startLine }

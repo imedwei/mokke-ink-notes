@@ -20,6 +20,7 @@ import android.view.View
 import com.writer.model.InkStroke
 import com.writer.ui.writing.DiagramDisplay
 import com.writer.ui.writing.DiagramTextLabel
+import com.writer.ui.writing.TextBlockDisplay
 import com.writer.ui.writing.TextSegment
 
 /**
@@ -214,13 +215,21 @@ class RecognizedTextView @JvmOverloads constructor(
         setContent(paragraphs, emptyList())
     }
 
-    fun setContent(paragraphs: List<List<TextSegment>>, diagrams: List<DiagramDisplay>) {
-        rebuildRenderItems(paragraphs, diagrams)
+    fun setContent(
+        paragraphs: List<List<TextSegment>>,
+        diagrams: List<DiagramDisplay>,
+        textBlocks: List<TextBlockDisplay> = emptyList()
+    ) {
+        rebuildRenderItems(paragraphs, diagrams, textBlocks)
         if (!tutorialMode && renderItems.isNotEmpty()) showScrollHint = false
         invalidate()
     }
 
-    private fun rebuildRenderItems(paragraphs: List<List<TextSegment>>, diagrams: List<DiagramDisplay>) {
+    private fun rebuildRenderItems(
+        paragraphs: List<List<TextSegment>>,
+        diagrams: List<DiagramDisplay>,
+        textBlocks: List<TextBlockDisplay> = emptyList()
+    ) {
         val availableWidth = (width - 2 * HORIZONTAL_PADDING).toInt()
         if (availableWidth <= 0) return
 
@@ -337,8 +346,33 @@ class RecognizedTextView @JvmOverloads constructor(
             )
         }
 
+        // Build text block render items (transcribed audio text)
+        val textBlockItems = textBlocks.map { block ->
+            val spannable = SpannableStringBuilder(block.text)
+            spannable.setSpan(
+                LeadingMarginSpan.Standard(FIRST_LINE_INDENT, 0),
+                0, spannable.length,
+                SpannableStringBuilder.SPAN_EXCLUSIVE_EXCLUSIVE
+            )
+            val layout = StaticLayout.Builder
+                .obtain(spannable, 0, spannable.length, textPaint, availableWidth)
+                .setAlignment(Layout.Alignment.ALIGN_NORMAL)
+                .setLineSpacing(8f, 1f)
+                .build()
+            val heightPx = layout.height.toFloat() + PARAGRAPH_SPACING
+            Indexed(
+                lineIndex = block.startLineIndex,
+                item = TextRenderItem(
+                    layout, heightPx,
+                    segments = listOf(TextSegment(block.text, dimmed = false, lineIndex = block.startLineIndex)),
+                    segmentStarts = listOf(0)
+                ),
+                lineHeights = listOf(Pair(block.startLineIndex, heightPx))
+            )
+        }
+
         // Merge and sort by line index
-        val allItems = (textItems + diagramItems).sortedBy { it.lineIndex }
+        val allItems = (textItems + diagramItems + textBlockItems).sortedBy { it.lineIndex }
 
         // Strip trailing spacing from the last item so content is flush with the divider
         val items = allItems.map { it.item }.toMutableList()

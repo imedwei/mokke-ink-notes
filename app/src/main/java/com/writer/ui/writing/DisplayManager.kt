@@ -46,6 +46,12 @@ data class DiagramDisplay(
     val textLabels: List<DiagramTextLabel> = emptyList()
 )
 
+/** Text block display data for inline rendering in the text view. */
+data class TextBlockDisplay(
+    val startLineIndex: Int,
+    val text: String
+)
+
 class DisplayManager(
     private val inkCanvas: HandwritingCanvasView,
     private val textView: RecognizedTextView,
@@ -247,7 +253,12 @@ class DisplayManager(
             )
         }
 
-        textView.setContent(paragraphs, diagrams)
+        // Build text block displays for transcribed text
+        val textBlockDisplays = host.columnModel.textBlocks
+            .filter { it.text.isNotBlank() }
+            .map { TextBlockDisplay(startLineIndex = it.startLineIndex, text = it.text) }
+
+        textView.setContent(paragraphs, diagrams, textBlockDisplays)
     }
 
     /** Called when the text view is scrolled via overscroll. */
