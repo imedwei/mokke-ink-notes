@@ -26,13 +26,15 @@ class AutomergeSinkTest {
     private lateinit var tempDir: File
     private lateinit var storage: AutomergeStorage
     private lateinit var sink: AutomergeSink
+    private lateinit var fakeExportSink: FakeExportSink
 
     @Before
     fun setUp() {
         tempDir = File(System.getProperty("java.io.tmpdir"), "amok-sink-test-${System.nanoTime()}")
         tempDir.mkdirs()
         storage = AutomergeStorage(tempDir)
-        sink = AutomergeSink(storage)
+        fakeExportSink = FakeExportSink()
+        sink = AutomergeSink(storage, fakeExportSink)
     }
 
     @After
@@ -74,15 +76,15 @@ class AutomergeSinkTest {
     }
 
     @Test
-    fun `export produces valid mok ZIP`() {
+    fun `export delegates to export sink`() {
         val data = sampleData()
         sink.save("doc1", data)
 
         val syncUri = Uri.parse("content://test/sync")
         sink.export("doc1", data, "# Test markdown", syncUri)
 
-        // The export writes to a SAF URI which we can't easily test
-        // without mocking ContentResolver. Verify the sink doesn't crash.
+        assertEquals(1, fakeExportSink.exports.size)
+        assertEquals("doc1", fakeExportSink.exports[0])
     }
 
     private fun sampleData() = DocumentData(
@@ -92,4 +94,12 @@ class AutomergeSinkTest {
             )
         )
     )
+
+    private class FakeExportSink : AutoSaver.Sink {
+        val exports = mutableListOf<String>()
+        override fun save(name: String, state: DocumentData): Boolean = true
+        override fun export(name: String, state: DocumentData, markdown: String, syncUri: Uri) {
+            exports.add(name)
+        }
+    }
 }
