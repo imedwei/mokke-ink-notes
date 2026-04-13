@@ -13,7 +13,7 @@ import java.util.concurrent.ConcurrentLinkedQueue
  * [AudioTranscriber] using Sherpa-ONNX for real-time on-device transcription
  * with simultaneous audio recording.
  *
- * Same single-[AudioRecord] architecture as [VoskTranscriber]: tees each PCM
+ * Single-[AudioRecord] architecture: tees each PCM
  * buffer to both the speech recognizer and an Opus/OGG encoder.
  *
  * The recognizer is obtained from [SherpaModelManager] via the [StreamingRecognizer]

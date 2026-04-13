@@ -4,7 +4,7 @@ package com.writer.recognition
  * Abstraction for audio-to-text transcription engines.
  *
  * Implementations:
- *  - [SystemSpeechTranscriber] — Android SpeechRecognizer (on-device, streaming)
+ *  - [SherpaTranscriber] — Sherpa-ONNX two-pass (streaming + offline)
  *
  * Mirrors [TextRecognizer] pattern: start/stop lifecycle with callback-based results.
  */

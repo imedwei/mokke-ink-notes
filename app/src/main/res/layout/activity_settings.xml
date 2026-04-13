@@ -56,68 +56,6 @@
             android:layout_marginTop="8dp"
             android:layout_marginBottom="24dp" />
 
-        <!-- Audio Transcription Engine -->
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="Lecture Transcription Engine"
-            android:textSize="18sp"
-            android:textColor="#666666"
-            android:textStyle="bold"
-            android:layout_marginBottom="16dp" />
-
-        <RadioGroup
-            android:id="@+id/transcriptionEngineGroup"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="vertical">
-
-            <RadioButton
-                android:id="@+id/radioSystem"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="System (real-time, no audio saved)"
-                android:textSize="18sp"
-                android:textColor="@color/black"
-                android:paddingStart="8dp"
-                android:paddingTop="8dp"
-                android:paddingBottom="8dp" />
-
-            <RadioButton
-                android:id="@+id/radioSherpa"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Sherpa (real-time + live partials, ~39 MB)"
-                android:textSize="18sp"
-                android:textColor="@color/black"
-                android:paddingStart="8dp"
-                android:paddingTop="8dp"
-                android:paddingBottom="8dp" />
-
-            <RadioButton
-                android:id="@+id/radioVosk"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Vosk (real-time + saves audio, ~40 MB)"
-                android:textSize="18sp"
-                android:textColor="@color/black"
-                android:paddingStart="8dp"
-                android:paddingTop="8dp"
-                android:paddingBottom="8dp" />
-
-            <RadioButton
-                android:id="@+id/radioWhisper"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Whisper (highest accuracy, batch, ~75 MB)"
-                android:textSize="18sp"
-                android:textColor="@color/black"
-                android:paddingStart="8dp"
-                android:paddingTop="8dp"
-                android:paddingBottom="8dp" />
-
-        </RadioGroup>
-
         <View
             android:layout_width="match_parent"
             android:layout_height="1dp"

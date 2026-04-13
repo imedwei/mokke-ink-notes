@@ -51,7 +51,6 @@ class WritingActivity : AppCompatActivity() {
         private const val PREFS_NAME = "writer_prefs"
         private const val PREF_CURRENT_DOC = "current_document"
         private const val PREF_SYNC_FOLDER = "sync_folder_uri"
-        private const val PREF_USE_WHISPER = com.writer.ui.settings.SettingsActivity.PREF_USE_WHISPER
         private const val UNDO_REDO_DEBOUNCE_MS = 300L
         private const val MEMO_AUTO_STOP_DELAY_MS = 2000L
     }
@@ -94,11 +93,6 @@ class WritingActivity : AppCompatActivity() {
     private lateinit var micButton: ImageView
     private var audioCaptureManager: com.writer.audio.AudioCaptureManager? = null
     private var audioRecordCapture: com.writer.audio.AudioRecordCapture? = null
-    private val transcriptionEngine: String
-        get() = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-            .getString(com.writer.ui.settings.SettingsActivity.PREF_TRANSCRIPTION_ENGINE,
-                com.writer.ui.settings.SettingsActivity.ENGINE_SHERPA)
-            ?: com.writer.ui.settings.SettingsActivity.ENGINE_SHERPA
     private val sherpaModelManager = com.writer.recognition.SherpaModelManager()
     private val offlineModelManager = com.writer.recognition.OfflineModelManager()
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())
@@ -1174,37 +1168,30 @@ class WritingActivity : AppCompatActivity() {
             return
         }
 
-        if (!com.writer.recognition.SystemSpeechTranscriber.isAvailable(this)) {
-            Toast.makeText(this, "Speech recognition not available", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        // For Sherpa: ensure model is ready before entering lecture mode.
+        // Ensure model is ready before entering lecture mode.
         // If not ready, show download progress and defer until the model loads.
-        if (transcriptionEngine == com.writer.ui.settings.SettingsActivity.ENGINE_SHERPA) {
-            if (sherpaModelManager.getRecognizer() == null) {
-                val state = sherpaModelManager.state
-                if (state == com.writer.recognition.SherpaModelManager.State.ERROR) {
-                    sherpaModelManager.release()
-                }
-                Toast.makeText(this, "Preparing speech engine\u2026", Toast.LENGTH_SHORT).show()
-                sherpaModelManager.onStatusUpdate = { status ->
-                    runOnUiThread {
-                        Toast.makeText(this, status, Toast.LENGTH_SHORT).show()
-                    }
-                }
-                sherpaModelManager.onReady = {
-                    runOnUiThread {
-                        sherpaModelManager.onReady = null
-                        sherpaModelManager.onStatusUpdate = null
-                        startLectureCapture() // retry the full flow
-                    }
-                }
-                if (sherpaModelManager.state != com.writer.recognition.SherpaModelManager.State.LOADING) {
-                    sherpaModelManager.preload(this)
-                }
-                return
+        if (sherpaModelManager.getRecognizer() == null) {
+            val state = sherpaModelManager.state
+            if (state == com.writer.recognition.SherpaModelManager.State.ERROR) {
+                sherpaModelManager.release()
             }
+            Toast.makeText(this, "Preparing speech engine\u2026", Toast.LENGTH_SHORT).show()
+            sherpaModelManager.onStatusUpdate = { status ->
+                runOnUiThread {
+                    Toast.makeText(this, status, Toast.LENGTH_SHORT).show()
+                }
+            }
+            sherpaModelManager.onReady = {
+                runOnUiThread {
+                    sherpaModelManager.onReady = null
+                    sherpaModelManager.onStatusUpdate = null
+                    startLectureCapture() // retry the full flow
+                }
+            }
+            if (sherpaModelManager.state != com.writer.recognition.SherpaModelManager.State.LOADING) {
+                sherpaModelManager.preload(this)
+            }
+            return
         }
 
         lectureMode = true
@@ -1219,96 +1206,9 @@ class WritingActivity : AppCompatActivity() {
         // Show placeholder at the line where TextBlocks will be inserted
         updateRecordingPlaceholder()
 
-        when (transcriptionEngine) {
-            com.writer.ui.settings.SettingsActivity.ENGINE_SHERPA -> {
-                val serviceIntent = android.content.Intent(this, com.writer.audio.AudioRecordingService::class.java)
-                startForegroundService(serviceIntent)
-                startSherpaLectureRecognition()
-            }
-            com.writer.ui.settings.SettingsActivity.ENGINE_WHISPER -> {
-                val serviceIntent = android.content.Intent(this, com.writer.audio.AudioRecordingService::class.java)
-                startForegroundService(serviceIntent)
-                startWhisperLectureRecognition()
-            }
-            com.writer.ui.settings.SettingsActivity.ENGINE_VOSK -> {
-                val serviceIntent = android.content.Intent(this, com.writer.audio.AudioRecordingService::class.java)
-                startForegroundService(serviceIntent)
-                startVoskLectureRecognition()
-            }
-            else -> {
-                startLectureSpeechRecognition()
-            }
-        }
-    }
-
-    private fun startLectureSpeechRecognition() {
-        // Close previous transcriber before creating a new one
-        audioTranscriber?.close()
-
-        val transcriber = com.writer.recognition.SystemSpeechTranscriber(this)
-        audioTranscriber = transcriber
-
-        // No concurrent AudioRecord in SpeechRecognizer mode — it steals audio data
-        // from the recognizer on this device, causing zero transcription results.
-        // Audio recording is only available in Whisper mode.
-
-        transcriber.onFinalResult = { text ->
-            if (text.isNotBlank() && lectureMode) {
-                val now = System.currentTimeMillis()
-                val startMs = now - lectureRecordingStartMs - 3000L
-                val endMs = now - lectureRecordingStartMs
-                val audioFile = audioCaptureManager?.getOutputFile()?.name ?: ""
-                activeCoordinator?.insertTextBlock(
-                    text, audioFile = audioFile,
-                    startMs = startMs.coerceAtLeast(0), endMs = endMs
-                )
-                updateCueIndicatorStrip()
-                // Advance placeholder past the newly inserted TextBlock
-                updateRecordingPlaceholder()
-                android.util.Log.i("WritingActivity", "Lecture transcribed: $text")
-            }
-            // Restart recognition for the next sentence (continuous mode)
-            if (lectureMode) {
-                // Post to main looper to allow SpeechRecognizer cleanup
-                android.os.Handler(android.os.Looper.getMainLooper()).post {
-                    if (lectureMode) startLectureSpeechRecognition()
-                }
-            }
-        }
-
-        var rmsLogCounter = 0
-        transcriber.onRmsChanged = { rmsdB ->
-            audioQualityMonitor.onRmsChanged(rmsdB)
-            rmsLogCounter++
-            if (rmsLogCounter % 20 == 0) {
-                android.util.Log.i("AudioQuality",
-                    "rms=%.1f noiseFloor=%.1f peakSpeech=%.1f snr=%.1f quality=%s".format(
-                        rmsdB,
-                        audioQualityMonitor.noiseFloorDb,
-                        audioQualityMonitor.peakSpeechDb,
-                        audioQualityMonitor.snr,
-                        audioQualityMonitor.quality.name
-                    ))
-            }
-            if (audioQualityMonitor.shouldWarn && !audioQualityWarned) {
-                audioQualityWarned = true
-                Toast.makeText(this, audioQualityMonitor.qualityMessage, Toast.LENGTH_LONG).show()
-            }
-        }
-
-        transcriber.onError = { errorCode ->
-            android.util.Log.w("WritingActivity", "Lecture recognition error: $errorCode")
-            if (lectureMode) {
-                // NO_MATCH (7) and ERROR_SPEECH_TIMEOUT (6) are normal in continuous
-                // mode — restart immediately. Other errors get a brief delay.
-                val delayMs = if (errorCode == 6 || errorCode == 7) 100L else 1000L
-                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                    if (lectureMode) startLectureSpeechRecognition()
-                }, delayMs)
-            }
-        }
-
-        transcriber.start(documentModel.language)
+        val serviceIntent = android.content.Intent(this, com.writer.audio.AudioRecordingService::class.java)
+        startForegroundService(serviceIntent)
+        startSherpaLectureRecognition()
     }
 
     private fun startSherpaLectureRecognition() {
@@ -1387,119 +1287,6 @@ class WritingActivity : AppCompatActivity() {
         transcriber.start(documentModel.language)
     }
 
-    private fun startVoskLectureRecognition() {
-        val transcriber = com.writer.recognition.VoskTranscriber(this)
-        audioTranscriber = transcriber
-
-        transcriber.onStatusUpdate = { status ->
-            Toast.makeText(this, status, Toast.LENGTH_SHORT).show()
-        }
-
-        transcriber.onRmsChanged = { rmsdB ->
-            audioQualityMonitor.onRmsChanged(rmsdB)
-            if (audioQualityMonitor.shouldWarn && !audioQualityWarned) {
-                audioQualityWarned = true
-                Toast.makeText(this, audioQualityMonitor.qualityMessage, Toast.LENGTH_LONG).show()
-            }
-        }
-
-        val voskRecordingName = "rec-${lectureRecordingStartMs}.ogg"
-        transcriber.onFinalResultWithWords = { text, words ->
-            if (text.isNotBlank() && lectureMode) {
-                val startMs = words.firstOrNull()?.startMs ?: 0L
-                val endMs = words.lastOrNull()?.endMs ?: 0L
-                activeCoordinator?.insertTextBlock(
-                    text, audioFile = voskRecordingName, startMs = startMs, endMs = endMs, words = words
-                )
-                updateCueIndicatorStrip()
-                updateRecordingPlaceholder()
-                android.util.Log.i("WritingActivity", "Vosk transcribed: $text (${words.size} words)")
-            }
-        }
-
-        transcriber.onFinalResult = { _ ->
-            // Handled by onFinalResultWithWords above
-        }
-
-        transcriber.onError = { errorCode ->
-            android.util.Log.w("WritingActivity", "Vosk error: $errorCode")
-        }
-
-        transcriber.start(documentModel.language)
-    }
-
-    private fun startWhisperLectureRecognition() {
-        val transcriber = com.writer.recognition.WhisperTranscriber(this)
-        audioTranscriber = transcriber
-
-        transcriber.onStatusUpdate = { status ->
-            Toast.makeText(this, status, Toast.LENGTH_SHORT).show()
-        }
-
-        // Compute where the TextBlock will be inserted for progress display
-        val progressLineIndex = run {
-            val segmenter = com.writer.recognition.LineSegmenter()
-            val highestStroke = if (documentModel.main.activeStrokes.isNotEmpty())
-                documentModel.main.activeStrokes.maxOf { segmenter.getStrokeLineIndex(it) } else -1
-            val highestBlock = if (documentModel.main.textBlocks.isNotEmpty())
-                documentModel.main.textBlocks.maxOf { it.endLineIndex } else -1
-            maxOf(highestStroke, highestBlock) + 1
-        }
-
-        transcriber.onTranscriptionProgress = { progress, audioDurationSec ->
-            val factor = (transcriber as? com.writer.recognition.WhisperTranscriber)?.calibratedRealtimeFactor ?: 5f
-            inkCanvas.transcriptionProgress = com.writer.view.HandwritingCanvasView.TranscriptionProgress(
-                lineIndex = progressLineIndex,
-                audioDurationSec = audioDurationSec,
-                progress = progress,
-                label = "Transcribing %.0fs of audio... %d%% (~%.1fx realtime)".format(
-                    audioDurationSec, (progress * 100).toInt(), factor)
-            )
-        }
-
-        transcriber.onPartialResult = { text ->
-            if (text.isNotBlank() && lectureMode) {
-                android.util.Log.i("WritingActivity", "Whisper partial: $text")
-            }
-        }
-
-        transcriber.onFinalResultWithWords = { text, words ->
-            android.util.Log.i("WritingActivity", "Whisper final: $text (${words.size} words)")
-            inkCanvas.transcriptionProgress = null
-            inkCanvas.recordingPlaceholderLine = -1
-            val recordingName = "rec-${lectureRecordingStartMs}.wav"
-            if (text.isNotBlank()) {
-                activeCoordinator?.insertTextBlock(text, audioFile = recordingName, words = words)
-                updateCueIndicatorStrip()
-            }
-            // Save audio to document bundle
-            val wavBytes = transcriber.getRecordedWavBytes()
-            android.util.Log.i("WritingActivity", "Audio bytes: ${wavBytes?.size ?: "null"}")
-            val audioFiles = if (wavBytes != null) mapOf(recordingName to wavBytes) else emptyMap()
-
-            // Clean up after batch transcription
-            lectureMode = false
-            audioTranscriber?.close()
-            audioTranscriber = null
-
-            // Save document with audio
-            val snapshot = createSaveSnapshot()
-            if (snapshot != null) {
-                DocumentStorage.save(this, snapshot.name, snapshot.state, audioFiles)
-            }
-            Toast.makeText(this, "Lecture capture done", Toast.LENGTH_SHORT).show()
-        }
-
-        transcriber.onError = { _ ->
-            android.util.Log.w("WritingActivity", "Whisper error")
-            if (lectureMode) {
-                Toast.makeText(this, "Whisper transcription error", Toast.LENGTH_SHORT).show()
-            }
-        }
-
-        transcriber.start(documentModel.language)
-    }
-
     private fun stopLectureCapture() {
         if (!lectureMode) return
 
@@ -1516,34 +1303,28 @@ class WritingActivity : AppCompatActivity() {
 
         inkCanvas.partialTranscriptionText = ""
 
-        if (audioTranscriber is com.writer.recognition.WhisperTranscriber) {
-            // Whisper: stop() triggers batch transcription, cleanup in onFinalResult
-            audioTranscriber?.stop()
-        } else {
-            // Streaming engines (Sherpa, Vosk, System): stop, save audio if available, cleanup
-            val transcriber = audioTranscriber
-            transcriber?.stop()
+        val transcriber = audioTranscriber
+        transcriber?.stop()
 
-            val audioBytes = transcriber?.readRecordedBytes()
-            lectureMode = false
-            audioTranscriber?.close()
-            audioTranscriber = null
+        val audioBytes = transcriber?.readRecordedBytes()
+        lectureMode = false
+        audioTranscriber?.close()
+        audioTranscriber = null
 
-            val serviceIntent = android.content.Intent(this, com.writer.audio.AudioRecordingService::class.java)
-            stopService(serviceIntent)
+        val serviceIntent = android.content.Intent(this, com.writer.audio.AudioRecordingService::class.java)
+        stopService(serviceIntent)
 
-            if (audioBytes != null) {
-                val recordingName = "rec-${lectureRecordingStartMs}.ogg"
-                val snapshot = createSaveSnapshot()
-                if (snapshot != null) {
-                    DocumentStorage.save(this, snapshot.name, snapshot.state, mapOf(recordingName to audioBytes))
-                }
-                android.util.Log.i("WritingActivity", "Saved ${audioBytes.size} bytes audio as $recordingName")
-            } else {
-                snapshotAndSaveBlocking()
+        if (audioBytes != null) {
+            val recordingName = "rec-${lectureRecordingStartMs}.ogg"
+            val snapshot = createSaveSnapshot()
+            if (snapshot != null) {
+                DocumentStorage.save(this, snapshot.name, snapshot.state, mapOf(recordingName to audioBytes))
             }
-            Toast.makeText(this, "Lecture capture stopped", Toast.LENGTH_SHORT).show()
+            android.util.Log.i("WritingActivity", "Saved ${audioBytes.size} bytes audio as $recordingName")
+        } else {
+            snapshotAndSaveBlocking()
         }
+        Toast.makeText(this, "Lecture capture stopped", Toast.LENGTH_SHORT).show()
     }
 
     // --- Menu ---
@@ -2141,9 +1922,7 @@ class WritingActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         // Pre-load Sherpa model so recording starts instantly
-        if (transcriptionEngine == com.writer.ui.settings.SettingsActivity.ENGINE_SHERPA) {
-            sherpaModelManager.preload(this)
-        }
+        sherpaModelManager.preload(this)
         if (!tutorialManager.isActive) {
             inkCanvas.reinitializeRawDrawing()
         }
