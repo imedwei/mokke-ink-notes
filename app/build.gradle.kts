@@ -78,6 +78,10 @@ android {
         jniLibs {
             pickFirsts += "**/libc++_shared.so"
         }
+        resources {
+            // Automerge bundles desktop natives we don't need on Android
+            excludes += "native/**"
+        }
     }
 }
 
@@ -190,6 +194,9 @@ dependencies {
     // Allowlist) security policy. Not google-signed." API is 1.0.0-alpha1 and
     // appears restricted to Google-signed apps only at this stage.
     // implementation("com.google.mlkit:genai-speech-recognition:1.0.0-alpha1")
+
+    // Automerge CRDT (incremental persistence, versioning, future sync)
+    implementation("org.automerge:automerge:0.0.7")
 
     // Room (persistence)
     implementation("androidx.room:room-runtime:2.6.1")
