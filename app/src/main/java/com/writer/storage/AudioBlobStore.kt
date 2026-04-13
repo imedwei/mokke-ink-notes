@@ -41,10 +41,23 @@ class AudioBlobStore(private val blobDir: File) {
         }
     }
 
+    /** Resolve a blob hash to a file for playback. Returns null if not found. */
+    fun toFile(hash: String): File? {
+        val file = blobFile(hash)
+        return if (file.exists()) file else null
+    }
+
     private fun blobFile(hash: String): File = File(blobDir, "$hash.blob")
 
     private fun sha256Hex(bytes: ByteArray): String {
         val digest = MessageDigest.getInstance("SHA-256").digest(bytes)
         return digest.joinToString("") { "%02x".format(it) }
+    }
+
+    companion object {
+        private val HASH_REGEX = Regex("^[0-9a-f]{64}$")
+
+        /** True if [ref] is a SHA-256 content hash (64 hex chars), not a filename. */
+        fun isContentHash(ref: String): Boolean = HASH_REGEX.matches(ref)
     }
 }

@@ -70,6 +70,29 @@ class AudioBlobStoreTest {
     }
 
     @Test
+    fun `isContentHash detects 64 hex chars`() {
+        val hash = store.store(byteArrayOf(1, 2, 3))
+        assertTrue(AudioBlobStore.isContentHash(hash))
+        assertFalse(AudioBlobStore.isContentHash("rec-001.opus"))
+        assertFalse(AudioBlobStore.isContentHash(""))
+        assertFalse(AudioBlobStore.isContentHash("abcdef")) // too short
+    }
+
+    @Test
+    fun `toFile returns file for existing blob`() {
+        val bytes = byteArrayOf(1, 2, 3)
+        val hash = store.store(bytes)
+        val file = store.toFile(hash)
+        assertNotNull(file)
+        assertArrayEquals(bytes, file!!.readBytes())
+    }
+
+    @Test
+    fun `toFile returns null for missing blob`() {
+        assertNull(store.toFile("0000000000000000000000000000000000000000000000000000000000000000"))
+    }
+
+    @Test
     fun `garbageCollect keeps referenced`() {
         val hash1 = store.store(byteArrayOf(1, 2, 3))
         val hash2 = store.store(byteArrayOf(4, 5, 6))
