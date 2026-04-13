@@ -3,18 +3,19 @@ package com.writer.storage
 import android.net.Uri
 import com.writer.model.DocumentData
 import com.writer.ui.writing.AutoSaver
-import org.automerge.Document
 
 /**
  * [AutoSaver.Sink] backed by Automerge persistence.
  *
- * Each [save] converts the full [DocumentData] snapshot to an Automerge document
- * and persists it. Full-document saves are used because the auto-save path receives
- * complete snapshots rather than incremental edits.
+ * [save] converts the full [DocumentData] snapshot to an Automerge document
+ * and persists it as a raw binary — no ZIP, no audio re-read.
  *
- * [export] does a full save (for durability) before SAF would export.
+ * [export] delegates to [exportSink] which writes the .mok ZIP for SAF interchange.
  */
-class AutomergeSink(private val storage: AutomergeStorage) : AutoSaver.Sink {
+class AutomergeSink(
+    private val storage: AutomergeStorage,
+    private val exportSink: AutoSaver.Sink,
+) : AutoSaver.Sink {
 
     override fun save(name: String, state: DocumentData): Boolean {
         return try {
@@ -28,8 +29,6 @@ class AutomergeSink(private val storage: AutomergeStorage) : AutoSaver.Sink {
     }
 
     override fun export(name: String, state: DocumentData, markdown: String, syncUri: Uri) {
-        val doc = AutomergeAdapter.toAutomerge(state)
-        storage.save(name, doc)
-        doc.free()
+        exportSink.export(name, state, markdown, syncUri)
     }
 }

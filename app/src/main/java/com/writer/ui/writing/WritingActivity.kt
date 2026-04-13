@@ -30,6 +30,9 @@ import com.writer.model.StrokePoint
 import com.writer.recognition.TextRecognizer
 import com.writer.recognition.TextRecognizerFactory
 import com.writer.model.DocumentData
+import com.writer.storage.AutomergeAdapter
+import com.writer.storage.AutomergeSink
+import com.writer.storage.AutomergeStorage
 import com.writer.storage.DocumentStorage
 import com.writer.storage.DocumentStorageSink
 import com.writer.storage.SearchIndexManager
@@ -141,6 +144,9 @@ class WritingActivity : AppCompatActivity() {
     // Current document name
     private var currentDocumentName: String = ""
 
+    // Automerge storage for incremental persistence (no ZIPs during auto-save)
+    private lateinit var automergeStorage: AutomergeStorage
+
     // Auto-save: initialized in onCreate after lifecycleScope is available
     private lateinit var autoSaver: AutoSaver
 
@@ -248,7 +254,9 @@ class WritingActivity : AppCompatActivity() {
             registerReceiver(bugReportReceiver, filter)
         }
 
-        autoSaver = AutoSaver(lifecycleScope, DocumentStorageSink(applicationContext))
+        automergeStorage = AutomergeStorage(java.io.File(filesDir, "documents"))
+        val exportSink = DocumentStorageSink(applicationContext)
+        autoSaver = AutoSaver(lifecycleScope, AutomergeSink(automergeStorage, exportSink))
 
         setContentView(R.layout.activity_writing)
 
@@ -419,7 +427,7 @@ class WritingActivity : AppCompatActivity() {
         prefs.edit().putString(PREF_CURRENT_DOC, currentDocumentName).apply()
 
         // Load saved document data and restore strokes immediately (no recognizer needed)
-        pendingRestore = DocumentStorage.load(this, currentDocumentName)
+        pendingRestore = loadDocument(currentDocumentName)
         restoreDocumentVisuals()
 
         // One-time migration: rebuild AppSearch index from existing documents
@@ -735,7 +743,7 @@ class WritingActivity : AppCompatActivity() {
         documentLoadJob?.cancel()
         documentLoadJob = lifecycleScope.launch {
             val data = withContext(Dispatchers.IO) {
-                DocumentStorage.load(this@WritingActivity, name)
+                loadDocument(name)
             }
             // Back on main thread
             if (data != null) {
@@ -1939,6 +1947,10 @@ class WritingActivity : AppCompatActivity() {
         }
         orientationManager.stop()
         snapshotAndSaveBlocking()
+        // Persist local-only state (scroll, lineIndex) to .mok on close
+        createSaveSnapshot()?.let { snapshot ->
+            DocumentStorage.save(this, snapshot.name, snapshot.state)
+        }
         autoSaver.exportIfDirty { createExportSnapshot() }
     }
 
@@ -1947,6 +1959,36 @@ class WritingActivity : AppCompatActivity() {
         coordinator?.recognizeAllLines()
         cueCoordinator?.recognizeAllLines()
         autoSaver.schedule { createSaveSnapshot() }
+    }
+
+    /**
+     * Load document data, preferring .amok (Automerge) over .mok (ZIP).
+     * If only .mok exists, migrates to .amok on first load.
+     */
+    private fun loadDocument(name: String): DocumentData? {
+        // Try .amok first
+        val doc = automergeStorage.load(name)
+        if (doc != null) {
+            val data = AutomergeAdapter.fromAutomerge(doc)
+            doc.free()
+            // Merge local-only state from .mok if it exists
+            val mokData = DocumentStorage.load(this, name)
+            return if (mokData != null) {
+                data.copy(
+                    scrollOffsetY = mokData.scrollOffsetY,
+                    highestLineIndex = mokData.highestLineIndex,
+                    currentLineIndex = mokData.currentLineIndex,
+                    userRenamed = mokData.userRenamed,
+                )
+            } else data
+        }
+        // Fall back to .mok with auto-migration
+        val mokData = DocumentStorage.load(this, name)
+        if (mokData != null) {
+            val mokFile = java.io.File(filesDir, "documents/$name.mok")
+            DocumentStorage.migrateToAutomerge(mokFile, automergeStorage, name)
+        }
+        return mokData
     }
 
     private fun snapshotAndSaveBlocking() {
