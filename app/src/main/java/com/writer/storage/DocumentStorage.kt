@@ -178,6 +178,20 @@ object DocumentStorage {
     private fun audioCacheDir(mokFile: File): File =
         File(mokFile.parentFile, ".audio-${mokFile.nameWithoutExtension}")
 
+    /**
+     * Migrate a .mok ZIP to Automerge format. Reads the .mok file, converts
+     * the document data to an Automerge document, and saves it via [AutomergeStorage].
+     * Audio sidecar files are left in place.
+     */
+    fun migrateToAutomerge(mokFile: File, amStorage: AutomergeStorage, name: String) {
+        if (!mokFile.exists()) return
+        val bytes = mokFile.readBytes()
+        val bundle = DocumentBundle.read(bytes)
+        val doc = AutomergeAdapter.toAutomerge(bundle.data)
+        amStorage.save(name, doc)
+        doc.free()
+    }
+
     /** Return cached audio files for a document (from the sidecar directory). */
     fun getAudioFiles(context: Context, name: String): Map<String, ByteArray> {
         val mok = mokFile(context, name)
