@@ -10,5 +10,6 @@ data class DocumentData(
     val scrollOffsetY: Float = 0f,
     val highestLineIndex: Int = 0,
     val currentLineIndex: Int = 0,
-    val userRenamed: Boolean = false
+    val userRenamed: Boolean = false,
+    val audioRecordings: List<AudioRecording> = emptyList()
 )

@@ -7,5 +7,6 @@ package com.writer.model
 class ColumnModel {
     val activeStrokes: MutableList<InkStroke> = mutableListOf()
     val diagramAreas: MutableList<DiagramArea> = mutableListOf()
+    val textBlocks: MutableList<TextBlock> = mutableListOf()
     val diagram: DiagramModel = DiagramModel()
 }
