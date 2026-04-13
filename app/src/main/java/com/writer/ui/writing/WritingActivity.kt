@@ -1324,6 +1324,7 @@ class WritingActivity : AppCompatActivity() {
         } else {
             snapshotAndSaveBlocking()
         }
+        autoSaver.exportIfDirty { createExportSnapshot() }
         Toast.makeText(this, "Lecture capture stopped", Toast.LENGTH_SHORT).show()
     }
 
@@ -1938,6 +1939,7 @@ class WritingActivity : AppCompatActivity() {
         }
         orientationManager.stop()
         snapshotAndSaveBlocking()
+        autoSaver.exportIfDirty { createExportSnapshot() }
     }
 
     private fun scheduleAutoSave() {
@@ -1958,6 +1960,21 @@ class WritingActivity : AppCompatActivity() {
     }
 
     private fun createSaveSnapshot(): AutoSaver.Snapshot? {
+        if (tutorialManager.isActive) return null
+        val mainState = coordinator?.getState() ?: return null
+        val cueColumnData = cueCoordinator?.getColumnState() ?: ColumnData(
+            strokes = documentModel.cue.activeStrokes.toList(),
+            diagramAreas = documentModel.cue.diagramAreas.toList()
+        )
+        val state = mainState.copy(cue = cueColumnData)
+        return AutoSaver.Snapshot(
+            name = currentDocumentName,
+            state = state,
+        )
+    }
+
+    /** Snapshot with sync folder info for SAF export. */
+    private fun createExportSnapshot(): AutoSaver.Snapshot? {
         if (tutorialManager.isActive) return null
         val mainState = coordinator?.getState() ?: return null
         val cueColumnData = cueCoordinator?.getColumnState() ?: ColumnData(
