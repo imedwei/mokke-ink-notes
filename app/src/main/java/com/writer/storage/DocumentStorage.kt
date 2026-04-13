@@ -37,7 +37,8 @@ object DocumentStorage {
     private const val DOCS_DIR = "documents"
     private const val LEGACY_FILE = "document.json"
 
-    private const val INKUP_EXT = "inkup"
+    private const val MOKKE_EXT = "mok"
+    private const val LEGACY_INKUP_EXT = "inkup"
 
     private fun docsDir(context: Context): File {
         val dir = File(context.filesDir, DOCS_DIR)
@@ -49,8 +50,12 @@ object DocumentStorage {
         return File(docsDir(context), "$name.json")
     }
 
-    private fun inkupFile(context: Context, name: String): File {
-        return File(docsDir(context), "$name.$INKUP_EXT")
+    private fun mokFile(context: Context, name: String): File {
+        return File(docsDir(context), "$name.$MOKKE_EXT")
+    }
+
+    private fun legacyInkupFile(context: Context, name: String): File {
+        return File(docsDir(context), "$name.$LEGACY_INKUP_EXT")
     }
 
     // --- Migration ---
@@ -71,55 +76,140 @@ object DocumentStorage {
 
     // --- Multi-document CRUD ---
 
-    fun save(context: Context, name: String, data: DocumentData): Boolean {
+    fun save(
+        context: Context,
+        name: String,
+        data: DocumentData,
+        audioFiles: Map<String, ByteArray> = emptyMap()
+    ): Boolean {
+        val saved = saveToFile(mokFile(context, name), data, audioFiles)
+        if (saved) {
+            Log.i(TAG, "Saved ${data.main.strokes.size} strokes to $name.$MOKKE_EXT")
+            GlobalScope.launch(Dispatchers.IO) {
+                SearchIndexManager.indexDocument(context, name, data)
+            }
+        }
+        return saved
+    }
+
+    /**
+     * Save document data to [file], preserving existing audio when [audioFiles]
+     * is empty (auto-save path) and merging when both exist.
+     *
+     * Audio files are cached in a sidecar directory on disk (`.audio/`) next to
+     * the `.mok` file, so auto-saves don't need to re-read the ZIP to preserve
+     * audio. The sidecar is the source of truth; audio is also packed into the
+     * ZIP for portability.
+     */
+    internal fun saveToFile(
+        file: File,
+        data: DocumentData,
+        audioFiles: Map<String, ByteArray> = emptyMap()
+    ): Boolean {
         try {
-            val file = inkupFile(context, name)
+            val allAudio = resolveAudioFiles(file, audioFiles)
+
             val atomicFile = AtomicFile(file)
-
-            // Encode to protobuf binary
-            val bytes = data.toProto().encode()
-
-            // AtomicFile handles tmp-write + rename atomically,
-            // and keeps a .bak for recovery on failure.
             val stream = atomicFile.startWrite()
             try {
-                stream.write(bytes)
+                DocumentBundle.writeZip(stream, data, allAudio)
                 atomicFile.finishWrite(stream)
             } catch (e: Exception) {
                 atomicFile.failWrite(stream)
                 throw e
             }
 
-            Log.i(TAG, "Saved ${data.main.strokes.size} strokes to $name.inkup")
-            // Update search index with per-line recognized text
-            GlobalScope.launch(Dispatchers.IO) {
-                SearchIndexManager.indexDocument(context, name, data)
-            }
             return true
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to save document $name", e)
+            Log.e(TAG, "Failed to save to ${file.name}", e)
             return false
         }
     }
 
+    /**
+     * Resolve audio files for a save operation.
+     * Uses the sidecar directory as a disk cache to avoid re-reading the ZIP.
+     */
+    internal fun resolveAudioFiles(
+        file: File,
+        audioFiles: Map<String, ByteArray>
+    ): Map<String, ByteArray> {
+        val sidecar = audioCacheDir(file)
+        val sidecarExisted = sidecar.isDirectory
+
+        // Write any new audio to the sidecar directory
+        if (audioFiles.isNotEmpty()) {
+            sidecar.mkdirs()
+            for ((name, bytes) in audioFiles) {
+                File(sidecar, name).writeBytes(bytes)
+            }
+        }
+
+        // If sidecar is new and ZIP has existing audio, migrate to sidecar first
+        if (!sidecarExisted && file.exists()) {
+            try {
+                val existing = file.inputStream().use { DocumentBundle.readZip(it) }.audioFiles
+                if (existing.isNotEmpty()) {
+                    sidecar.mkdirs()
+                    for ((name, bytes) in existing) {
+                        val f = File(sidecar, name)
+                        if (!f.exists()) f.writeBytes(bytes)
+                    }
+                }
+            } catch (_: Exception) { /* fall through */ }
+        }
+
+        // Read all audio from sidecar (fast disk reads, no ZIP parsing)
+        if (sidecar.isDirectory) {
+            val files = sidecar.listFiles() ?: return audioFiles
+            if (files.isNotEmpty()) {
+                val result = mutableMapOf<String, ByteArray>()
+                for (f in files) {
+                    if (f.isFile && f.length() > 0) result[f.name] = f.readBytes()
+                }
+                return result
+            }
+        }
+
+        return audioFiles
+    }
+
+    /** Sidecar directory for audio files, next to the .mok file. */
+    private fun audioCacheDir(mokFile: File): File =
+        File(mokFile.parentFile, ".audio-${mokFile.nameWithoutExtension}")
+
     fun load(context: Context, name: String): DocumentData? {
-        // Try protobuf (.inkup) first, then fall back to legacy JSON
+        return loadBundle(context, name)?.data
+    }
+
+    /** Load a document with its audio files. */
+    fun loadBundle(context: Context, name: String): BundleResult? {
+        // Try .mok first, then legacy .inkup, then legacy .json
         try {
-            val inkup = inkupFile(context, name)
+            val mok = mokFile(context, name)
+            val mokBackup = File(mok.parent, "${mok.name}.new")
+            if (mok.exists() || mokBackup.exists()) {
+                val bytes = AtomicFile(mok).readFully()
+                val result = DocumentBundle.read(bytes)
+                Log.i(TAG, "Loaded ${result.data.main.strokes.size} strokes from $name.$MOKKE_EXT")
+                return result
+            }
+
+            // Legacy .inkup (raw protobuf or ZIP)
+            val inkup = legacyInkupFile(context, name)
             val inkupBackup = File(inkup.parent, "${inkup.name}.new")
-            // AtomicFile auto-recovers from interrupted writes (.new backup)
             if (inkup.exists() || inkupBackup.exists()) {
                 val bytes = AtomicFile(inkup).readFully()
-                val data = DocumentProto.ADAPTER.decode(bytes).toDomain()
-                Log.i(TAG, "Loaded ${data.main.strokes.size} strokes from $name.inkup")
-                return data
+                val result = DocumentBundle.read(bytes)
+                Log.i(TAG, "Loaded ${result.data.main.strokes.size} strokes from $name.$LEGACY_INKUP_EXT (legacy)")
+                return result
             }
 
             val json = docFile(context, name)
             if (json.exists()) {
                 val data = deserializeFromJson(json.readText())
                 Log.i(TAG, "Loaded ${data.main.strokes.size} strokes from $name.json (legacy)")
-                return data
+                return BundleResult(data = data)
             }
 
             return null
@@ -132,10 +222,10 @@ object DocumentStorage {
     fun listDocuments(context: Context): List<DocumentInfo> {
         val dir = docsDir(context)
         val files = dir.listFiles() ?: return emptyList()
-        // Collect .inkup and .json files, dedup by name (prefer .inkup for lastModified)
+        // Collect .mok, .inkup, and .json files, dedup by name (prefer .mok for lastModified)
         val byName = mutableMapOf<String, Long>()
         for (file in files) {
-            if (file.extension == INKUP_EXT ||
+            if (file.extension == MOKKE_EXT || file.extension == LEGACY_INKUP_EXT ||
                 (file.extension == "json" && file.name != "search-index.json")) {
                 val name = file.nameWithoutExtension
                 val existing = byName[name]
@@ -154,12 +244,18 @@ object DocumentStorage {
     data class SearchMatch(val lineIndex: Int, val text: String)
 
     fun delete(context: Context, name: String): Boolean {
-        val inkup = inkupFile(context, name)
+        val mok = mokFile(context, name)
+        val inkup = legacyInkupFile(context, name)
         val json = docFile(context, name)
         // AtomicFile.delete() removes the base file and its .new backup
+        AtomicFile(mok).delete()
         AtomicFile(inkup).delete()
+        // Clean up audio sidecar directory
+        audioCacheDir(mok).let { dir ->
+            if (dir.isDirectory) dir.deleteRecursively()
+        }
         val deletedJson = json.delete()
-        val deletedAny = !inkup.exists() || deletedJson
+        val deletedAny = !mok.exists() || !inkup.exists() || deletedJson
         if (deletedAny) {
             GlobalScope.launch(Dispatchers.IO) {
                 SearchIndexManager.removeDocument(context, name)
@@ -168,10 +264,13 @@ object DocumentStorage {
         return deletedAny
     }
 
-    /** Check if a document exists in any format (.inkup, .inkup.new backup, or .json). */
+    /** Check if a document exists in any format (.mok, .inkup, or .json). */
     private fun docExists(context: Context, name: String): Boolean {
-        val inkup = inkupFile(context, name)
-        return inkup.exists() ||
+        val mok = mokFile(context, name)
+        val inkup = legacyInkupFile(context, name)
+        return mok.exists() ||
+            File(mok.parent, "${mok.name}.new").exists() ||
+            inkup.exists() ||
             File(inkup.parent, "${inkup.name}.new").exists() ||
             docFile(context, name).exists()
     }
@@ -213,10 +312,12 @@ object DocumentStorage {
 
     /** Rename a document file on disk. Returns true on success. */
     fun rename(context: Context, oldName: String, newName: String): Boolean {
-        // Rename .inkup file if it exists, else .json
-        val oldInkup = inkupFile(context, oldName)
+        // Rename .mok file if it exists, else .inkup, else .json
+        val oldMokke = mokFile(context, oldName)
+        val oldInkup = legacyInkupFile(context, oldName)
         val oldJson = docFile(context, oldName)
         val source = when {
+            oldMokke.exists() -> oldMokke
             oldInkup.exists() -> oldInkup
             oldJson.exists() -> oldJson
             else -> return false
@@ -241,19 +342,20 @@ object DocumentStorage {
         name: String,
         data: DocumentData,
         markdownText: String,
-        syncFolderUri: Uri
+        syncFolderUri: Uri,
+        audioFiles: Map<String, ByteArray> = emptyMap()
     ) {
         try {
             val folder = DocumentFile.fromTreeUri(context, syncFolderUri) ?: return
 
-            // Write .inkup file (protobuf binary)
-            val inkupFileName = "$name.$INKUP_EXT"
-            val existingInkup = folder.findFile(inkupFileName)
-            val inkupSyncFile = existingInkup
-                ?: folder.createFile("application/octet-stream", inkupFileName)
-            if (inkupSyncFile != null) {
-                context.contentResolver.openOutputStream(inkupSyncFile.uri, "wt")?.use { out ->
-                    out.write(data.toProto().encode())
+            // Write .mok file (ZIP bundle)
+            val mokFileName = "$name.$MOKKE_EXT"
+            val existingMokke = folder.findFile(mokFileName)
+            val mokSyncFile = existingMokke
+                ?: folder.createFile("application/octet-stream", mokFileName)
+            if (mokSyncFile != null) {
+                context.contentResolver.openOutputStream(mokSyncFile.uri, "wt")?.use { out ->
+                    DocumentBundle.writeZip(out, data, audioFiles)
                 }
             }
 
@@ -277,8 +379,8 @@ object DocumentStorage {
     // --- Sync folder import ---
 
     /**
-     * Restore documents from the sync folder. Reads .writer (JSON) and .inkup (protobuf)
-     * files and saves them as local documents, skipping any that already exist.
+     * Restore documents from the sync folder. Reads .writer (JSON), .mok (ZIP bundle),
+     * and legacy .inkup (protobuf) files and saves them, skipping any that already exist.
      * Returns the number of documents restored.
      */
     fun restoreFromSyncFolder(context: Context, syncFolderUri: Uri): Int {
@@ -300,14 +402,17 @@ object DocumentStorage {
                         continue
                     }
                 }
-                fileName.endsWith(".$INKUP_EXT") -> {
-                    name = fileName.removeSuffix(".$INKUP_EXT")
+                fileName.endsWith(".$MOKKE_EXT") || fileName.endsWith(".$LEGACY_INKUP_EXT") -> {
+                    name = when {
+                        fileName.endsWith(".$MOKKE_EXT") -> fileName.removeSuffix(".$MOKKE_EXT")
+                        else -> fileName.removeSuffix(".$LEGACY_INKUP_EXT")
+                    }
                     data = try {
                         val bytes = context.contentResolver.openInputStream(file.uri)
                             ?.readBytes() ?: continue
-                        DocumentProto.ADAPTER.decode(bytes).toDomain()
+                        DocumentBundle.read(bytes).data
                     } catch (e: Exception) {
-                        Log.w(TAG, "Failed to read .inkup file: $fileName", e)
+                        Log.w(TAG, "Failed to read file: $fileName", e)
                         continue
                     }
                 }
