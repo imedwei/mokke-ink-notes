@@ -87,7 +87,7 @@ class AutomergeStorageTest {
         val doc = AutomergeAdapter.toAutomerge(data)
         storage.save("test-doc", doc)
 
-        val fullSize = File(tempDir, "test-doc.amok").length()
+        val fullSize = File(tempDir, "test-doc.automerge").length()
 
         // Make a small edit
         val tx = doc.startTransaction()
@@ -97,7 +97,7 @@ class AutomergeStorageTest {
         storage.saveIncremental("test-doc", doc)
         doc.free()
 
-        val incrementalFile = File(tempDir, "test-doc.amok.inc")
+        val incrementalFile = File(tempDir, "test-doc.automerge.inc")
         assertTrue("incremental file should exist", incrementalFile.exists())
         assertTrue(
             "incremental should be smaller than full save ($fullSize vs ${incrementalFile.length()})",
