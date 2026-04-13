@@ -160,7 +160,7 @@ class AutomergeStorage(private val docsDir: File) {
 }
 ```
 
-File format: `.amok` (Automerge MOKke) — raw Automerge binary, not ZIP.
+File format: `.automerge` — raw Automerge binary, not ZIP.
 
 `saveIncremental()` uses Automerge's built-in incremental save — only writes changes since last save. This is the auto-save path.
 
@@ -191,26 +191,26 @@ Holds a reference to the live `org.automerge.Document` for the open document.
 **Modify:** `app/src/main/java/com/writer/ui/writing/WritingActivity.kt`
 
 - Replace `DocumentStorageSink` with `AutomergeSink` as the `AutoSaver.Sink`
-- On document open: load `.amok` file (or migrate from `.mok` ZIP on first open)
+- On document open: load `.automerge` file (or migrate from `.mok` ZIP on first open)
 - On document close: full save + SAF export if dirty
 
 **Modify:** `app/src/main/java/com/writer/storage/DocumentStorage.kt`
 
-- Add migration method: `migrateToAutomerge(context, name)` — reads .mok ZIP, converts to Automerge, saves as .amok
+- Add migration method: `migrateToAutomerge(context, name)` — reads .mok ZIP, converts to Automerge, saves as .automerge
 
 ### 3.4 Migration logic
 
 On document open:
-1. Check for `.amok` file → load Automerge doc
-2. If not found, check for `.mok` file → load ZIP → convert to Automerge → save as `.amok`
+1. Check for `.automerge` file → load Automerge doc
+2. If not found, check for `.mok` file → load ZIP → convert to Automerge → save as `.automerge`
 3. If neither found, create new Automerge doc
 
 **Test:** `app/src/test/java/com/writer/storage/MigrationTest.kt`
 - `migrate_mokToAmok_preservesAllData` — roundtrip via migration, compare DocumentData
 - `migrate_mokWithAudio_preservesAudioFiles` — audio sidecar created from ZIP
 - `migrate_legacyInkup_works` — oldest format migrates correctly
-- `openDocument_preferAmok_overMok` — .amok takes priority
-- `openDocument_migratesOnFirstOpen` — .mok → .amok created
+- `openDocument_preferAmok_overMok` — .automerge takes priority
+- `openDocument_migratesOnFirstOpen` — .mok → .automerge created
 
 ---
 

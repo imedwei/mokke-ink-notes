@@ -1962,11 +1962,11 @@ class WritingActivity : AppCompatActivity() {
     }
 
     /**
-     * Load document data, preferring .amok (Automerge) over .mok (ZIP).
-     * If only .mok exists, migrates to .amok on first load.
+     * Load document data, preferring .automerge over .mok (ZIP).
+     * If only .mok exists, migrates to .automerge on first load.
      */
     private fun loadDocument(name: String): DocumentData? {
-        // Try .amok first
+        // Try .automerge first
         val doc = automergeStorage.load(name)
         if (doc != null) {
             val data = AutomergeAdapter.fromAutomerge(doc)

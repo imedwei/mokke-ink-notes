@@ -30,7 +30,7 @@ class AutomergeSinkTest {
 
     @Before
     fun setUp() {
-        tempDir = File(System.getProperty("java.io.tmpdir"), "amok-sink-test-${System.nanoTime()}")
+        tempDir = File(System.getProperty("java.io.tmpdir"), "automerge-sink-test-${System.nanoTime()}")
         tempDir.mkdirs()
         storage = AutomergeStorage(tempDir)
         fakeExportSink = FakeExportSink()

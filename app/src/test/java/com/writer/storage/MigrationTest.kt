@@ -33,7 +33,7 @@ class MigrationTest {
     }
 
     @Test
-    fun `migrate mok to amok preserves all data`() {
+    fun `migrate mok to automerge preserves all data`() {
         // Write a .mok file with known data
         val data = sampleData()
         val mokFile = File(tempDir, "test-doc.mok")
@@ -42,7 +42,7 @@ class MigrationTest {
         // Migrate
         DocumentStorage.migrateToAutomerge(mokFile, amStorage, "test-doc")
 
-        // Verify .amok exists and data matches
+        // Verify .automerge exists and data matches
         assertTrue(amStorage.exists("test-doc"))
         val doc = amStorage.load("test-doc")!!
         val recovered = AutomergeAdapter.fromAutomerge(doc)
@@ -75,14 +75,14 @@ class MigrationTest {
     }
 
     @Test
-    fun `openDocument prefers amok over mok`() {
+    fun `openDocument prefers automerge over mok`() {
         val data = sampleData()
 
         // Create .mok with one stroke
         val mokFile = File(tempDir, "test-doc.mok")
         mokFile.outputStream().use { DocumentBundle.writeZip(it, data, emptyMap()) }
 
-        // Create .amok with two strokes
+        // Create .automerge with two strokes
         val twoStrokeData = data.copy(
             main = data.main.copy(
                 strokes = data.main.strokes + InkStroke("s2", listOf(StrokePoint(5f, 6f, 0.5f, 200L)), 2f)
@@ -92,7 +92,7 @@ class MigrationTest {
         amStorage.save("test-doc", doc)
         doc.free()
 
-        // Load should prefer .amok
+        // Load should prefer .automerge
         val loaded = amStorage.load("test-doc")!!
         val recovered = AutomergeAdapter.fromAutomerge(loaded)
         loaded.free()
@@ -105,13 +105,13 @@ class MigrationTest {
         val mokFile = File(tempDir, "test-doc.mok")
         mokFile.outputStream().use { DocumentBundle.writeZip(it, data, emptyMap()) }
 
-        // .amok doesn't exist yet
+        // .automerge doesn't exist yet
         assertFalse(amStorage.exists("test-doc"))
 
         // Migrate
         DocumentStorage.migrateToAutomerge(mokFile, amStorage, "test-doc")
 
-        // Now .amok exists
+        // Now .automerge exists
         assertTrue(amStorage.exists("test-doc"))
     }
 

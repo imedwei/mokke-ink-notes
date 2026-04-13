@@ -5,17 +5,17 @@ import org.automerge.Document
 import java.io.File
 
 /**
- * Persistence layer for Automerge documents. Files use `.amok` extension
- * (Automerge MOKke) — raw Automerge binary, not ZIP.
+ * Persistence layer for Automerge documents. Files use `.automerge` extension
+ * — raw Automerge binary, not ZIP.
  *
- * [saveIncremental] appends only changes since last full save to a `.amok.inc` file.
- * [load] reads the base `.amok` and applies any `.amok.inc` changes.
+ * [saveIncremental] appends only changes since last full save to a `.automerge.inc` file.
+ * [load] reads the base `.automerge` and applies any `.automerge.inc` changes.
  */
 class AutomergeStorage(private val docsDir: File) {
 
     companion object {
-        private const val EXT = "amok"
-        private const val INC_EXT = "amok.inc"
+        private const val EXT = "automerge"
+        private const val INC_EXT = "automerge.inc"
     }
 
     /** Heads recorded at the last [save] — used by [saveIncremental] to compute deltas. */
