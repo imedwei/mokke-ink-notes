@@ -154,6 +154,7 @@ class WritingActivity : AppCompatActivity() {
     private lateinit var historyOverlay: VersionHistoryOverlayView
     private var isHistoryMode = false
     private var preHistoryData: DocumentData? = null
+    private var historyDoc: org.automerge.Document? = null
 
     // Auto-save: initialized in onCreate after lifecycleScope is available
     private lateinit var autoSaver: AutoSaver
@@ -1422,6 +1423,9 @@ class WritingActivity : AppCompatActivity() {
             return
         }
 
+        // Flush any in-flight save before loading the doc for preview
+        snapshotAndSaveBlocking()
+
         isHistoryMode = true
         inkCanvas.pauseRawDrawing()
         gutterOverlay.visibility = View.GONE
@@ -1434,12 +1438,17 @@ class WritingActivity : AppCompatActivity() {
         )
         preHistoryData = mainState?.copy(cue = cueState)
 
+        // Load document once — reused for all preview forks
+        historyDoc = automergeStorage.load(currentDocumentName)
+
         historyOverlay.bind(checkpoints)
         historyOverlay.visibility = View.VISIBLE
     }
 
     private fun exitHistoryMode(restore: Boolean, checkpoint: VersionHistory.Checkpoint? = null) {
         historyOverlay.visibility = View.GONE
+        historyDoc?.free()
+        historyDoc = null
 
         if (restore && checkpoint != null) {
             restoreFromCheckpoint(checkpoint)
@@ -1461,17 +1470,18 @@ class WritingActivity : AppCompatActivity() {
     }
 
     private fun previewCheckpoint(checkpoint: VersionHistory.Checkpoint) {
-        val doc = automergeStorage.load(currentDocumentName) ?: return
-        val forked = versionHistory.restoreCheckpoint(doc, checkpoint)
-        val data = AutomergeAdapter.fromAutomerge(forked)
-        doc.free()
-        forked.free()
+        val doc = historyDoc ?: return
+        try {
+            val forked = versionHistory.restoreCheckpoint(doc, checkpoint)
+            val data = AutomergeAdapter.fromAutomerge(forked)
+            forked.free()
 
-        // loadStrokes clears and redraws internally — don't call clear()
-        // which resets scrollOffsetY and causes blank canvas
-        inkCanvas.diagramAreas = data.main.diagramAreas
-        inkCanvas.textBlocks = data.main.textBlocks
-        inkCanvas.loadStrokes(data.main.strokes)
+            inkCanvas.diagramAreas = data.main.diagramAreas
+            inkCanvas.textBlocks = data.main.textBlocks
+            inkCanvas.loadStrokes(data.main.strokes)
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "Failed to preview checkpoint: ${e.message}")
+        }
     }
 
     private fun restoreFromCheckpoint(checkpoint: VersionHistory.Checkpoint) {

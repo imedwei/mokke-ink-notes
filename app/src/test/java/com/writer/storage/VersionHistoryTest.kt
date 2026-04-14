@@ -182,6 +182,88 @@ class VersionHistoryTest {
         assertEquals(0, history2.listCheckpoints("test-doc").size)
     }
 
+    @Test
+    fun `rapid fork from single doc does not crash`() {
+        // Simulate the history preview pattern: one loaded doc, many forks
+        val doc = AutomergeAdapter.toAutomerge(sampleData(1))
+        val cp1 = history.createCheckpoint("test-doc", doc, "cp1")
+
+        // Add strokes and checkpoint several times
+        val tx1 = doc.startTransaction()
+        val mainId = (doc.get(org.automerge.ObjectId.ROOT, "main").get() as org.automerge.AmValue.Map).id
+        val strokesId = (doc.get(mainId, "strokes").get() as org.automerge.AmValue.List).id
+        val s = tx1.insert(strokesId, doc.length(strokesId), org.automerge.ObjectType.MAP)
+        tx1.set(s, "strokeId", "s-added")
+        tx1.set(s, "strokeWidth", 2.0)
+        tx1.set(s, "strokeType", "FREEHAND")
+        tx1.set(s, "isGeometric", false)
+        tx1.set(s, "points", org.automerge.ObjectType.LIST)
+        tx1.commit()
+        val cp2 = history.createCheckpoint("test-doc", doc, "cp2")
+
+        // Rapid preview: fork back and forth many times (slider scrubbing)
+        for (i in 0 until 20) {
+            val cp = if (i % 2 == 0) cp1 else cp2
+            val forked = history.restoreCheckpoint(doc, cp)
+            val data = AutomergeAdapter.fromAutomerge(forked)
+            forked.free()
+            // Verify data is correct
+            val expected = if (i % 2 == 0) 1 else 2
+            assertEquals("iteration $i", expected, data.main.strokes.size)
+        }
+
+        doc.free()
+    }
+
+    @Test
+    fun `fork with saved and reloaded doc works`() {
+        // Simulate: save to disk, load back, fork at checkpoint heads
+        val amStorage = AutomergeStorage(tempDir)
+        val doc = AutomergeAdapter.toAutomerge(sampleData(3))
+        history.createCheckpoint("test-doc", doc, "before-save")
+        amStorage.save("test-doc", doc)
+        doc.free()
+
+        // Load from disk and fork at the checkpoint
+        val loaded = amStorage.load("test-doc")!!
+        val cp = history.listCheckpoints("test-doc")[0]
+        val forked = history.restoreCheckpoint(loaded, cp)
+        val data = AutomergeAdapter.fromAutomerge(forked)
+        assertEquals(3, data.main.strokes.size)
+
+        forked.free()
+        loaded.free()
+    }
+
+    @Test
+    fun `fork with incremental save and reload works`() {
+        // Simulate the real flow: sync → saveIncremental → checkpoint → load → fork
+        val amStorage = AutomergeStorage(tempDir)
+        val sync = AutomergeSync()
+        sync.sync(sampleData(2))
+        amStorage.save("test-doc", sync.document)
+        val cp1 = history.createCheckpoint("test-doc", sync.document, "2 strokes")
+
+        // Add more strokes via sync
+        sync.sync(sampleData(5))
+        amStorage.saveIncremental("test-doc", sync.document)
+        val cp2 = history.createCheckpoint("test-doc", sync.document, "5 strokes")
+
+        // Load from disk (base + incremental) and fork at both checkpoints
+        val loaded = amStorage.load("test-doc")!!
+
+        val forked1 = history.restoreCheckpoint(loaded, cp1)
+        assertEquals(2, AutomergeAdapter.fromAutomerge(forked1).main.strokes.size)
+        forked1.free()
+
+        val forked2 = history.restoreCheckpoint(loaded, cp2)
+        assertEquals(5, AutomergeAdapter.fromAutomerge(forked2).main.strokes.size)
+        forked2.free()
+
+        loaded.free()
+        sync.free()
+    }
+
     private fun sampleData(strokeCount: Int) = DocumentData(
         main = ColumnData(
             strokes = (0 until strokeCount).map { i ->
