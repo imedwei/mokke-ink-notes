@@ -260,7 +260,7 @@ class WritingActivity : AppCompatActivity() {
         automergeStorage = AutomergeStorage(docsDir)
         versionHistory = VersionHistory(docsDir)
         val exportSink = DocumentStorageSink(applicationContext)
-        autoSaver = AutoSaver(lifecycleScope, AutomergeSink(automergeStorage, exportSink))
+        autoSaver = AutoSaver(lifecycleScope, AutomergeSink(automergeStorage, exportSink, versionHistory))
 
         setContentView(R.layout.activity_writing)
 
