@@ -6,6 +6,7 @@ import com.writer.model.DocumentData
 import com.writer.model.DiagramArea
 import com.writer.model.InkStroke
 import com.writer.model.TextBlock
+import com.writer.view.ScreenMetrics
 import org.automerge.AmValue
 import org.automerge.Document
 import org.automerge.ObjectId
@@ -91,20 +92,24 @@ class AutomergeSync {
         if (diagramsId != null) syncDiagramAreas(tx, doc, diagramsId, prev.diagramAreas, next.diagramAreas)
     }
 
-    // --- Stroke sync (write-once: add/remove only) ---
+    // --- Stroke sync (add/remove/shift) ---
 
     private fun syncStrokes(
         tx: Transaction, doc: Document, listId: ObjectId,
         prev: List<InkStroke>, next: List<InkStroke>
     ) {
-        val prevIds = prev.map { it.strokeId }
-        val nextIds = next.map { it.strokeId }
-        if (prevIds == nextIds) return
+        if (prev == next) return
 
-        val prevSet = prevIds.toSet()
-        val nextSet = nextIds.toSet()
+        val ls = ScreenMetrics.lineSpacing
+        val tm = ScreenMetrics.topMargin
+
+        val prevById = prev.associateBy { it.strokeId }
+        val nextById = next.associateBy { it.strokeId }
+        val prevSet = prevById.keys
+        val nextSet = nextById.keys
         val removed = prevSet - nextSet
         val added = nextSet - prevSet
+        val kept = prevSet.intersect(nextSet)
 
         // Delete removed strokes (iterate backwards to preserve indices)
         if (removed.isNotEmpty()) {
@@ -116,16 +121,32 @@ class AutomergeSync {
             }
         }
 
+        // Update shifted strokes (same ID, different Y — space insert)
+        if (kept.isNotEmpty()) {
+            val currentEntries = readStrokeEntries(doc, listId)
+            for ((mapId, strokeId) in currentEntries) {
+                if (strokeId !in kept) continue
+                val prevStroke = prevById[strokeId] ?: continue
+                val nextStroke = nextById[strokeId] ?: continue
+                if (prevStroke == nextStroke) continue
+
+                // Recompute originLine and heightInLines from shifted coordinates
+                val newOriginLine = AutomergeAdapter.computeOriginLine(nextStroke, ls, tm)
+                val newHeightInLines = AutomergeAdapter.computeHeightInLines(nextStroke, newOriginLine, ls, tm)
+                tx.set(mapId, "originLine", newOriginLine)
+                tx.set(mapId, "heightInLines", newHeightInLines)
+                // Repack points relative to new originLine
+                tx.set(mapId, "pointsData", PointPacking.pack(nextStroke.points, newOriginLine, ls, tm))
+            }
+        }
+
         // Append added strokes
         if (added.isNotEmpty()) {
-            val nextById = next.associateBy { it.strokeId }
             var insertIdx = doc.length(listId)
-            // Delete changes the length, so re-read
-            if (removed.isNotEmpty()) insertIdx = doc.length(listId)
-            for (id in nextIds) {
+            for (id in next.map { it.strokeId }) {
                 if (id in added) {
                     val stroke = nextById[id]!!
-                    writeStroke(tx, listId, insertIdx, stroke)
+                    writeStroke(tx, listId, insertIdx, stroke, ls, tm)
                     insertIdx++
                 }
             }
@@ -139,20 +160,26 @@ class AutomergeSync {
         }
     }
 
-    private fun writeStroke(tx: Transaction, listId: ObjectId, index: Long, stroke: InkStroke) {
+    private fun readStrokeEntries(doc: Document, listId: ObjectId): List<Pair<ObjectId, String>> {
+        return doc.listItems(listId).orElse(emptyArray()).mapNotNull { item ->
+            val mapId = (item as? AmValue.Map)?.id ?: return@mapNotNull null
+            val id = doc.get(mapId, "strokeId").orElse(null)?.let { (it as? AmValue.Str)?.value }
+                ?: return@mapNotNull null
+            mapId to id
+        }
+    }
+
+    private fun writeStroke(tx: Transaction, listId: ObjectId, index: Long, stroke: InkStroke, ls: Float, tm: Float) {
+        val originLine = AutomergeAdapter.computeOriginLine(stroke, ls, tm)
+        val heightInLines = AutomergeAdapter.computeHeightInLines(stroke, originLine, ls, tm)
+
         val sId = tx.insert(listId, index, ObjectType.MAP)
         tx.set(sId, "strokeId", stroke.strokeId)
-        tx.set(sId, "strokeWidth", stroke.strokeWidth.toDouble())
         tx.set(sId, "strokeType", stroke.strokeType.name)
         tx.set(sId, "isGeometric", stroke.isGeometric)
-        val pointsId = tx.set(sId, "points", ObjectType.LIST)
-        for ((j, pt) in stroke.points.withIndex()) {
-            val ptId = tx.insert(pointsId, j.toLong(), ObjectType.MAP)
-            tx.set(ptId, "x", pt.x.toDouble())
-            tx.set(ptId, "y", pt.y.toDouble())
-            tx.set(ptId, "pressure", pt.pressure.toDouble())
-            tx.set(ptId, "timestamp", pt.timestamp.toDouble())
-        }
+        tx.set(sId, "originLine", originLine)
+        tx.set(sId, "heightInLines", heightInLines)
+        tx.set(sId, "pointsData", PointPacking.pack(stroke.points, originLine, ls, tm))
     }
 
     // --- TextBlock sync (add/remove/update) ---

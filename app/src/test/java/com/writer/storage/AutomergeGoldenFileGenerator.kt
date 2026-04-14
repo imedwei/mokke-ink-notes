@@ -9,6 +9,7 @@ import com.writer.model.StrokePoint
 import com.writer.model.StrokeType
 import com.writer.model.TextBlock
 import com.writer.model.WordInfo
+import com.writer.view.ScreenMetrics
 import org.junit.Test
 
 /**
@@ -23,18 +24,19 @@ class AutomergeGoldenFileGeneratorRunner {
 
     @Test
     fun generate() {
+        ScreenMetrics.init(density = 1.875f, smallestWidthDp = 674, widthPixels = 1264, heightPixels = 1680)
         val version = System.getProperty("goldenVersion") ?: return
         val baseDir = System.getProperty("goldenOutputDir")
             ?: "app/src/test/resources/golden"
         val dir = java.io.File(baseDir, "automerge").also { it.mkdirs() }
 
         when (version) {
-            "v1" -> {
-                val data = AutomergeGoldenFileGenerator.buildV1Document()
+            "v2" -> {
+                val data = AutomergeGoldenFileGenerator.buildV2Document()
                 val doc = AutomergeAdapter.toAutomerge(data)
-                java.io.File(dir, "document_v1.automerge").writeBytes(doc.save())
+                java.io.File(dir, "document_v2.automerge").writeBytes(doc.save())
                 doc.free()
-                println("Generated automerge-golden/document_v1.automerge")
+                println("Generated automerge/document_v2.automerge")
             }
         }
     }
@@ -43,27 +45,30 @@ class AutomergeGoldenFileGeneratorRunner {
 /** Builders for each Automerge schema version's golden data. */
 object AutomergeGoldenFileGenerator {
 
-    fun buildV1Document(): DocumentData = DocumentData(
+    // Use fixed metrics matching Go 7 device for reproducible golden data
+    private const val LS = 94f  // lineSpacing at density=1.875
+    private const val TM = 56f  // topMargin at density=1.875
+    private fun lineY(line: Int, offset: Float = 0f) = TM + line * LS + offset
+
+    fun buildV2Document(): DocumentData = DocumentData(
         main = ColumnData(
             strokes = listOf(
                 InkStroke(
                     strokeId = "golden-s1",
                     points = listOf(
-                        StrokePoint(10f, 20f, 0.5f, 1000L),
-                        StrokePoint(30f, 40f, 0.8f, 2000L),
-                        StrokePoint(50f, 60f, 0.3f, 3000L),
+                        StrokePoint(100f, lineY(2, 10f), 0.5f, 1000L),
+                        StrokePoint(130f, lineY(2, 40f), 0.8f, 2000L),
+                        StrokePoint(160f, lineY(2, 60f), 0.3f, 3000L),
                     ),
-                    strokeWidth = 3f,
                     isGeometric = false,
                     strokeType = StrokeType.FREEHAND,
                 ),
                 InkStroke(
                     strokeId = "golden-s2",
                     points = listOf(
-                        StrokePoint(100f, 200f, 0.7f, 4000L),
-                        StrokePoint(300f, 400f, 0.9f, 5000L),
+                        StrokePoint(200f, lineY(4, 20f), 0.7f, 4000L),
+                        StrokePoint(350f, lineY(4, 50f), 0.9f, 5000L),
                     ),
-                    strokeWidth = 5f,
                     isGeometric = true,
                     strokeType = StrokeType.RECTANGLE,
                 ),
@@ -92,8 +97,7 @@ object AutomergeGoldenFileGenerator {
             strokes = listOf(
                 InkStroke(
                     strokeId = "golden-cue-s1",
-                    points = listOf(StrokePoint(1f, 2f, 0.5f, 100L)),
-                    strokeWidth = 2f,
+                    points = listOf(StrokePoint(100f, lineY(1, 10f), 0.5f, 100L)),
                 ),
             ),
         ),

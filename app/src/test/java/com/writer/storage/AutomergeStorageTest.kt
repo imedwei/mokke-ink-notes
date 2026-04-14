@@ -4,6 +4,7 @@ import com.writer.model.ColumnData
 import com.writer.model.DocumentData
 import com.writer.model.InkStroke
 import com.writer.model.StrokePoint
+import com.writer.view.ScreenMetrics
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -21,6 +22,7 @@ class AutomergeStorageTest {
 
     @Before
     fun setUp() {
+        ScreenMetrics.init(density = 1.875f, smallestWidthDp = 674, widthPixels = 1264, heightPixels = 1680)
         tempDir = File(System.getProperty("java.io.tmpdir"), "automerge-test-${System.nanoTime()}")
         tempDir.mkdirs()
         storage = AutomergeStorage(tempDir)
@@ -89,9 +91,9 @@ class AutomergeStorageTest {
 
         val fullSize = File(tempDir, "test-doc.automerge").length()
 
-        // Make a small edit
+        // Make a small edit (unique key to ensure a real change)
         val tx = doc.startTransaction()
-        tx.set(org.automerge.ObjectId.ROOT, "_schemaVersion", 2)
+        tx.set(org.automerge.ObjectId.ROOT, "_testEdit", "modified")
         tx.commit()
 
         storage.saveIncremental("test-doc", doc)
@@ -133,15 +135,15 @@ class AutomergeStorageTest {
         assertEquals(2, names.size)
     }
 
-    private fun sampleData() = DocumentData(
-        main = ColumnData(
-            strokes = listOf(
-                InkStroke(
-                    "s1",
-                    listOf(StrokePoint(10f, 20f, 0.5f, 1000L)),
-                    3f
+    private fun sampleData(): DocumentData {
+        val ls = ScreenMetrics.lineSpacing
+        val tm = ScreenMetrics.topMargin
+        return DocumentData(
+            main = ColumnData(
+                strokes = listOf(
+                    InkStroke("s1", listOf(StrokePoint(100f, tm + 2 * ls + 10f, 0.5f, 1000L)))
                 )
             )
         )
-    )
+    }
 }
