@@ -76,6 +76,32 @@ class AutomergeSinkTest {
     }
 
     @Test
+    fun `incremental save after adding one stroke is small`() {
+        val data = sampleData()
+        sink.save("doc1", data)
+
+        // Full save size
+        val fullSize = File(tempDir, "doc1.automerge").length()
+
+        // Add one stroke
+        val data2 = data.copy(
+            main = data.main.copy(
+                strokes = data.main.strokes + InkStroke(
+                    "s2", listOf(StrokePoint(30f, 40f, 0.6f, 2000L)), 2f
+                )
+            )
+        )
+        sink.save("doc1", data2)
+
+        val incFile = File(tempDir, "doc1.automerge.inc")
+        assertTrue("incremental file should exist", incFile.exists())
+        assertTrue(
+            "incremental (${incFile.length()} bytes) should be smaller than full ($fullSize bytes)",
+            incFile.length() < fullSize
+        )
+    }
+
+    @Test
     fun `export delegates to export sink`() {
         val data = sampleData()
         sink.save("doc1", data)
