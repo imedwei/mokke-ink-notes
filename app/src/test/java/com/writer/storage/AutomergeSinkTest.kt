@@ -114,16 +114,16 @@ class AutomergeSinkTest {
     }
 
     @Test
-    fun `getDocument returns live document after save`() {
+    fun `withDocument returns value after save`() {
         sink.save("doc1", sampleData())
-        val doc = sink.getDocument("doc1")
-        assertNotNull(doc)
+        val heads = sink.withDocument("doc1") { it.heads }
+        assertNotNull(heads)
     }
 
     @Test
-    fun `getDocument returns null before any save`() {
-        val doc = sink.getDocument("doc1")
-        assertEquals(null, doc)
+    fun `withDocument returns null before any save`() {
+        val result = sink.withDocument("doc1") { it.heads }
+        assertEquals(null, result)
     }
 
     private fun sampleData() = DocumentData(
