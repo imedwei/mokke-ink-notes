@@ -75,7 +75,7 @@ object CanvasTheme {
         // Draw arrowheads
         val first = pts.first()
         val last = pts.last()
-        val size = stroke.strokeWidth * 4f
+        val size = DEFAULT_STROKE_WIDTH * 4f
         val st = stroke.strokeType
 
         if (st.hasArrowAtTip) {

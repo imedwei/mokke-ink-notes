@@ -31,7 +31,7 @@ object SvgExporter {
             }
             val last = pts.last()
             sb.append(" L ${fmt(last.x - offsetX)} ${fmt(last.y - offsetY)}")
-            sb.append("\" fill=\"none\" stroke=\"black\" stroke-width=\"${fmt(stroke.strokeWidth)}\" ")
+            sb.append("\" fill=\"none\" stroke=\"black\" stroke-width=\"${fmt(com.writer.view.CanvasTheme.DEFAULT_STROKE_WIDTH)}\" ")
             sb.append("stroke-linecap=\"round\" stroke-linejoin=\"round\"/>")
         }
 
