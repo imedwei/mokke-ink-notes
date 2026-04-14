@@ -34,6 +34,7 @@ import com.writer.storage.AutomergeAdapter
 import com.writer.storage.AutomergeSink
 import com.writer.storage.AutomergeStorage
 import com.writer.storage.VersionHistory
+import com.writer.view.VersionHistoryOverlayView
 import com.writer.storage.DocumentStorage
 import com.writer.storage.DocumentStorageSink
 import com.writer.storage.SearchIndexManager
@@ -148,6 +149,11 @@ class WritingActivity : AppCompatActivity() {
     // Automerge storage for incremental persistence (no ZIPs during auto-save)
     private lateinit var automergeStorage: AutomergeStorage
     private lateinit var versionHistory: VersionHistory
+
+    // Version history overlay for scrubbing through checkpoints
+    private lateinit var historyOverlay: VersionHistoryOverlayView
+    private var isHistoryMode = false
+    private var preHistoryData: DocumentData? = null
 
     // Auto-save: initialized in onCreate after lifecycleScope is available
     private lateinit var autoSaver: AutoSaver
@@ -362,6 +368,11 @@ class WritingActivity : AppCompatActivity() {
 
         playbackOverlay = findViewById(R.id.playbackOverlay)
         playbackOverlay.onPauseToggle = { playbackController.onPauseToggle() }
+
+        historyOverlay = findViewById(R.id.historyOverlay)
+        historyOverlay.onCheckpointSelected = { checkpoint -> previewCheckpoint(checkpoint) }
+        historyOverlay.onRestoreConfirmed = { checkpoint -> exitHistoryMode(restore = true, checkpoint) }
+        historyOverlay.onDismiss = { exitHistoryMode(restore = false) }
 
         recordingOverlay = findViewById(R.id.recordingOverlay)
         recordingOverlay.onAutoStopChanged = { enabled ->
@@ -1384,7 +1395,7 @@ class WritingActivity : AppCompatActivity() {
         }
         popupView.findViewById<android.view.View>(R.id.menuHistory).setOnClickListener {
             popup.dismiss()
-            showHistoryDialog()
+            enterHistoryMode()
         }
         popupView.findViewById<android.view.View>(R.id.menuBugReport).setOnClickListener {
             popup.dismiss()
@@ -1403,7 +1414,7 @@ class WritingActivity : AppCompatActivity() {
         popup.showAtLocation(menuButton, Gravity.NO_GRAVITY, x, y)
     }
 
-    private fun showHistoryDialog() {
+    private fun enterHistoryMode() {
         val checkpoints = versionHistory.listCheckpoints(currentDocumentName)
         if (checkpoints.isEmpty()) {
             Toast.makeText(this, "No version history yet", Toast.LENGTH_SHORT).show()
@@ -1411,20 +1422,56 @@ class WritingActivity : AppCompatActivity() {
             return
         }
 
-        val labels = checkpoints.reversed().map { it.label }.toTypedArray()
-        android.app.AlertDialog.Builder(this)
-            .setTitle("Version History")
-            .setItems(labels) { _, which ->
-                val checkpoint = checkpoints[checkpoints.size - 1 - which]
-                restoreFromCheckpoint(checkpoint)
+        isHistoryMode = true
+        inkCanvas.pauseRawDrawing()
+        gutterOverlay.visibility = View.GONE
+
+        // Cache current state for cancel
+        val mainState = coordinator?.getState()
+        val cueState = cueCoordinator?.getColumnState() ?: ColumnData(
+            strokes = documentModel.cue.activeStrokes.toList(),
+            diagramAreas = documentModel.cue.diagramAreas.toList()
+        )
+        preHistoryData = mainState?.copy(cue = cueState)
+
+        historyOverlay.bind(checkpoints)
+        historyOverlay.visibility = View.VISIBLE
+    }
+
+    private fun exitHistoryMode(restore: Boolean, checkpoint: VersionHistory.Checkpoint? = null) {
+        historyOverlay.visibility = View.GONE
+
+        if (restore && checkpoint != null) {
+            restoreFromCheckpoint(checkpoint)
+        } else {
+            // Cancel: reload cached state
+            preHistoryData?.let { data ->
+                inkCanvas.clear()
+                documentModel.main.activeStrokes.clear()
+                documentModel.main.activeStrokes.addAll(data.main.strokes)
+                inkCanvas.loadStrokes(data.main.strokes)
+                inkCanvas.diagramAreas = data.main.diagramAreas
+                inkCanvas.drawToSurface()
             }
-            .setNegativeButton("Cancel") { dialog, _ ->
-                dialog.dismiss()
-            }
-            .setOnDismissListener {
-                inkCanvas.resumeRawDrawing()
-            }
-            .show()
+        }
+
+        preHistoryData = null
+        isHistoryMode = false
+        gutterOverlay.visibility = View.VISIBLE
+        inkCanvas.resumeRawDrawing()
+    }
+
+    private fun previewCheckpoint(checkpoint: VersionHistory.Checkpoint) {
+        val doc = automergeStorage.load(currentDocumentName) ?: return
+        val forked = versionHistory.restoreCheckpoint(doc, checkpoint)
+        val data = AutomergeAdapter.fromAutomerge(forked)
+        doc.free()
+        forked.free()
+
+        inkCanvas.clear()
+        inkCanvas.loadStrokes(data.main.strokes)
+        inkCanvas.diagramAreas = data.main.diagramAreas
+        inkCanvas.drawToSurface()
     }
 
     private fun restoreFromCheckpoint(checkpoint: VersionHistory.Checkpoint) {
@@ -2036,6 +2083,7 @@ class WritingActivity : AppCompatActivity() {
      * No debounce — incremental Automerge saves are ~200 bytes per stroke.
      */
     private fun saveNow() {
+        if (isHistoryMode) return
         coordinator?.recognizeAllLines()
         cueCoordinator?.recognizeAllLines()
         val snapshot = createSaveSnapshot() ?: return
