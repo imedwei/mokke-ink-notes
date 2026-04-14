@@ -1446,12 +1446,11 @@ class WritingActivity : AppCompatActivity() {
         } else {
             // Cancel: reload cached state
             preHistoryData?.let { data ->
-                inkCanvas.clear()
                 documentModel.main.activeStrokes.clear()
                 documentModel.main.activeStrokes.addAll(data.main.strokes)
-                inkCanvas.loadStrokes(data.main.strokes)
                 inkCanvas.diagramAreas = data.main.diagramAreas
-                inkCanvas.drawToSurface()
+                inkCanvas.textBlocks = data.main.textBlocks
+                inkCanvas.loadStrokes(data.main.strokes)
             }
         }
 
@@ -1468,10 +1467,11 @@ class WritingActivity : AppCompatActivity() {
         doc.free()
         forked.free()
 
-        inkCanvas.clear()
-        inkCanvas.loadStrokes(data.main.strokes)
+        // loadStrokes clears and redraws internally — don't call clear()
+        // which resets scrollOffsetY and causes blank canvas
         inkCanvas.diagramAreas = data.main.diagramAreas
-        inkCanvas.drawToSurface()
+        inkCanvas.textBlocks = data.main.textBlocks
+        inkCanvas.loadStrokes(data.main.strokes)
     }
 
     private fun restoreFromCheckpoint(checkpoint: VersionHistory.Checkpoint) {
