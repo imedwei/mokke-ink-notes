@@ -22,12 +22,15 @@ class AutomergeSink(
 
     private var currentName: String? = null
     private var currentSync: AutomergeSync? = null
+    private val lock = Any()
 
     override fun save(name: String, state: DocumentData): Boolean {
         return try {
-            val sync = getOrCreateSync(name)
-            sync.sync(state)
-            storage.saveIncremental(name, sync.document)
+            synchronized(lock) {
+                val sync = getOrCreateSync(name)
+                sync.sync(state)
+                storage.saveIncremental(name, sync.document)
+            }
             true
         } catch (e: Exception) {
             false
@@ -35,20 +38,29 @@ class AutomergeSink(
     }
 
     override fun export(name: String, state: DocumentData, markdown: String, syncUri: Uri) {
-        if (name == currentName && currentSync != null) {
-            storage.save(name, currentSync!!.document)
+        synchronized(lock) {
+            if (name == currentName && currentSync != null) {
+                storage.save(name, currentSync!!.document)
+            }
         }
         exportSink.export(name, state, markdown, syncUri)
     }
 
-    /** Get the live document for external checkpointing. */
-    fun getDocument(name: String): org.automerge.Document? =
-        if (name == currentName) currentSync?.document else null
+    /**
+     * Get the live document for external checkpointing.
+     * Caller must not hold the document reference across threads —
+     * use the returned document immediately within a synchronized block.
+     */
+    fun <T> withDocument(name: String, block: (org.automerge.Document) -> T): T? {
+        synchronized(lock) {
+            val doc = if (name == currentName) currentSync?.document else null
+            return if (doc != null) block(doc) else null
+        }
+    }
 
     private fun getOrCreateSync(name: String): AutomergeSync {
         if (name == currentName && currentSync != null) return currentSync!!
 
-        // Free previous document's native resources
         currentSync?.free()
 
         val sync = AutomergeSync()

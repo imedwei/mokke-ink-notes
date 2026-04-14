@@ -2144,13 +2144,14 @@ class WritingActivity : AppCompatActivity() {
     }
 
     private fun createIdleCheckpoint() {
-        val doc = automergeSink.getDocument(currentDocumentName) ?: return
-        val existing = versionHistory.listCheckpoints(currentDocumentName)
-        val currentHeads = doc.heads
-        if (existing.isNotEmpty() && existing.last().heads.contentEquals(currentHeads)) return
-        val label = java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault())
-            .format(java.util.Date())
-        versionHistory.createCheckpoint(currentDocumentName, doc, label)
+        automergeSink.withDocument(currentDocumentName) { doc ->
+            val existing = versionHistory.listCheckpoints(currentDocumentName)
+            val currentHeads = doc.heads
+            if (existing.isNotEmpty() && existing.last().heads.contentEquals(currentHeads)) return@withDocument
+            val label = java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault())
+                .format(java.util.Date())
+            versionHistory.createCheckpoint(currentDocumentName, doc, label)
+        }
     }
 
     /**
