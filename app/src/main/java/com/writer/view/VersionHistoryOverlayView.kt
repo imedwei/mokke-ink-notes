@@ -90,21 +90,44 @@ class VersionHistoryOverlayView @JvmOverloads constructor(
             }
         })
 
-        // Tap-to-step: tap left of thumb = previous, tap right = next
+        // Tap-to-step: tap left of thumb = previous, tap right = next.
+        // Consume ACTION_DOWN to prevent SeekBar's default thumb-jump.
+        // If the user drags (moves > 20dp), let the SeekBar handle it.
         seekBar.setOnTouchListener { _, event ->
             when (event.action) {
-                MotionEvent.ACTION_DOWN -> { touchDownX = event.x; false }
+                MotionEvent.ACTION_DOWN -> {
+                    touchDownX = event.x
+                    true // consume to prevent thumb jump
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val moved = Math.abs(event.x - touchDownX)
+                    if (moved >= dp(20) && checkpoints.size > 1) {
+                        // Switch to drag mode: map touch X to checkpoint index
+                        val fraction = (event.x / seekBar.width).coerceIn(0f, 1f)
+                        val index = (fraction * (checkpoints.size - 1)).toInt()
+                        seekBar.progress = index
+                        currentIndex = index
+                        timestampLabel.text = formatTimestamp(checkpoints[index].timestamp)
+                    }
+                    true
+                }
                 MotionEvent.ACTION_UP -> {
                     val moved = Math.abs(event.x - touchDownX)
                     if (moved < dp(20) && checkpoints.size > 1) {
+                        // Tap — step based on side of thumb
                         val thumbX = seekBar.thumb?.bounds?.centerX()?.toFloat()
                             ?: (seekBar.width / 2f)
                         if (event.x < thumbX) navigateTo(currentIndex - 1)
                         else navigateTo(currentIndex + 1)
-                        true
-                    } else false
+                    } else if (moved >= dp(20) && checkpoints.size > 1) {
+                        // Drag release — fire preview for final position
+                        val fraction = (event.x / seekBar.width).coerceIn(0f, 1f)
+                        val index = (fraction * (checkpoints.size - 1)).toInt()
+                        navigateTo(index)
+                    }
+                    true
                 }
-                else -> false
+                else -> true
             }
         }
     }
