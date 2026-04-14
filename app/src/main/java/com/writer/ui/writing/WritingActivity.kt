@@ -158,6 +158,17 @@ class WritingActivity : AppCompatActivity() {
 
     // Auto-save: initialized in onCreate after lifecycleScope is available
     private lateinit var autoSaver: AutoSaver
+    private lateinit var automergeSink: AutomergeSink
+
+    // Idle-timeout checkpointing: checkpoint after 10s of no saves
+    private val checkpointHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var checkpointPending = false
+    private val checkpointRunnable = Runnable {
+        if (checkpointPending) {
+            createIdleCheckpoint()
+            checkpointPending = false
+        }
+    }
 
     // Debug: remote bug report generation via adb broadcast
     private val bugReportReceiver = object : android.content.BroadcastReceiver() {
@@ -267,7 +278,9 @@ class WritingActivity : AppCompatActivity() {
         automergeStorage = AutomergeStorage(docsDir)
         versionHistory = VersionHistory(docsDir)
         val exportSink = DocumentStorageSink(applicationContext)
-        autoSaver = AutoSaver(lifecycleScope, AutomergeSink(automergeStorage, exportSink, versionHistory))
+        val automergeSink = AutomergeSink(automergeStorage, exportSink)
+        autoSaver = AutoSaver(lifecycleScope, automergeSink)
+        this.automergeSink = automergeSink
 
         setContentView(R.layout.activity_writing)
 
@@ -1349,6 +1362,7 @@ class WritingActivity : AppCompatActivity() {
         } else {
             snapshotAndSaveBlocking()
         }
+        flushPendingCheckpoint()
         autoSaver.exportIfDirty { createExportSnapshot() }
         Toast.makeText(this, "Lecture capture stopped", Toast.LENGTH_SHORT).show()
     }
@@ -2081,6 +2095,8 @@ class WritingActivity : AppCompatActivity() {
         }
         orientationManager.stop()
         snapshotAndSaveBlocking()
+        // Flush any pending idle checkpoint before closing
+        flushPendingCheckpoint()
         // Persist local-only state (scroll, lineIndex) to .mok on close
         createSaveSnapshot()?.let { snapshot ->
             DocumentStorage.save(this, snapshot.name, snapshot.state)
@@ -2098,6 +2114,29 @@ class WritingActivity : AppCompatActivity() {
         cueCoordinator?.recognizeAllLines()
         val snapshot = createSaveSnapshot() ?: return
         autoSaver.saveAsync(snapshot)
+
+        // Schedule checkpoint after 10s idle (resets on each save)
+        checkpointPending = true
+        checkpointHandler.removeCallbacks(checkpointRunnable)
+        checkpointHandler.postDelayed(checkpointRunnable, 10_000L)
+    }
+
+    private fun flushPendingCheckpoint() {
+        checkpointHandler.removeCallbacks(checkpointRunnable)
+        if (checkpointPending) {
+            createIdleCheckpoint()
+            checkpointPending = false
+        }
+    }
+
+    private fun createIdleCheckpoint() {
+        val doc = automergeSink.getDocument(currentDocumentName) ?: return
+        val existing = versionHistory.listCheckpoints(currentDocumentName)
+        val currentHeads = doc.heads
+        if (existing.isNotEmpty() && existing.last().heads.contentEquals(currentHeads)) return
+        val label = java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault())
+            .format(java.util.Date())
+        versionHistory.createCheckpoint(currentDocumentName, doc, label)
     }
 
     /**

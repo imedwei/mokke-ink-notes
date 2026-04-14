@@ -25,7 +25,6 @@ class AutomergeSinkTest {
 
     private lateinit var tempDir: File
     private lateinit var storage: AutomergeStorage
-    private lateinit var versionHistory: VersionHistory
     private lateinit var sink: AutomergeSink
     private lateinit var fakeExportSink: FakeExportSink
 
@@ -34,9 +33,8 @@ class AutomergeSinkTest {
         tempDir = File(System.getProperty("java.io.tmpdir"), "automerge-sink-test-${System.nanoTime()}")
         tempDir.mkdirs()
         storage = AutomergeStorage(tempDir)
-        versionHistory = VersionHistory(tempDir)
         fakeExportSink = FakeExportSink()
-        sink = AutomergeSink(storage, fakeExportSink, versionHistory)
+        sink = AutomergeSink(storage, fakeExportSink)
     }
 
     @After
@@ -116,33 +114,16 @@ class AutomergeSinkTest {
     }
 
     @Test
-    fun `save creates checkpoint`() {
+    fun `getDocument returns live document after save`() {
         sink.save("doc1", sampleData())
-        assertEquals(1, versionHistory.listCheckpoints("doc1").size)
+        val doc = sink.getDocument("doc1")
+        assertNotNull(doc)
     }
 
     @Test
-    fun `save with no changes skips checkpoint`() {
-        val data = sampleData()
-        sink.save("doc1", data)
-        sink.save("doc1", data) // same state
-        // First save creates full doc (always checkpointed), second has no delta
-        assertEquals(1, versionHistory.listCheckpoints("doc1").size)
-    }
-
-    @Test
-    fun `multiple saves with changes create multiple checkpoints`() {
-        for (i in 0 until 5) {
-            val data = DocumentData(
-                main = ColumnData(
-                    strokes = (0..i).map { j ->
-                        InkStroke("s-$j", listOf(StrokePoint(j.toFloat(), 0f, 0.5f, j.toLong())), 2f)
-                    }
-                )
-            )
-            sink.save("doc1", data)
-        }
-        assertEquals(5, versionHistory.listCheckpoints("doc1").size)
+    fun `getDocument returns null before any save`() {
+        val doc = sink.getDocument("doc1")
+        assertEquals(null, doc)
     }
 
     private fun sampleData() = DocumentData(
