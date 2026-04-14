@@ -1489,7 +1489,11 @@ class WritingActivity : AppCompatActivity() {
             val t0 = System.nanoTime()
             val forked = versionHistory.restoreCheckpoint(doc, checkpoint)
             val t1 = System.nanoTime()
-            val data = AutomergeAdapter.fromAutomerge(forked)
+            // Viewport-scoped read: only unpack strokes visible on screen
+            val ls = com.writer.view.ScreenMetrics.lineSpacing
+            val viewStartLine = (inkCanvas.scrollOffsetY / ls).toInt()
+            val viewEndLine = viewStartLine + (inkCanvas.height / ls).toInt() + 1
+            val data = AutomergeAdapter.fromAutomerge(forked, viewStartLine, viewEndLine)
             val t2 = System.nanoTime()
             forked.free()
             val t3 = System.nanoTime()
@@ -1502,7 +1506,7 @@ class WritingActivity : AppCompatActivity() {
             android.util.Log.i(TAG, "previewCheckpoint: fork=${(t1-t0)/1_000_000}ms " +
                 "fromAutomerge=${(t2-t1)/1_000_000}ms free=${(t3-t2)/1_000_000}ms " +
                 "loadStrokes+draw=${(t4-t3)/1_000_000}ms total=${(t4-t0)/1_000_000}ms " +
-                "(${data.main.strokes.size} strokes)")
+                "(${data.main.strokes.size} strokes, viewport lines $viewStartLine-$viewEndLine)")
         } catch (e: Exception) {
             android.util.Log.w(TAG, "Failed to preview checkpoint: ${e.message}")
         }
