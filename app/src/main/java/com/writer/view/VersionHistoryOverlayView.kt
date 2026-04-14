@@ -5,6 +5,7 @@ import android.content.Context
 import android.graphics.Typeface
 import android.os.Handler
 import android.os.Looper
+import android.view.MotionEvent
 import android.util.AttributeSet
 import android.view.Gravity
 import android.view.LayoutInflater
@@ -42,7 +43,9 @@ class VersionHistoryOverlayView @JvmOverloads constructor(
 
     private var checkpoints: List<VersionHistory.Checkpoint> = emptyList()
     private var currentCheckpoint: VersionHistory.Checkpoint? = null
+    private var currentIndex = -1
     private var pendingSeek: Runnable? = null
+    private var touchDownX = 0f
 
     init {
         LayoutInflater.from(context).inflate(R.layout.view_version_history_overlay, this, true)
@@ -86,6 +89,24 @@ class VersionHistoryOverlayView @JvmOverloads constructor(
                 }
             }
         })
+
+        // Tap-to-step: tap left of thumb = previous, tap right = next
+        seekBar.setOnTouchListener { _, event ->
+            when (event.action) {
+                MotionEvent.ACTION_DOWN -> { touchDownX = event.x; false }
+                MotionEvent.ACTION_UP -> {
+                    val moved = Math.abs(event.x - touchDownX)
+                    if (moved < dp(20) && checkpoints.size > 1) {
+                        val thumbX = seekBar.thumb?.bounds?.centerX()?.toFloat()
+                            ?: (seekBar.width / 2f)
+                        if (event.x < thumbX) navigateTo(currentIndex - 1)
+                        else navigateTo(currentIndex + 1)
+                        true
+                    } else false
+                }
+                else -> false
+            }
+        }
     }
 
     fun bind(checkpoints: List<VersionHistory.Checkpoint>) {
@@ -104,14 +125,24 @@ class VersionHistoryOverlayView @JvmOverloads constructor(
 
         seekBar.isEnabled = true
         seekBar.max = this.checkpoints.size - 1
-        seekBar.progress = this.checkpoints.size - 1
+        currentIndex = this.checkpoints.size - 1
+        seekBar.progress = currentIndex
         timestampLabel.text = formatTimestamp(this.checkpoints.last().timestamp)
 
         buildSessionList()
     }
 
+    private fun navigateTo(index: Int) {
+        val clamped = index.coerceIn(0, checkpoints.size - 1)
+        currentIndex = clamped
+        seekBar.progress = clamped
+        timestampLabel.text = formatTimestamp(checkpoints[clamped].timestamp)
+        selectCheckpoint(checkpoints[clamped])
+    }
+
     private fun selectCheckpoint(cp: VersionHistory.Checkpoint) {
         currentCheckpoint = cp
+        currentIndex = checkpoints.indexOf(cp).coerceAtLeast(0)
         restoreButton.isEnabled = true
         restoreButton.setTextColor(0xFF000000.toInt())
         onCheckpointSelected?.invoke(cp)
