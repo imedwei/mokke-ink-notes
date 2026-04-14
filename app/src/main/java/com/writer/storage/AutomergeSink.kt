@@ -11,22 +11,21 @@ import com.writer.ui.writing.AutoSaver
  * only the delta. Checkpointing is handled externally (idle-timeout in WritingActivity).
  *
  * [export] delegates to [exportSink] which writes the .mok ZIP for SAF interchange.
+ *
+ * Only one document's sync is kept alive at a time. Switching to a different
+ * document frees the previous one to avoid JNI memory leaks.
  */
 class AutomergeSink(
     private val storage: AutomergeStorage,
     private val exportSink: AutoSaver.Sink,
 ) : AutoSaver.Sink {
 
-    private val syncs = mutableMapOf<String, AutomergeSync>()
+    private var currentName: String? = null
+    private var currentSync: AutomergeSync? = null
 
     override fun save(name: String, state: DocumentData): Boolean {
         return try {
-            val sync = syncs.getOrPut(name) {
-                AutomergeSync().also { s ->
-                    val existing = storage.load(name)
-                    if (existing != null) s.load(existing)
-                }
-            }
+            val sync = getOrCreateSync(name)
             sync.sync(state)
             storage.saveIncremental(name, sync.document)
             true
@@ -36,13 +35,28 @@ class AutomergeSink(
     }
 
     override fun export(name: String, state: DocumentData, markdown: String, syncUri: Uri) {
-        val sync = syncs[name]
-        if (sync != null) {
-            storage.save(name, sync.document)
+        if (name == currentName && currentSync != null) {
+            storage.save(name, currentSync!!.document)
         }
         exportSink.export(name, state, markdown, syncUri)
     }
 
     /** Get the live document for external checkpointing. */
-    fun getDocument(name: String): org.automerge.Document? = syncs[name]?.document
+    fun getDocument(name: String): org.automerge.Document? =
+        if (name == currentName) currentSync?.document else null
+
+    private fun getOrCreateSync(name: String): AutomergeSync {
+        if (name == currentName && currentSync != null) return currentSync!!
+
+        // Free previous document's native resources
+        currentSync?.free()
+
+        val sync = AutomergeSync()
+        val existing = storage.load(name)
+        if (existing != null) sync.load(existing)
+
+        currentName = name
+        currentSync = sync
+        return sync
+    }
 }
