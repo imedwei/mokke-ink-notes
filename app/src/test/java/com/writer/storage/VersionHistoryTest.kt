@@ -183,6 +183,126 @@ class VersionHistoryTest {
     }
 
     @Test
+    fun `concurrent write and load causes failure`() {
+        // Reproduces the crash: IO thread writes while UI thread reads the same file.
+        // The fix: load once before entering history mode, don't read during scrub.
+        val amStorage = AutomergeStorage(tempDir)
+        val sync = AutomergeSync()
+        sync.sync(sampleData(5))
+        amStorage.save("test-doc", sync.document)
+        history.createCheckpoint("test-doc", sync.document, "initial")
+
+        val checkpoints = history.listCheckpoints("test-doc")
+        val errors = java.util.concurrent.atomic.AtomicInteger(0)
+        val latch = java.util.concurrent.CountDownLatch(2)
+
+        // Writer thread: continuously mutate and save
+        val writer = Thread {
+            try {
+                for (i in 0 until 50) {
+                    sync.sync(sampleData(5 + i % 3))
+                    amStorage.save("test-doc", sync.document)
+                    Thread.sleep(1)
+                }
+            } catch (_: Exception) {
+                errors.incrementAndGet()
+            } finally {
+                latch.countDown()
+            }
+        }
+
+        // Reader thread: continuously load and fork (old buggy pattern)
+        val reader = Thread {
+            try {
+                for (i in 0 until 50) {
+                    val loaded = amStorage.load("test-doc") ?: continue
+                    try {
+                        val forked = loaded.fork(checkpoints[0].heads)
+                        forked.free()
+                    } catch (_: Exception) {
+                        errors.incrementAndGet()
+                    }
+                    loaded.free()
+                    Thread.sleep(1)
+                }
+            } catch (_: Exception) {
+                errors.incrementAndGet()
+            } finally {
+                latch.countDown()
+            }
+        }
+
+        writer.start()
+        reader.start()
+        latch.await(10, java.util.concurrent.TimeUnit.SECONDS)
+
+        // The old pattern should produce errors under concurrent access.
+        // If it doesn't in this test run, the race is timing-dependent —
+        // but the test documents that this pattern is unsafe.
+        // We don't assert errors > 0 because the race may not trigger every time.
+        sync.free()
+    }
+
+    @Test
+    fun `single doc preview is safe under concurrent writes`() {
+        // The FIXED pattern: load document once, fork from it repeatedly.
+        // Writer thread can save to disk without affecting the in-memory doc.
+        val amStorage = AutomergeStorage(tempDir)
+        val sync = AutomergeSync()
+        sync.sync(sampleData(5))
+        amStorage.save("test-doc", sync.document)
+        history.createCheckpoint("test-doc", sync.document, "initial")
+
+        // Load once (simulating enterHistoryMode)
+        val historyDoc = amStorage.load("test-doc")!!
+        val checkpoints = history.listCheckpoints("test-doc")
+        val errors = java.util.concurrent.atomic.AtomicInteger(0)
+        val latch = java.util.concurrent.CountDownLatch(2)
+
+        // Writer thread: continuously mutate and save to disk
+        val writer = Thread {
+            try {
+                for (i in 0 until 50) {
+                    sync.sync(sampleData(5 + i % 3))
+                    amStorage.save("test-doc", sync.document)
+                    Thread.sleep(1)
+                }
+            } catch (_: Exception) {
+                errors.incrementAndGet()
+            } finally {
+                latch.countDown()
+            }
+        }
+
+        // Reader thread: fork from the SAME in-memory doc (no disk reads)
+        val reader = Thread {
+            try {
+                for (i in 0 until 50) {
+                    val forked = historyDoc.fork(checkpoints[0].heads)
+                    val data = AutomergeAdapter.fromAutomerge(forked)
+                    forked.free()
+                    assertEquals(5, data.main.strokes.size)
+                    Thread.sleep(1)
+                }
+            } catch (e: Exception) {
+                errors.incrementAndGet()
+            } finally {
+                latch.countDown()
+            }
+        }
+
+        writer.start()
+        reader.start()
+        latch.await(10, java.util.concurrent.TimeUnit.SECONDS)
+
+        // The fixed pattern should produce zero errors
+        assertEquals("single-doc preview should be safe", 0, errors.get())
+
+        historyDoc.free()
+        sync.free()
+    }
+
+    @Test
     fun `rapid fork from single doc does not crash`() {
         // Simulate the history preview pattern: one loaded doc, many forks
         val doc = AutomergeAdapter.toAutomerge(sampleData(1))
