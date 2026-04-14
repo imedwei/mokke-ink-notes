@@ -462,14 +462,14 @@ class WritingActivity : AppCompatActivity() {
             if (active) isCueCanvasActive = false
             if (!active) {
                 gutterOverlay.post { updateUndoRedoButtons() }
-                scheduleAutoSave()
+                saveNow()
             }
         }
         cueInkCanvas.onPenStateChanged = { active ->
             if (active) isCueCanvasActive = true
             if (!active) {
                 gutterOverlay.post { updateUndoRedoButtons() }
-                scheduleAutoSave()
+                saveNow()
             }
         }
 
@@ -1276,6 +1276,7 @@ class WritingActivity : AppCompatActivity() {
                 activeCoordinator?.insertTextBlock(
                     text, audioFile = recordingName, startMs = startMs, endMs = endMs, words = words
                 )
+                saveNow()
                 updateCueIndicatorStrip()
                 updateRecordingPlaceholder()
                 android.util.Log.i("WritingActivity", "Sherpa transcribed: $text (${words.size} words) audio=$recordingName")
@@ -2030,11 +2031,15 @@ class WritingActivity : AppCompatActivity() {
         autoSaver.exportIfDirty { createExportSnapshot() }
     }
 
-    private fun scheduleAutoSave() {
-        // Trigger recognition for uncached lines so the save captures all text
+    /**
+     * Save immediately after each mutation (pen-up, text block insert, etc).
+     * No debounce — incremental Automerge saves are ~200 bytes per stroke.
+     */
+    private fun saveNow() {
         coordinator?.recognizeAllLines()
         cueCoordinator?.recognizeAllLines()
-        autoSaver.schedule { createSaveSnapshot() }
+        val snapshot = createSaveSnapshot() ?: return
+        autoSaver.saveAsync(snapshot)
     }
 
     /**

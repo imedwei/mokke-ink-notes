@@ -60,6 +60,7 @@ class AutoSaver(
 
     /** Save asynchronously right now — cancels any pending debounce and in-flight save. */
     fun saveAsync(snapshot: Snapshot) {
+        syncDirty = true
         handler.removeCallbacks(debounceRunnable)
         saveJob?.cancel()
         saveJob = scope.launch(ioDispatcher) {
