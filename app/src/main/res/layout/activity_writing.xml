@@ -214,6 +214,15 @@
         android:elevation="2dp"
         android:visibility="gone" />
 
+    <!-- Version history overlay (bottom panel, shown in history mode) -->
+    <com.writer.view.VersionHistoryOverlayView
+        android:id="@+id/historyOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="280dp"
+        android:layout_gravity="bottom"
+        android:elevation="0dp"
+        android:visibility="gone" />
+
     <!-- Tutorial overlay: dimmed background + cutout + tooltip (covers entire screen) -->
     <com.writer.view.TutorialOverlay
         android:id="@+id/tutorialOverlay"
