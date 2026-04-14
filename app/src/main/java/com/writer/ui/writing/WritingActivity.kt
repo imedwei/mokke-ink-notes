@@ -2108,6 +2108,12 @@ class WritingActivity : AppCompatActivity() {
             offlineModelManager.release()
         }
         orientationManager.stop()
+        // Flush debounced save before blocking save
+        pendingSaveRunnable?.let {
+            checkpointHandler.removeCallbacks(it)
+            it.run()
+            pendingSaveRunnable = null
+        }
         snapshotAndSaveBlocking()
         // Flush any pending idle checkpoint before closing
         flushPendingCheckpoint()
@@ -2118,16 +2124,25 @@ class WritingActivity : AppCompatActivity() {
         autoSaver.exportIfDirty { createExportSnapshot() }
     }
 
+    // Debounce rapid pen-ups (200ms) to coalesce saves without perceptible delay
+    private var pendingSaveRunnable: Runnable? = null
+
     /**
-     * Save immediately after each mutation (pen-up, text block insert, etc).
-     * No debounce — incremental Automerge saves are ~200 bytes per stroke.
+     * Save after a short debounce. Coalesces rapid pen-ups (multiple strokes
+     * in quick succession) into a single save. 200ms is fast enough to feel
+     * instant but avoids coroutine churn at 5+ strokes/second.
      */
     private fun saveNow() {
         if (isHistoryMode) return
-        coordinator?.recognizeAllLines()
-        cueCoordinator?.recognizeAllLines()
-        val snapshot = createSaveSnapshot() ?: return
-        autoSaver.saveAsync(snapshot)
+        pendingSaveRunnable?.let { checkpointHandler.removeCallbacks(it) }
+        val runnable = Runnable {
+            coordinator?.recognizeAllLines()
+            cueCoordinator?.recognizeAllLines()
+            val snapshot = createSaveSnapshot() ?: return@Runnable
+            autoSaver.saveAsync(snapshot)
+        }
+        pendingSaveRunnable = runnable
+        checkpointHandler.postDelayed(runnable, 200L)
 
         // Schedule checkpoint after 10s idle (resets on each save)
         checkpointPending = true
