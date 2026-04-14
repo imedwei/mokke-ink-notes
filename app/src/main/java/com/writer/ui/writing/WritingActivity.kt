@@ -33,6 +33,7 @@ import com.writer.model.DocumentData
 import com.writer.storage.AutomergeAdapter
 import com.writer.storage.AutomergeSink
 import com.writer.storage.AutomergeStorage
+import com.writer.storage.VersionHistory
 import com.writer.storage.DocumentStorage
 import com.writer.storage.DocumentStorageSink
 import com.writer.storage.SearchIndexManager
@@ -146,6 +147,7 @@ class WritingActivity : AppCompatActivity() {
 
     // Automerge storage for incremental persistence (no ZIPs during auto-save)
     private lateinit var automergeStorage: AutomergeStorage
+    private lateinit var versionHistory: VersionHistory
 
     // Auto-save: initialized in onCreate after lifecycleScope is available
     private lateinit var autoSaver: AutoSaver
@@ -254,7 +256,9 @@ class WritingActivity : AppCompatActivity() {
             registerReceiver(bugReportReceiver, filter)
         }
 
-        automergeStorage = AutomergeStorage(java.io.File(filesDir, "documents"))
+        val docsDir = java.io.File(filesDir, "documents")
+        automergeStorage = AutomergeStorage(docsDir)
+        versionHistory = VersionHistory(docsDir)
         val exportSink = DocumentStorageSink(applicationContext)
         autoSaver = AutoSaver(lifecycleScope, AutomergeSink(automergeStorage, exportSink))
 
@@ -1377,6 +1381,10 @@ class WritingActivity : AppCompatActivity() {
             popup.dismiss()
             showRenameDialog()
         }
+        popupView.findViewById<android.view.View>(R.id.menuHistory).setOnClickListener {
+            popup.dismiss()
+            showHistoryDialog()
+        }
         popupView.findViewById<android.view.View>(R.id.menuBugReport).setOnClickListener {
             popup.dismiss()
             generateAndShareBugReport()
@@ -1392,6 +1400,74 @@ class WritingActivity : AppCompatActivity() {
         val x = loc[0] - popupWidth
         val y = loc[1]
         popup.showAtLocation(menuButton, Gravity.NO_GRAVITY, x, y)
+    }
+
+    private fun showHistoryDialog() {
+        val checkpoints = versionHistory.listCheckpoints(currentDocumentName)
+        if (checkpoints.isEmpty()) {
+            Toast.makeText(this, "No version history yet", Toast.LENGTH_SHORT).show()
+            inkCanvas.resumeRawDrawing()
+            return
+        }
+
+        val labels = checkpoints.reversed().map { it.label }.toTypedArray()
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Version History")
+            .setItems(labels) { _, which ->
+                val checkpoint = checkpoints[checkpoints.size - 1 - which]
+                restoreFromCheckpoint(checkpoint)
+            }
+            .setNegativeButton("Cancel") { dialog, _ ->
+                dialog.dismiss()
+            }
+            .setOnDismissListener {
+                inkCanvas.resumeRawDrawing()
+            }
+            .show()
+    }
+
+    private fun restoreFromCheckpoint(checkpoint: VersionHistory.Checkpoint) {
+        val doc = automergeStorage.load(currentDocumentName)
+        if (doc == null) {
+            Toast.makeText(this, "Could not load document", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val restored = versionHistory.restoreCheckpoint(doc, checkpoint)
+        val data = AutomergeAdapter.fromAutomerge(restored)
+
+        // Save restored state as current
+        automergeStorage.save(currentDocumentName, restored)
+        doc.free()
+        restored.free()
+
+        // Reload the UI with restored data
+        coordinator?.stop()
+        coordinator?.reset()
+        cueCoordinator?.stop()
+        cueCoordinator?.reset()
+        documentModel.main.activeStrokes.clear()
+        documentModel.main.diagramAreas.clear()
+        documentModel.cue.activeStrokes.clear()
+        documentModel.cue.diagramAreas.clear()
+        inkCanvas.clear()
+        cueInkCanvas.clear()
+        recognizedTextView.setParagraphs(emptyList())
+        cueRecognizedTextView.setParagraphs(emptyList())
+
+        documentModel.main.activeStrokes.addAll(data.main.strokes)
+        documentModel.main.diagramAreas.addAll(data.main.diagramAreas)
+        inkCanvas.diagramAreas = data.main.diagramAreas
+        inkCanvas.loadStrokes(data.main.strokes)
+        inkCanvas.drawToSurface()
+
+        documentModel.cue.activeStrokes.addAll(data.cue.strokes)
+        documentModel.cue.diagramAreas.addAll(data.cue.diagramAreas)
+
+        coordinator?.start()
+        coordinator?.restoreState(data)
+        updateCueIndicatorStrip()
+
+        Toast.makeText(this, "Restored to: ${checkpoint.label}", Toast.LENGTH_SHORT).show()
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
@@ -1969,6 +2045,7 @@ class WritingActivity : AppCompatActivity() {
         // Try .automerge first
         val doc = automergeStorage.load(name)
         if (doc != null) {
+            checkpointOnLoad(name, doc)
             val data = AutomergeAdapter.fromAutomerge(doc)
             doc.free()
             // Merge local-only state from .mok if it exists
@@ -1987,8 +2064,24 @@ class WritingActivity : AppCompatActivity() {
         if (mokData != null) {
             val mokFile = java.io.File(filesDir, "documents/$name.mok")
             DocumentStorage.migrateToAutomerge(mokFile, automergeStorage, name)
+            // Checkpoint the freshly migrated document
+            val migratedDoc = automergeStorage.load(name)
+            if (migratedDoc != null) {
+                checkpointOnLoad(name, migratedDoc)
+                migratedDoc.free()
+            }
         }
         return mokData
+    }
+
+    private fun checkpointOnLoad(name: String, doc: org.automerge.Document) {
+        val existing = versionHistory.listCheckpoints(name)
+        val currentHeads = doc.heads
+        // Skip if the latest checkpoint already matches current heads
+        if (existing.isNotEmpty() && existing.last().heads.contentEquals(currentHeads)) return
+        val label = java.text.SimpleDateFormat("MMM d, h:mm a", java.util.Locale.getDefault())
+            .format(java.util.Date())
+        versionHistory.createCheckpoint(name, doc, label)
     }
 
     private fun snapshotAndSaveBlocking() {
