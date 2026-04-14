@@ -5,10 +5,12 @@ import com.writer.model.ColumnData
 import com.writer.model.DiagramArea
 import com.writer.model.DocumentData
 import com.writer.model.InkStroke
-import com.writer.model.StrokePoint
 import com.writer.model.StrokeType
 import com.writer.model.TextBlock
 import com.writer.model.WordInfo
+import com.writer.model.minY
+import com.writer.model.maxY
+import com.writer.view.ScreenMetrics
 import org.automerge.AmValue
 import org.automerge.Document
 import org.automerge.ObjectId
@@ -17,13 +19,16 @@ import org.automerge.ObjectType
 /**
  * Bidirectional conversion between [DocumentData] and Automerge [Document].
  *
+ * Strokes use delta-encoded packed points in line-height-normalized coordinates
+ * with `originLine` for efficient space insert.
+ *
  * Only synced content is stored in Automerge. Local-only state (scrollOffsetY,
  * highestLineIndex, currentLineIndex, userRenamed) and derived state
  * (lineTextCache, everHiddenLines) are excluded.
  */
 object AutomergeAdapter {
 
-    private const val SCHEMA_VERSION = 1
+    private const val SCHEMA_VERSION = 2
 
     fun toAutomerge(data: DocumentData): Document {
         val doc = Document()
@@ -55,24 +60,43 @@ object AutomergeAdapter {
         )
     }
 
+    /**
+     * Viewport-filtered read. Only unpacks strokes whose line range intersects
+     * [viewportStartLine]..[viewportEndLine]. Other strokes are skipped.
+     */
+    fun fromAutomerge(
+        doc: Document,
+        viewportStartLine: Int,
+        viewportEndLine: Int,
+    ): DocumentData {
+        val main = readColumn(doc, ObjectId.ROOT, "main", viewportStartLine, viewportEndLine)
+        val cue = readColumn(doc, ObjectId.ROOT, "cue", viewportStartLine, viewportEndLine)
+        val audioRecordings = readAudioRecordings(doc)
+        return DocumentData(
+            main = main,
+            cue = cue,
+            audioRecordings = audioRecordings,
+        )
+    }
+
     // --- Write helpers ---
 
     private fun writeColumn(tx: org.automerge.Transaction, columnId: ObjectId, col: ColumnData) {
+        val ls = ScreenMetrics.lineSpacing
+        val tm = ScreenMetrics.topMargin
+
         val strokesId = tx.set(columnId, "strokes", ObjectType.LIST)
         for ((i, stroke) in col.strokes.withIndex()) {
+            val originLine = computeOriginLine(stroke, ls, tm)
+            val heightInLines = computeHeightInLines(stroke, originLine, ls, tm)
+
             val sId = tx.insert(strokesId, i.toLong(), ObjectType.MAP)
             tx.set(sId, "strokeId", stroke.strokeId)
-            tx.set(sId, "strokeWidth", stroke.strokeWidth.toDouble())
             tx.set(sId, "strokeType", stroke.strokeType.name)
             tx.set(sId, "isGeometric", stroke.isGeometric)
-            val pointsId = tx.set(sId, "points", ObjectType.LIST)
-            for ((j, pt) in stroke.points.withIndex()) {
-                val ptId = tx.insert(pointsId, j.toLong(), ObjectType.MAP)
-                tx.set(ptId, "x", pt.x.toDouble())
-                tx.set(ptId, "y", pt.y.toDouble())
-                tx.set(ptId, "pressure", pt.pressure.toDouble())
-                tx.set(ptId, "timestamp", pt.timestamp.toDouble())
-            }
+            tx.set(sId, "originLine", originLine)
+            tx.set(sId, "heightInLines", heightInLines)
+            tx.set(sId, "pointsData", PointPacking.pack(stroke.points, originLine, ls, tm))
         }
 
         val textBlocksId = tx.set(columnId, "textBlocks", ObjectType.LIST)
@@ -104,11 +128,23 @@ object AutomergeAdapter {
         }
     }
 
+    internal fun computeOriginLine(stroke: InkStroke, ls: Float, tm: Float): Int =
+        ((stroke.minY - tm) / ls).toInt().coerceAtLeast(0)
+
+    internal fun computeHeightInLines(stroke: InkStroke, originLine: Int, ls: Float, tm: Float): Int {
+        val endLine = ((stroke.maxY - tm) / ls).toInt().coerceAtLeast(0)
+        return (endLine - originLine + 1).coerceAtLeast(1)
+    }
+
     // --- Read helpers ---
 
-    private fun readColumn(doc: Document, parent: ObjectId, key: String): ColumnData {
+    private fun readColumn(
+        doc: Document, parent: ObjectId, key: String,
+        viewportStartLine: Int = Int.MIN_VALUE,
+        viewportEndLine: Int = Int.MAX_VALUE,
+    ): ColumnData {
         val columnId = doc.get(parent, key).orElse(null)?.asMapId() ?: return ColumnData()
-        val strokes = readStrokes(doc, columnId)
+        val strokes = readStrokes(doc, columnId, viewportStartLine, viewportEndLine)
         val textBlocks = readTextBlocks(doc, columnId)
         val diagramAreas = readDiagramAreas(doc, columnId)
         return ColumnData(
@@ -118,31 +154,37 @@ object AutomergeAdapter {
         )
     }
 
-    private fun readStrokes(doc: Document, columnId: ObjectId): List<InkStroke> {
+    private fun readStrokes(
+        doc: Document, columnId: ObjectId,
+        viewportStartLine: Int, viewportEndLine: Int,
+    ): List<InkStroke> {
         val strokesId = doc.get(columnId, "strokes").orElse(null)?.asListId() ?: return emptyList()
+        val ls = ScreenMetrics.lineSpacing
+        val tm = ScreenMetrics.topMargin
+
         return doc.listItems(strokesId).orElse(emptyArray()).mapNotNull { item ->
             val sId = item.asMapId() ?: return@mapNotNull null
             val strokeId = doc.getString(sId, "strokeId") ?: ""
-            val strokeWidth = doc.getDouble(sId, "strokeWidth")?.toFloat() ?: 3f
             val strokeType = doc.getString(sId, "strokeType")?.let {
                 try { StrokeType.valueOf(it) } catch (_: Exception) { StrokeType.FREEHAND }
             } ?: StrokeType.FREEHAND
             val isGeometric = doc.getBool(sId, "isGeometric") ?: false
-            val points = readPoints(doc, sId)
-            InkStroke(strokeId, points, strokeWidth, isGeometric = isGeometric, strokeType = strokeType)
-        }
-    }
+            val originLine = doc.getInt(sId, "originLine") ?: 0
+            val heightInLines = doc.getInt(sId, "heightInLines") ?: 1
 
-    private fun readPoints(doc: Document, strokeId: ObjectId): List<StrokePoint> {
-        val pointsId = doc.get(strokeId, "points").orElse(null)?.asListId() ?: return emptyList()
-        return doc.listItems(pointsId).orElse(emptyArray()).mapNotNull { item ->
-            val ptId = item.asMapId() ?: return@mapNotNull null
-            StrokePoint(
-                x = doc.getDouble(ptId, "x")?.toFloat() ?: 0f,
-                y = doc.getDouble(ptId, "y")?.toFloat() ?: 0f,
-                pressure = doc.getDouble(ptId, "pressure")?.toFloat() ?: 0f,
-                timestamp = doc.getDouble(ptId, "timestamp")?.toLong() ?: 0L,
-            )
+            // Viewport filter: skip strokes outside visible range
+            if (originLine + heightInLines < viewportStartLine || originLine > viewportEndLine) {
+                return@mapNotNull null
+            }
+
+            val pointsData = doc.getBytes(sId, "pointsData")
+            val points = if (pointsData != null) {
+                PointPacking.unpack(pointsData, originLine, ls, tm)
+            } else {
+                emptyList()
+            }
+
+            InkStroke(strokeId, points, isGeometric = isGeometric, strokeType = strokeType)
         }
     }
 
@@ -221,4 +263,7 @@ object AutomergeAdapter {
 
     private fun Document.getBool(obj: ObjectId, key: String): Boolean? =
         get(obj, key).orElse(null)?.let { (it as? AmValue.Bool)?.value }
+
+    private fun Document.getBytes(obj: ObjectId, key: String): ByteArray? =
+        get(obj, key).orElse(null)?.let { (it as? AmValue.Bytes)?.value }
 }

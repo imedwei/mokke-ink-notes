@@ -1,10 +1,11 @@
 package com.writer.storage
 
 import com.writer.model.StrokeType
+import com.writer.view.ScreenMetrics
 import org.automerge.Document
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 
 /**
@@ -16,11 +17,16 @@ import org.junit.Test
  */
 class AutomergeGoldenTest {
 
+    @Before
+    fun setUp() {
+        ScreenMetrics.init(density = 1.875f, smallestWidthDp = 674, widthPixels = 1264, heightPixels = 1680)
+    }
+
     // --- Automerge-native golden tests ---
 
     @Test
-    fun `goldenV1 loads correctly`() {
-        val bytes = loadGoldenAutomerge("document_v1.automerge")
+    fun `goldenV2 loads correctly`() {
+        val bytes = loadGoldenAutomerge("document_v2.automerge")
         val doc = Document.load(bytes)
         val data = AutomergeAdapter.fromAutomerge(doc)
         doc.free()
@@ -31,14 +37,12 @@ class AutomergeGoldenTest {
         val s1 = data.main.strokes[0]
         assertEquals("golden-s1", s1.strokeId)
         assertEquals(3, s1.points.size)
-        assertEquals(3f, s1.strokeWidth, 1e-6f)
         assertEquals(StrokeType.FREEHAND, s1.strokeType)
         assertEquals(false, s1.isGeometric)
 
         val s2 = data.main.strokes[1]
         assertEquals("golden-s2", s2.strokeId)
         assertEquals(2, s2.points.size)
-        assertEquals(5f, s2.strokeWidth, 1e-6f)
         assertEquals(StrokeType.RECTANGLE, s2.strokeType)
         assertEquals(true, s2.isGeometric)
 
@@ -62,8 +66,8 @@ class AutomergeGoldenTest {
     }
 
     @Test
-    fun `goldenV1 round-trips through adapter`() {
-        val bytes = loadGoldenAutomerge("document_v1.automerge")
+    fun `goldenV2 round-trips through adapter`() {
+        val bytes = loadGoldenAutomerge("document_v2.automerge")
         val doc = Document.load(bytes)
         val data = AutomergeAdapter.fromAutomerge(doc)
         doc.free()
@@ -91,6 +95,7 @@ class AutomergeGoldenTest {
             "document_v4.inkup",
             "document_v5.inkup",
         )
+        val ls = ScreenMetrics.lineSpacing
         for (filename in goldenFiles) {
             val bytes = loadGoldenProtobuf(filename)
             assertNotNull("$filename should exist", bytes)
@@ -103,7 +108,6 @@ class AutomergeGoldenTest {
             val recovered = AutomergeAdapter.fromAutomerge(doc)
             doc.free()
 
-            // Synced content should match (local-only fields excluded by adapter)
             assertEquals(
                 "$filename: main strokes count",
                 original.main.strokes.size, recovered.main.strokes.size
@@ -117,6 +121,13 @@ class AutomergeGoldenTest {
                     "$filename: stroke[$i] points count",
                     original.main.strokes[i].points.size, recovered.main.strokes[i].points.size
                 )
+                // Coordinates within packing precision
+                for (j in original.main.strokes[i].points.indices) {
+                    val op = original.main.strokes[i].points[j]
+                    val rp = recovered.main.strokes[i].points[j]
+                    assertEquals("$filename: stroke[$i].point[$j].x", op.x, rp.x, ls * 0.015f)
+                    assertEquals("$filename: stroke[$i].point[$j].y", op.y, rp.y, ls * 0.015f)
+                }
             }
             assertEquals(
                 "$filename: main textBlocks",

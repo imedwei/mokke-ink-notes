@@ -8,11 +8,18 @@ import com.writer.model.InkStroke
 import com.writer.model.StrokePoint
 import com.writer.model.TextBlock
 import com.writer.model.WordInfo
+import com.writer.view.ScreenMetrics
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 
 class AutomergeSyncTest {
+
+    @Before
+    fun setUp() {
+        ScreenMetrics.init(density = 1.875f, smallestWidthDp = 674, widthPixels = 1264, heightPixels = 1680)
+    }
 
     @Test
     fun `initial sync creates full document`() {
@@ -165,13 +172,16 @@ class AutomergeSyncTest {
 
     @Test
     fun `full round-trip matches adapter`() {
+        val ls = ScreenMetrics.lineSpacing
+        val tm = ScreenMetrics.topMargin
         val data = DocumentData(
             main = ColumnData(
                 strokes = (0 until 5).map { i ->
+                    val lineY = tm + (i + 2) * ls
                     InkStroke("s-$i", listOf(
-                        StrokePoint(i.toFloat(), i * 2f, 0.5f, i * 1000L),
-                        StrokePoint(i + 1f, i * 2 + 1f, 0.7f, i * 1000L + 500),
-                    ), 3f)
+                        StrokePoint(100f + i * 20f, lineY + 10f, 0.5f, i * 1000L),
+                        StrokePoint(110f + i * 20f, lineY + 15f, 0.7f, i * 1000L + 500),
+                    ))
                 },
                 textBlocks = listOf(
                     TextBlock("tb-1", 2, 1, "hello", "rec.ogg", 0, 1000,
@@ -180,7 +190,7 @@ class AutomergeSyncTest {
                 diagramAreas = listOf(DiagramArea("d-1", 5, 3)),
             ),
             cue = ColumnData(
-                strokes = listOf(InkStroke("cue-1", listOf(StrokePoint(1f, 2f, 0.5f, 100L)), 2f))
+                strokes = listOf(InkStroke("cue-1", listOf(StrokePoint(100f, tm + ls + 10f, 0.5f, 100L))))
             ),
             audioRecordings = listOf(AudioRecording("rec.ogg", 1000L, 5000L)),
         )
@@ -223,18 +233,22 @@ class AutomergeSyncTest {
         }
     }
 
-    private fun sampleData(strokeCount: Int) = DocumentData(
-        main = ColumnData(
-            strokes = (0 until strokeCount).map { i ->
-                InkStroke(
-                    "s-$i",
-                    listOf(
-                        StrokePoint(i * 10f, i * 20f, 0.5f, i * 1000L),
-                        StrokePoint(i * 10f + 5, i * 20f + 5, 0.7f, i * 1000L + 500),
-                    ),
-                    3f
-                )
-            }
+    private fun sampleData(strokeCount: Int): DocumentData {
+        val ls = ScreenMetrics.lineSpacing
+        val tm = ScreenMetrics.topMargin
+        return DocumentData(
+            main = ColumnData(
+                strokes = (0 until strokeCount).map { i ->
+                    val lineY = tm + (i + 1) * ls
+                    InkStroke(
+                        "s-$i",
+                        listOf(
+                            StrokePoint(100f + i * 10f, lineY + 10f, 0.5f, i * 1000L),
+                            StrokePoint(105f + i * 10f, lineY + 15f, 0.7f, i * 1000L + 500),
+                        ),
+                    )
+                }
+            )
         )
-    )
+    }
 }
