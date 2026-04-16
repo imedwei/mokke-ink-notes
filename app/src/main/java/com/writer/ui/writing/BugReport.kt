@@ -94,6 +94,21 @@ object BugReport {
                     }
                 })
             })
+
+            // Performance counters (rolling window stats)
+            put("perfCounters", JSONObject().apply {
+                for ((metric, snap) in PerfCounters.snapshot()) {
+                    if (snap.count > 0) {
+                        put(metric.label, JSONObject().apply {
+                            put("count", snap.count)
+                            put("lastMs", snap.lastMs)
+                            put("p50Ms", snap.p50Ms)
+                            put("p95Ms", snap.p95Ms)
+                            put("maxMs", snap.maxMs)
+                        })
+                    }
+                }
+            })
         }
     }
 

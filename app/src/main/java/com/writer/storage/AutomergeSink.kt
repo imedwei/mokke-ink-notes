@@ -3,6 +3,8 @@ package com.writer.storage
 import android.net.Uri
 import com.writer.model.DocumentData
 import com.writer.ui.writing.AutoSaver
+import com.writer.ui.writing.PerfCounters
+import com.writer.ui.writing.PerfMetric
 
 /**
  * [AutoSaver.Sink] backed by a live Automerge document with incremental saves.
@@ -28,8 +30,8 @@ class AutomergeSink(
         return try {
             synchronized(lock) {
                 val sync = getOrCreateSync(name)
-                sync.sync(state)
-                storage.saveIncremental(name, sync.document)
+                PerfCounters.time(PerfMetric.SAVE_SYNC) { sync.sync(state) }
+                PerfCounters.time(PerfMetric.SAVE_INCREMENTAL) { storage.saveIncremental(name, sync.document) }
             }
             true
         } catch (e: Exception) {

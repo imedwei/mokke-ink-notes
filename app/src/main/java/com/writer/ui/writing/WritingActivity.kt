@@ -1486,27 +1486,21 @@ class WritingActivity : AppCompatActivity() {
     private fun previewCheckpoint(checkpoint: VersionHistory.Checkpoint) {
         val doc = historyDoc ?: return
         try {
-            val t0 = System.nanoTime()
-            val forked = versionHistory.restoreCheckpoint(doc, checkpoint)
-            val t1 = System.nanoTime()
-            // Viewport-scoped read: only unpack strokes visible on screen
+            val forked = PerfCounters.time(PerfMetric.PREVIEW_FORK) {
+                versionHistory.restoreCheckpoint(doc, checkpoint)
+            }
             val ls = com.writer.view.ScreenMetrics.lineSpacing
             val viewStartLine = (inkCanvas.scrollOffsetY / ls).toInt()
             val viewEndLine = viewStartLine + (inkCanvas.height / ls).toInt() + 1
-            val data = AutomergeAdapter.fromAutomerge(forked, viewStartLine, viewEndLine)
-            val t2 = System.nanoTime()
+            val data = PerfCounters.time(PerfMetric.PREVIEW_READ) {
+                AutomergeAdapter.fromAutomerge(forked, viewStartLine, viewEndLine)
+            }
             forked.free()
-            val t3 = System.nanoTime()
-
-            inkCanvas.diagramAreas = data.main.diagramAreas
-            inkCanvas.textBlocks = data.main.textBlocks
-            inkCanvas.loadStrokes(data.main.strokes)
-            val t4 = System.nanoTime()
-
-            android.util.Log.i(TAG, "previewCheckpoint: fork=${(t1-t0)/1_000_000}ms " +
-                "fromAutomerge=${(t2-t1)/1_000_000}ms free=${(t3-t2)/1_000_000}ms " +
-                "loadStrokes+draw=${(t4-t3)/1_000_000}ms total=${(t4-t0)/1_000_000}ms " +
-                "(${data.main.strokes.size} strokes, viewport lines $viewStartLine-$viewEndLine)")
+            PerfCounters.time(PerfMetric.PREVIEW_DRAW) {
+                inkCanvas.diagramAreas = data.main.diagramAreas
+                inkCanvas.textBlocks = data.main.textBlocks
+                inkCanvas.loadStrokes(data.main.strokes)
+            }
         } catch (e: Exception) {
             android.util.Log.w(TAG, "Failed to preview checkpoint: ${e.message}")
         }
