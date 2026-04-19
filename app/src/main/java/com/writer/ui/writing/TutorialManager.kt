@@ -2,7 +2,6 @@ package com.writer.ui.writing
 
 import android.content.Context
 import android.graphics.Rect
-import android.widget.LinearLayout
 import com.writer.model.DocumentData
 import com.writer.model.InkStroke
 import com.writer.model.minX
@@ -10,7 +9,6 @@ import com.writer.model.maxX
 import com.writer.model.minY
 import com.writer.model.maxY
 import com.writer.view.HandwritingCanvasView
-import com.writer.view.RecognizedTextView
 import com.writer.view.TutorialOverlay
 
 /**
@@ -28,7 +26,6 @@ import com.writer.view.TutorialOverlay
 class TutorialManager(
     private val context: Context,
     private val inkCanvas: HandwritingCanvasView,
-    private val textView: RecognizedTextView,
     private val getCoordinator: () -> WritingCoordinator?,
     private val getPendingRestore: () -> DocumentData?,
     private val clearPendingRestore: () -> Unit,
@@ -65,10 +62,6 @@ class TutorialManager(
     private var savedStrokes: List<InkStroke>? = null
     private var savedScrollY: Float = 0f
     private var savedState: DocumentData? = null
-    private var savedTextHeight = 0
-    private var savedTextWeight = 0f
-    private var savedCanvasHeight = 0
-    private var savedCanvasWeight = 0f
 
     fun shouldAutoShow(): Boolean {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -119,14 +112,6 @@ class TutorialManager(
         savedStrokes = inkCanvas.getStrokes()
         savedScrollY = inkCanvas.scrollOffsetY
 
-        // Save layout params
-        val textParams = textView.layoutParams as LinearLayout.LayoutParams
-        val canvasParams = inkCanvas.layoutParams as LinearLayout.LayoutParams
-        savedTextHeight = textParams.height
-        savedTextWeight = textParams.weight
-        savedCanvasHeight = canvasParams.height
-        savedCanvasWeight = canvasParams.weight
-
         // Clear canvas for a blank tutorial
         coordinator?.stop()
         coordinator?.reset()
@@ -135,8 +120,6 @@ class TutorialManager(
         inkCanvas.scrollOffsetY = 0f
         // Flush Onyx hardware overlay so old strokes aren't visible
         inkCanvas.reinitializeRawDrawing()
-        textView.setParagraphs(emptyList())
-        textView.showScrollHint = false
 
         // Restart coordinator and load the showcase document
         coordinator?.start()
@@ -261,7 +244,6 @@ class TutorialManager(
         }
         // Reset per-step state
         stepActionReceived = false
-        scrollTextAppeared = false
         revealLoopCount = 0
         advanceHandler.removeCallbacks(advanceRunnable)
         revealHandler.removeCallbacks(revealRunnable)
@@ -384,29 +366,6 @@ class TutorialManager(
         return ghosts
     }
 
-    private var scrollTextAppeared = false
-
-    private val scrollCheckRunnable = Runnable {
-        if (!isActive) return@Runnable
-        if (currentStepIndex >= steps.size) return@Runnable
-        val step = steps[currentStepIndex]
-        if (step.id != "scroll") return@Runnable
-
-        if (textView.totalTextHeight > 0) {
-            scrollTextAppeared = true
-            overlay?.currentStep = step.copy(
-                cutoutRect = Rect(0, 0, inkCanvas.rootView.width, inkCanvas.rootView.height),
-                tooltipText = "Great! Your writing appears as text"
-            )
-            // Force e-ink refresh to show the new tooltip
-            inkCanvas.pauseRawDrawing()
-            inkCanvas.drawToSurface()
-            inkCanvas.resumeRawDrawing()
-            // Close after 2s
-            advanceHandler.removeCallbacks(advanceRunnable)
-            advanceHandler.postDelayed(advanceRunnable, 2000L)
-        }
-    }
 
     private fun stopRevealAnimation() {
         if (inkCanvas.ghostStrokes.isNotEmpty()) {
@@ -445,15 +404,7 @@ class TutorialManager(
 
         if (!matches) return
 
-        if (currentStep.id == "scroll") {
-            // Wait for finger to lift (no more scroll events for 500ms),
-            // then check if text appeared in preview.
-            advanceHandler.removeCallbacks(scrollCheckRunnable)
-            advanceHandler.postDelayed(scrollCheckRunnable, 500L)
-            return
-        }
-
-        // For steps 1-3: delay 1.5s before advancing so user sees the result.
+        // For steps 1-4: delay 1.5s before advancing so user sees the result.
         // Reset timer if they perform another action (e.g., write more strokes).
         stepActionReceived = true
         advanceHandler.removeCallbacks(advanceRunnable)
@@ -463,7 +414,6 @@ class TutorialManager(
     fun close() {
         // Cancel any pending timers
         advanceHandler.removeCallbacks(advanceRunnable)
-        advanceHandler.removeCallbacks(scrollCheckRunnable)
         revealHandler.removeCallbacks(revealRunnable)
         inkCanvas.ghostStrokes = emptyList()
         inkCanvas.ghostRevealProgress = 0f
@@ -474,16 +424,6 @@ class TutorialManager(
 
         // Hide overlay
         overlay?.currentStep = null
-
-        // Restore split size
-        val textParams = textView.layoutParams as LinearLayout.LayoutParams
-        val canvasParams = inkCanvas.layoutParams as LinearLayout.LayoutParams
-        textParams.height = savedTextHeight
-        textParams.weight = savedTextWeight
-        textView.layoutParams = textParams
-        canvasParams.height = savedCanvasHeight
-        canvasParams.weight = savedCanvasWeight
-        inkCanvas.layoutParams = canvasParams
 
         // Restore original document
         val coordinator = getCoordinator()
@@ -498,9 +438,6 @@ class TutorialManager(
             inkCanvas.scrollOffsetY = savedScrollY
             inkCanvas.drawToSurface()
         }
-
-        textView.setParagraphs(emptyList())
-        textView.showScrollHint = true
 
         // Restart coordinator with restored state.
         // restoreState() expects strokes already in documentModel — add them
@@ -521,7 +458,6 @@ class TutorialManager(
             }
         }
 
-        textView.invalidate()
         inkCanvas.reinitializeRawDrawing()
 
         savedStrokes = null

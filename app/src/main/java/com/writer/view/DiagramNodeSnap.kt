@@ -171,10 +171,8 @@ object DiagramNodeSnap {
     }
 
     /**
-     * Compute the perimeter point on a node shape from an approach direction.
-     *
-     * This mirrors the ray-intersection logic in [RecognizedTextView.perimeterPoint]
-     * but works on raw floats (no android.graphics dependency).
+     * Compute the perimeter point on a node shape from an approach direction,
+     * working on raw floats (no android.graphics dependency).
      *
      * @param dx approach direction X component (need not be normalised)
      * @param dy approach direction Y component

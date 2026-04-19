@@ -41,7 +41,6 @@ import com.writer.storage.SearchIndexManager
 import com.writer.view.CanvasTheme
 import com.writer.view.GutterTouchGuard
 import com.writer.view.HandwritingCanvasView
-import com.writer.view.RecognizedTextView
 import com.writer.view.TouchFilter
 import com.writer.view.ScreenMetrics
 import kotlinx.coroutines.Dispatchers
@@ -61,16 +60,12 @@ class WritingActivity : AppCompatActivity() {
     }
 
     private lateinit var inkCanvas: HandwritingCanvasView
-    private lateinit var recognizedTextView: RecognizedTextView
 
     // Cue column views (landscape Cornell Notes)
     private lateinit var cueInkCanvas: HandwritingCanvasView
-    private lateinit var cueRecognizedTextView: RecognizedTextView
-    private lateinit var cueSplitLayout: View
     private lateinit var columnDivider: View
     private lateinit var cueIndicatorStrip: com.writer.view.CueIndicatorStrip
     private lateinit var contextRail: com.writer.view.CueIndicatorStrip
-    private lateinit var mainSplitLayout: View
     private var cueCoordinator: WritingCoordinator? = null
     private var isLandscape = false
     private var isFoldedToCues = false
@@ -136,9 +131,6 @@ class WritingActivity : AppCompatActivity() {
     private lateinit var tutorialManager: TutorialManager
 
     // Split resize state
-    private var defaultTextHeight = 0
-    private var defaultCanvasHeight = 0
-    private var splitOffset = 0f
 
     // Saved data loaded before coordinator is ready
     private var pendingRestore: DocumentData? = null
@@ -299,18 +291,12 @@ class WritingActivity : AppCompatActivity() {
         }
 
         inkCanvas = findViewById(R.id.inkCanvas)
-        recognizedTextView = findViewById(R.id.recognizedTextView)
-        val splitLayout = findViewById<com.writer.view.SplitLayout>(R.id.splitLayout)
-        val splitDivider = findViewById<View>(R.id.splitDivider)
 
         // Cue column views
         cueInkCanvas = findViewById(R.id.cueInkCanvas)
-        cueRecognizedTextView = findViewById(R.id.cueRecognizedTextView)
-        cueSplitLayout = findViewById(R.id.cueSplitLayout)
         columnDivider = findViewById(R.id.columnDivider)
         cueIndicatorStrip = findViewById(R.id.cueIndicatorStrip)
         contextRail = findViewById(R.id.contextRail)
-        mainSplitLayout = splitLayout
         isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
         columnLayoutLogic = ColumnLayoutLogic(object : ColumnLayoutLogic.Host {
             override val isLargeScreen get() = ScreenMetrics.isLargeScreen
@@ -404,7 +390,6 @@ class WritingActivity : AppCompatActivity() {
 
         val touchFilter = TouchFilter()
         inkCanvas.touchFilter = touchFilter
-        recognizedTextView.touchFilter = touchFilter
         cueIndicatorStrip.touchFilter = touchFilter
         contextRail.touchFilter = touchFilter
 
@@ -415,7 +400,6 @@ class WritingActivity : AppCompatActivity() {
         tutorialManager = TutorialManager(
             context = this,
             inkCanvas = inkCanvas,
-            textView = recognizedTextView,
             getCoordinator = { coordinator },
             getPendingRestore = { pendingRestore },
             clearPendingRestore = { pendingRestore = null },
@@ -498,34 +482,6 @@ class WritingActivity : AppCompatActivity() {
             }
         }
 
-        // Text view scroll drives canvas scroll (complementary views)
-        recognizedTextView.onScroll = { dy ->
-            // dy > 0 = finger dragged down = see earlier content = scroll canvas up
-            val raw = inkCanvas.scrollOffsetY - dy
-            inkCanvas.scrollOffsetY = raw.coerceAtLeast(0f)
-            inkCanvas.drawToSurface()
-            inkCanvas.onManualScroll?.invoke()
-            // Sync cue indicator strip scroll
-            cueIndicatorStrip.scrollOffsetY = inkCanvas.scrollOffsetY
-            // Linked scroll: sync cue column
-            if (columnLayoutLogic.isDualColumn) {
-                cueInkCanvas.scrollOffsetY = inkCanvas.scrollOffsetY
-                cueInkCanvas.drawToSurface()
-                cueInkCanvas.onManualScroll?.invoke()
-            }
-        }
-        recognizedTextView.onScrollEnd = {
-            inkCanvas.scrollOffsetY = inkCanvas.snapToLine(inkCanvas.scrollOffsetY)
-            inkCanvas.drawToSurface()
-            inkCanvas.onManualScroll?.invoke()
-            cueIndicatorStrip.scrollOffsetY = inkCanvas.scrollOffsetY
-            if (columnLayoutLogic.isDualColumn) {
-                cueInkCanvas.scrollOffsetY = inkCanvas.scrollOffsetY
-                cueInkCanvas.drawToSurface()
-                cueInkCanvas.onManualScroll?.invoke()
-            }
-        }
-
         // Pick the best available recognizer synchronously (initialized later in coroutine).
         // OnyxHwrTextRecognizer binds to a system service using applicationContext, so holding
         // it in the activity is safe (no activity leak). GoogleMLKitTextRecognizer is stateless
@@ -535,26 +491,7 @@ class WritingActivity : AppCompatActivity() {
         // Create coordinator early so cached text can be displayed before model loads
         startCoordinator()
 
-        // Capture default heights after initial layout, then wire up the divider drag.
-        // Override the XML weight-based split with an adaptive calculation so that
-        // all supported screen sizes get a proportional canvas/text split.
-        recognizedTextView.post {
-            val totalHeight = recognizedTextView.height + inkCanvas.height
-            defaultCanvasHeight = ScreenMetrics.computeDefaultCanvasHeight(totalHeight)
-            defaultTextHeight = totalHeight - defaultCanvasHeight
-
-            val textParams = recognizedTextView.layoutParams as LinearLayout.LayoutParams
-            textParams.height = defaultTextHeight
-            textParams.weight = 0f
-            recognizedTextView.layoutParams = textParams
-
-            val canvasParams = inkCanvas.layoutParams as LinearLayout.LayoutParams
-            canvasParams.height = defaultCanvasHeight
-            canvasParams.weight = 0f
-            inkCanvas.layoutParams = canvasParams
-
-            setupSplitDrag(splitLayout, splitDivider)
-
+        inkCanvas.post {
             // Restore cached text and scroll position immediately (no recognizer needed)
             restoreCoordinatorState()
 
@@ -565,30 +502,9 @@ class WritingActivity : AppCompatActivity() {
             }
         }
 
-        // Set up cue canvas touch filter and scroll sync
+        // Cue canvas touch filter
         val cueTouchFilter = TouchFilter()
         cueInkCanvas.touchFilter = cueTouchFilter
-        cueRecognizedTextView.touchFilter = cueTouchFilter
-
-        // Cue text view scroll drives cue canvas scroll (same pattern as main)
-        cueRecognizedTextView.onScroll = { dy ->
-            val raw = cueInkCanvas.scrollOffsetY - dy
-            cueInkCanvas.scrollOffsetY = raw.coerceAtLeast(0f)
-            cueInkCanvas.drawToSurface()
-            // Linked scroll: sync main column + context rail
-            inkCanvas.scrollOffsetY = cueInkCanvas.scrollOffsetY
-            inkCanvas.drawToSurface()
-            inkCanvas.onManualScroll?.invoke()
-            contextRail.scrollOffsetY = cueInkCanvas.scrollOffsetY
-        }
-        cueRecognizedTextView.onScrollEnd = {
-            cueInkCanvas.scrollOffsetY = cueInkCanvas.snapToLine(cueInkCanvas.scrollOffsetY)
-            cueInkCanvas.drawToSurface()
-            inkCanvas.scrollOffsetY = cueInkCanvas.scrollOffsetY
-            inkCanvas.drawToSurface()
-            inkCanvas.onManualScroll?.invoke()
-            contextRail.scrollOffsetY = cueInkCanvas.scrollOffsetY
-        }
 
         // Show cue column if dual-column mode, otherwise show indicator strip
         if (columnLayoutLogic.isDualColumn) {
@@ -607,17 +523,13 @@ class WritingActivity : AppCompatActivity() {
         }
 
         // Initialize recognizer in the background
-        recognizedTextView.statusMessage = "Loading handwriting recognition model..."
-        recognizedTextView.statusSubtext = "This may take a minute (~20 MB download)"
+        Log.i(TAG, "Loading handwriting recognition model (~20 MB if first run)")
         lifecycleScope.launch {
             try {
                 recognizer.initialize(documentModel.language)
-                recognizedTextView.statusMessage = ""
-                recognizedTextView.statusSubtext = ""
                 coordinator?.recognizeAllLines()
                 cueCoordinator?.recognizeAllLines()
             } catch (e: Exception) {
-                recognizedTextView.statusMessage = "Error loading model"
                 Toast.makeText(
                     this@WritingActivity,
                     "Failed to load recognition model: ${e.message}",
@@ -654,44 +566,14 @@ class WritingActivity : AppCompatActivity() {
         coordinator?.restoreState(data)
     }
 
-    private fun setupSplitDrag(splitLayout: com.writer.view.SplitLayout, divider: View) {
-        splitLayout.dividerView = divider
-        splitLayout.onSplitDragStart = { inkCanvas.pauseRawDrawing() }
-        splitLayout.onSplitDragEnd = { inkCanvas.resumeRawDrawing() }
-        splitLayout.onSplitDrag = { delta ->
-            val totalHeight = defaultTextHeight + defaultCanvasHeight
-            val minTextHeight = (totalHeight * 0.25f).toInt()
-            val maxOffset = (totalHeight - minTextHeight).toFloat()
-            splitOffset = (splitOffset + delta).coerceIn(0f, maxOffset)
-
-            val newTextHeight = defaultTextHeight + splitOffset.toInt()
-            val newCanvasHeight = defaultCanvasHeight - splitOffset.toInt()
-
-            val textParams = recognizedTextView.layoutParams as LinearLayout.LayoutParams
-            textParams.height = newTextHeight
-            textParams.weight = 0f
-            recognizedTextView.layoutParams = textParams
-
-            val canvasParams = inkCanvas.layoutParams as LinearLayout.LayoutParams
-            canvasParams.height = newCanvasHeight.coerceAtLeast(0)
-            canvasParams.weight = 0f
-            inkCanvas.layoutParams = canvasParams
-        }
-    }
-
     private fun startCoordinator() {
         coordinator = WritingCoordinator(
             documentModel = documentModel,
             columnModel = documentModel.main,
             recognizer = recognizer,
             inkCanvas = inkCanvas,
-            textView = recognizedTextView,
             scope = lifecycleScope,
-            onStatusUpdate = { status ->
-                runOnUiThread {
-                    recognizedTextView.statusMessage = status
-                }
-            }
+            onStatusUpdate = { status -> Log.i(TAG, "Recognizer status: $status") }
         )
         coordinator?.onHeadingDetected = { heading -> autoRenameFromHeading(heading) }
         coordinator?.onUndoRedoStateChanged = { updateUndoRedoButtons() }
@@ -761,8 +643,6 @@ class WritingActivity : AppCompatActivity() {
         documentModel.cue.diagramAreas.clear()
         inkCanvas.clear()
         cueInkCanvas.clear()
-        recognizedTextView.setParagraphs(emptyList())
-        cueRecognizedTextView.setParagraphs(emptyList())
 
         currentDocumentName = name
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
@@ -840,9 +720,6 @@ class WritingActivity : AppCompatActivity() {
         documentModel.cue.diagramAreas.clear()
         inkCanvas.clear()
         cueInkCanvas.clear()
-        recognizedTextView.setParagraphs(emptyList())
-        cueRecognizedTextView.setParagraphs(emptyList())
-        recognizedTextView.showScrollHint = true
 
         currentDocumentName = DocumentStorage.generateName(this)
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
@@ -1531,8 +1408,6 @@ class WritingActivity : AppCompatActivity() {
         documentModel.cue.diagramAreas.clear()
         inkCanvas.clear()
         cueInkCanvas.clear()
-        recognizedTextView.setParagraphs(emptyList())
-        cueRecognizedTextView.setParagraphs(emptyList())
 
         documentModel.main.activeStrokes.addAll(data.main.strokes)
         documentModel.main.diagramAreas.addAll(data.main.diagramAreas)
@@ -1580,15 +1455,11 @@ class WritingActivity : AppCompatActivity() {
             cueIndicatorStrip.visibility = View.GONE
         }
 
-        // Reset to weight-based layout so the system recalculates for new orientation
-        resetToWeightBasedLayout()
-
-        // After layout settles, compute fixed heights and proceed
+        // After layout settles, proceed with cue column setup for new orientation
         inkCanvas.viewTreeObserver.addOnGlobalLayoutListener(
             object : android.view.ViewTreeObserver.OnGlobalLayoutListener {
                 override fun onGlobalLayout() {
                     inkCanvas.viewTreeObserver.removeOnGlobalLayoutListener(this)
-                    applyFixedSplitHeights()
 
                     if (nowDualColumn) {
                         showCueColumn()
@@ -1604,39 +1475,6 @@ class WritingActivity : AppCompatActivity() {
         orientationManager.updateButtonVisibility()
     }
 
-    /** Reset text/canvas to weight-based sizing so the system can measure for new orientation. */
-    private fun resetToWeightBasedLayout() {
-        val textParams = recognizedTextView.layoutParams as LinearLayout.LayoutParams
-        textParams.height = 0
-        textParams.weight = 1f
-        recognizedTextView.layoutParams = textParams
-
-        val canvasParams = inkCanvas.layoutParams as LinearLayout.LayoutParams
-        canvasParams.height = 0
-        canvasParams.weight = 3f
-        inkCanvas.layoutParams = canvasParams
-    }
-
-    /** Compute and apply fixed pixel heights for the text/canvas split. */
-    private fun applyFixedSplitHeights() {
-        val totalHeight = recognizedTextView.height + inkCanvas.height
-        defaultCanvasHeight = ScreenMetrics.computeDefaultCanvasHeight(totalHeight)
-        defaultTextHeight = totalHeight - defaultCanvasHeight
-        splitOffset = 0f
-
-        val textParams = recognizedTextView.layoutParams as LinearLayout.LayoutParams
-        textParams.height = defaultTextHeight
-        textParams.weight = 0f
-        recognizedTextView.layoutParams = textParams
-
-        val canvasParams = inkCanvas.layoutParams as LinearLayout.LayoutParams
-        canvasParams.height = defaultCanvasHeight
-        canvasParams.weight = 0f
-        inkCanvas.layoutParams = canvasParams
-
-        Log.i(TAG, "Split heights: text=${defaultTextHeight}px, canvas=${defaultCanvasHeight}px")
-    }
-
     private fun ensureCueCoordinator() {
         if (cueCoordinator == null) {
             cueCoordinator = WritingCoordinator(
@@ -1644,7 +1482,6 @@ class WritingActivity : AppCompatActivity() {
                 columnModel = documentModel.cue,
                 recognizer = recognizer,
                 inkCanvas = cueInkCanvas,
-                textView = cueRecognizedTextView,
                 scope = lifecycleScope,
                 onStatusUpdate = {}
             )
@@ -1653,15 +1490,12 @@ class WritingActivity : AppCompatActivity() {
 
     private fun showCueColumn() {
         columnDivider.visibility = View.VISIBLE
-        cueSplitLayout.visibility = View.VISIBLE
+        cueInkCanvas.visibility = View.VISIBLE
         // Toggle visibility based on layout logic
         viewToggleButton.visibility = if (columnLayoutLogic.showToggleButton) View.VISIBLE else View.GONE
 
         // Apply column widths (fixed pixel widths on large screens, weights on small)
         applyColumnWidths()
-
-        // Apply same text/canvas split heights as main column
-        applyCueSplitHeights()
 
         // Restore cue strokes after layout is ready (surface needs to exist first)
         cueInkCanvas.post {
@@ -1721,8 +1555,8 @@ class WritingActivity : AppCompatActivity() {
      *  small screens use equal layout weights (50/50). */
     private fun applyColumnWidths() {
         val widths = columnLayoutLogic.columnWidths()
-        val mainParams = mainSplitLayout.layoutParams as LinearLayout.LayoutParams
-        val cueParams = cueSplitLayout.layoutParams as LinearLayout.LayoutParams
+        val mainParams = inkCanvas.layoutParams as LinearLayout.LayoutParams
+        val cueParams = cueInkCanvas.layoutParams as LinearLayout.LayoutParams
         if (widths.mainWidthPx > 0) {
             // Large screen: fixed pixel widths
             mainParams.width = widths.mainWidthPx
@@ -1736,21 +1570,8 @@ class WritingActivity : AppCompatActivity() {
             cueParams.width = 0
             cueParams.weight = 1f
         }
-        mainSplitLayout.layoutParams = mainParams
-        cueSplitLayout.layoutParams = cueParams
-    }
-
-    /** Apply the same text/canvas split heights to the cue column as the main column. */
-    private fun applyCueSplitHeights() {
-        val textParams = cueRecognizedTextView.layoutParams as LinearLayout.LayoutParams
-        textParams.height = defaultTextHeight
-        textParams.weight = 0f
-        cueRecognizedTextView.layoutParams = textParams
-
-        val canvasParams = cueInkCanvas.layoutParams as LinearLayout.LayoutParams
-        canvasParams.height = defaultCanvasHeight
-        canvasParams.weight = 0f
-        cueInkCanvas.layoutParams = canvasParams
+        inkCanvas.layoutParams = mainParams
+        cueInkCanvas.layoutParams = cueParams
     }
 
     private fun hideCueColumn() {
@@ -1763,13 +1584,13 @@ class WritingActivity : AppCompatActivity() {
 
         closeDualCanvasOnyx()
         columnDivider.visibility = View.GONE
-        cueSplitLayout.visibility = View.GONE
+        cueInkCanvas.visibility = View.GONE
         viewToggleButton.visibility = if (columnLayoutLogic.showToggleButton) View.VISIBLE else View.GONE
         // Reset main column to fill width
-        val mainParams = mainSplitLayout.layoutParams as LinearLayout.LayoutParams
+        val mainParams = inkCanvas.layoutParams as LinearLayout.LayoutParams
         mainParams.width = 0
         mainParams.weight = 1f
-        mainSplitLayout.layoutParams = mainParams
+        inkCanvas.layoutParams = mainParams
         updateViewToggleIcon()
 
         // Restore main canvas per-view Onyx SDK
@@ -1786,9 +1607,9 @@ class WritingActivity : AppCompatActivity() {
         isFoldedToCues = true
 
         // Hide main column, show cue column
-        mainSplitLayout.visibility = View.GONE
+        inkCanvas.visibility = View.GONE
         cueIndicatorStrip.visibility = View.GONE
-        cueSplitLayout.visibility = View.VISIBLE
+        cueInkCanvas.visibility = View.VISIBLE
         contextRail.visibility = View.VISIBLE
         updateViewToggleIcon()
 
@@ -1796,12 +1617,9 @@ class WritingActivity : AppCompatActivity() {
         populateContextRail()
 
         // Set cue column weight to fill
-        val params = cueSplitLayout.layoutParams as LinearLayout.LayoutParams
+        val params = cueInkCanvas.layoutParams as LinearLayout.LayoutParams
         params.weight = 1f
-        cueSplitLayout.layoutParams = params
-
-        // Apply same split heights to cue column
-        applyCueSplitHeights()
+        cueInkCanvas.layoutParams = params
 
         // Close shared SDK if active (shouldn't be in portrait, but safety)
         closeDualCanvasOnyx()
@@ -1838,9 +1656,9 @@ class WritingActivity : AppCompatActivity() {
         isFoldedToCues = false
 
         // Show main column, hide cue column
-        mainSplitLayout.visibility = View.VISIBLE
+        inkCanvas.visibility = View.VISIBLE
         cueIndicatorStrip.visibility = View.VISIBLE
-        cueSplitLayout.visibility = View.GONE
+        cueInkCanvas.visibility = View.GONE
         contextRail.visibility = View.GONE
         updateViewToggleIcon()
 
@@ -2340,7 +2158,6 @@ class WritingActivity : AppCompatActivity() {
         documentModel.main.activeStrokes.clear()
         inkCanvas.clear()
         inkCanvas.scrollOffsetY = 0f
-        recognizedTextView.setParagraphs(emptyList())
 
         // Generate demo strokes + diagram area
         val showcase = TutorialDemoContent.generateShowcaseDocument(font, cw, ls, tm)

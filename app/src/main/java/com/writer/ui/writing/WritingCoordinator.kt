@@ -20,7 +20,6 @@ import com.writer.recognition.LineSegmenter
 import com.writer.recognition.StrokeClassifier
 import com.writer.model.DocumentData
 import com.writer.view.HandwritingCanvasView
-import com.writer.view.RecognizedTextView
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
@@ -29,7 +28,6 @@ class WritingCoordinator(
     private val columnModel: ColumnModel,
     private val recognizer: TextRecognizer,
     private val inkCanvas: HandwritingCanvasView,
-    private val textView: RecognizedTextView,
     private val scope: CoroutineScope,
     private val onStatusUpdate: (String) -> Unit
 ) : DiagramManagerHost {
@@ -134,7 +132,6 @@ class WritingCoordinator(
             override fun isDiagramLine(lineIndex: Int): Boolean = diagramManager.isDiagramLine(lineIndex)
             override fun onRecognitionComplete(lineIndex: Int) {
                 displayManager.displayHiddenLines()
-                displayManager.scheduleTextRefresh()
             }
         }
         recognitionManager = LineRecognitionManager(
@@ -152,7 +149,7 @@ class WritingCoordinator(
             override suspend fun doRecognizeLine(lineIndex: Int): String? = recognitionManager.doRecognizeLine(lineIndex)
             override fun isRecognizing(lineIndex: Int): Boolean = recognitionManager.isRecognizing(lineIndex)
         }
-        displayManager = DisplayManager(inkCanvas, textView, scope, lineSegmenter, paragraphBuilder, displayHost)
+        displayManager = DisplayManager(inkCanvas, scope, lineSegmenter, paragraphBuilder, displayHost)
         displayManager.onScrollAnimated = { onLinkedScroll?.invoke() }
 
         val routerHost = object : StrokeRouter.Host {
@@ -175,16 +172,10 @@ class WritingCoordinator(
         inkCanvas.onStrokeCompleted = { stroke -> onStrokeCompleted(stroke) }
         inkCanvas.onIdleTimeout = { displayManager.onIdle(currentLineIndex) }
         inkCanvas.onManualScroll = {
-            // Clamp text overscroll so text doesn't scroll completely out of view
-            val maxOverscroll = (textView.totalTextHeight - textView.height).coerceAtLeast(0).toFloat()
-            if (inkCanvas.textOverscroll > maxOverscroll) {
-                inkCanvas.textOverscroll = maxOverscroll
-            }
             displayManager.displayHiddenLines()
             onTutorialAction?.invoke("manual_scroll")
             onLinkedScroll?.invoke()
         }
-        textView.onTextTap = { lineIndex -> displayManager.scrollToLine(lineIndex) }
         inkCanvas.onDiagramShapeDetected = { stroke ->
             val result = diagramManager.onShapeDetected(stroke)
             onTutorialAction?.invoke("diagram_created")
@@ -209,7 +200,6 @@ class WritingCoordinator(
         inkCanvas.onStrokeCompleted = null
         inkCanvas.onIdleTimeout = null
         inkCanvas.onManualScroll = null
-        textView.onTextTap = null
         inkCanvas.onDiagramShapeDetected = null
         inkCanvas.onDiagramStrokeOverflow = null
         inkCanvas.onScratchOut = null
@@ -238,7 +228,6 @@ class WritingCoordinator(
 
     private fun onStrokeCompleted(stroke: InkStroke) {
         val elapsedMs = inkCanvas.lastFinishStrokeMs
-        displayManager.textRefreshJob?.cancel()
         if (gestureHandler.tryHandle(stroke)) {
             eventLog.recordEvent(lastStrokeIndex, StrokeEventLog.EventType.GESTURE_CONSUMED, elapsedMs = elapsedMs)
             if (elapsedMs > PERF_BUDGET_MS) Log.w(TAG, "Slow stroke: ${elapsedMs}ms (gesture)")
@@ -483,13 +472,6 @@ class WritingCoordinator(
         inkCanvas.textBlocks = columnModel.textBlocks.toList()
         displayManager.clearEverHiddenLines()
         displayManager.displayHiddenLines()
-    }
-
-    // --- Text display sync ---
-
-    /** Called when the text view is scrolled via overscroll. */
-    fun onManualTextScroll() {
-        displayManager.onManualTextScroll(inkCanvas.textOverscroll)
     }
 
     // --- Markdown export ---
