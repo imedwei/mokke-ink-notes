@@ -14,6 +14,7 @@ interface DisplayManagerHost {
     val diagramManager: DiagramManager
     val lineTextCache: Map<Int, String>
     val highestLineIndex: Int
+    val currentLineIndex: Int
     fun eagerRecognizeLine(lineIndex: Int)
     /** Batch-recognize a line, adding/removing from recognizingLines internally. */
     fun markRecognizing(lineIndex: Int)
@@ -143,6 +144,9 @@ class DisplayManager(
 
         everHiddenLines.addAll(currentlyHidden)
         everHiddenLines.retainAll(strokesByLine.keys)
+
+        inkCanvas.inlineTextRegions =
+            buildInlineTextRegions(host.lineTextCache, host.currentLineIndex)
 
         val uncached = everHiddenLines.filter { !host.lineTextCache.containsKey(it) && !host.isRecognizing(it) }
         if (uncached.isNotEmpty()) {

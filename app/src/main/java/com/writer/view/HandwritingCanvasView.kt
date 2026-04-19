@@ -92,6 +92,9 @@ class HandwritingCanvasView @JvmOverloads constructor(
     /** Text blocks (transcribed audio) in the current document. */
     var textBlocks: List<TextBlock> = emptyList()
 
+    /** Per-line HWR text regions pushed by DisplayManager for inline overlay rendering. */
+    var inlineTextRegions: List<com.writer.ui.writing.InlineTextRegion> = emptyList()
+
     /** Called when user finger-taps a TextBlock with linked audio. Second param is word-level startMs if available. */
     var onTextBlockTap: ((TextBlock, Long?) -> Unit)? = null
 

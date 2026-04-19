@@ -144,6 +144,7 @@ class WritingCoordinator(
             override val diagramManager: DiagramManager get() = this@WritingCoordinator.diagramManager
             override val lineTextCache: Map<Int, String> get() = this@WritingCoordinator.lineTextCache
             override val highestLineIndex: Int get() = this@WritingCoordinator.highestLineIndex
+            override val currentLineIndex: Int get() = this@WritingCoordinator.currentLineIndex
             override fun eagerRecognizeLine(lineIndex: Int) = recognitionManager.eagerRecognizeLine(lineIndex)
             override fun markRecognizing(lineIndex: Int) { recognitionManager.markRecognizing(lineIndex) }
             override suspend fun doRecognizeLine(lineIndex: Int): String? = recognitionManager.doRecognizeLine(lineIndex)
