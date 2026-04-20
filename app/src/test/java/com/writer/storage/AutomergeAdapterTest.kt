@@ -55,8 +55,10 @@ class AutomergeAdapterTest {
 
     @Test
     fun `roundTrip withTextBlocks`() {
+        // Post-v6: TextBlocks are owned by the transcript column.
         val data = DocumentData(
-            main = ColumnData(
+            main = ColumnData(),
+            transcript = ColumnData(
                 textBlocks = listOf(
                     TextBlock(
                         id = "tb1",
@@ -140,6 +142,7 @@ class AutomergeAdapterTest {
 
     @Test
     fun `roundTrip withCueColumn`() {
+        // Cue-anchored TextBlocks live in transcript with anchorTarget = CUE.
         val data = DocumentData(
             main = ColumnData(
                 strokes = listOf(
@@ -150,10 +153,19 @@ class AutomergeAdapterTest {
                 strokes = listOf(
                     InkStroke("cue-s1", listOf(StrokePoint(150f, lineY(2, 15f), 0.7f, 200L)))
                 ),
+            ),
+            transcript = ColumnData(
                 textBlocks = listOf(
-                    TextBlock(id = "cue-tb1", startLineIndex = 0, heightInLines = 1, text = "cue text")
-                )
-            )
+                    TextBlock(
+                        id = "cue-tb1",
+                        startLineIndex = 0,
+                        heightInLines = 1,
+                        text = "cue text",
+                        anchorTarget = com.writer.model.AnchorTarget.CUE,
+                        anchorLineIndex = 0,
+                    )
+                ),
+            ),
         )
         val result = roundTrip(data)
         assertDocumentEquals(data, result)
@@ -229,6 +241,16 @@ class AutomergeAdapterTest {
                     strokeType = StrokeType.RECTANGLE,
                 ),
             ),
+            diagramAreas = listOf(
+                DiagramArea(id = "d1", startLineIndex = 5, heightInLines = 3)
+            ),
+        ),
+        cue = ColumnData(
+            strokes = listOf(
+                InkStroke("cue-s1", listOf(StrokePoint(100f, lineY(1, 10f), 0.5f, 100L)))
+            )
+        ),
+        transcript = ColumnData(
             textBlocks = listOf(
                 TextBlock(
                     id = "tb1",
@@ -242,16 +264,11 @@ class AutomergeAdapterTest {
                         WordInfo("memo", 0.9f, 100, 300),
                         WordInfo("text", 0.85f, 400, 600),
                     ),
+                    anchorTarget = com.writer.model.AnchorTarget.MAIN,
+                    anchorLineIndex = 2,
+                    anchorMode = com.writer.model.AnchorMode.AUTO,
                 )
             ),
-            diagramAreas = listOf(
-                DiagramArea(id = "d1", startLineIndex = 5, heightInLines = 3)
-            ),
-        ),
-        cue = ColumnData(
-            strokes = listOf(
-                InkStroke("cue-s1", listOf(StrokePoint(100f, lineY(1, 10f), 0.5f, 100L)))
-            )
         ),
         audioRecordings = listOf(
             AudioRecording("rec-001.opus", 1000L, 5000L)
@@ -268,6 +285,7 @@ class AutomergeAdapterTest {
     private fun assertDocumentEquals(expected: DocumentData, actual: DocumentData) {
         assertColumnEquals("main", expected.main, actual.main)
         assertColumnEquals("cue", expected.cue, actual.cue)
+        assertColumnEquals("transcript", expected.transcript, actual.transcript)
         assertEquals("audioRecordings", expected.audioRecordings, actual.audioRecordings)
     }
 

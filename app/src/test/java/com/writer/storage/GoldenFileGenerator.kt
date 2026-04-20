@@ -1,5 +1,7 @@
 package com.writer.storage
 
+import com.writer.model.AnchorMode
+import com.writer.model.AnchorTarget
 import com.writer.model.AudioRecording
 import com.writer.model.ColumnData
 import com.writer.model.DiagramArea
@@ -35,8 +37,9 @@ class GoldenFileGeneratorRunner {
             "v1" -> GoldenFileGenerator.buildV1Document().toProto().encode()
             "v2" -> GoldenFileGenerator.buildV2Proto().encode()
             "v5" -> GoldenFileGenerator.buildV5Proto().encode()
+            "v6" -> GoldenFileGenerator.buildV6Proto().encode()
             // v3 and v4 golden files are fixed on disk — do not regenerate.
-            // The else branch uses the latest schema (currently v5).
+            // The else branch uses the latest schema (currently v6).
             else -> GoldenFileGenerator.buildCurrentProto().encode()
         }
         val file = File(outputDir, "document_$version.inkup")
@@ -74,13 +77,22 @@ object GoldenFileGenerator {
     }
 
     /**
+     * v6: adds the transcript column + per-TextBlock anchor metadata
+     * (anchor_line_index / anchor_target / anchor_mode).
+     */
+    fun buildV6Proto(): DocumentProto {
+        ScreenMetrics.init(1.875f, smallestWidthDp = 674, widthPixels = 1264, heightPixels = 1680)
+        return buildV6Document().toProto()
+    }
+
+    /**
      * Build a golden proto using the current schema. When adding a new schema
      * version, just update the proto definition — this generator always uses
      * the latest toProto() serialization.
      */
     fun buildCurrentProto(): DocumentProto {
         ScreenMetrics.init(1.875f, smallestWidthDp = 674, widthPixels = 1264, heightPixels = 1680)
-        return buildV5Document().toProto()
+        return buildV6Document().toProto()
     }
 
     fun buildV1Document() = DocumentData(
@@ -158,6 +170,50 @@ object GoldenFileGenerator {
                         heightInLines = 1,
                         text = "quick voice memo"
                     )
+                )
+            ),
+            audioRecordings = listOf(
+                AudioRecording(
+                    audioFile = "rec-001.opus",
+                    startTimeMs = 1700000000000L,
+                    durationMs = 60000L
+                )
+            )
+        )
+    }
+
+    /**
+     * v6: TextBlocks live in the transcript column with anchor metadata stamped.
+     * The main/cue columns carry strokes only. Written natively in the v6 shape
+     * (not via the legacy migration path) so the golden encodes the steady-state
+     * contract a fresh v6 save produces.
+     */
+    fun buildV6Document(): DocumentData {
+        val v1 = buildV1Document()
+        return v1.copy(
+            transcript = ColumnData(
+                textBlocks = listOf(
+                    TextBlock(
+                        id = "proto-text-block-1",
+                        startLineIndex = 10,
+                        heightInLines = 2,
+                        text = "transcribed lecture text",
+                        audioFile = "rec-001.opus",
+                        audioStartMs = 5000L,
+                        audioEndMs = 15000L,
+                        anchorTarget = AnchorTarget.MAIN,
+                        anchorLineIndex = 10,
+                        anchorMode = AnchorMode.AUTO,
+                    ),
+                    TextBlock(
+                        id = "proto-text-block-2",
+                        startLineIndex = 15,
+                        heightInLines = 1,
+                        text = "quick voice memo",
+                        anchorTarget = AnchorTarget.CUE,
+                        anchorLineIndex = 15,
+                        anchorMode = AnchorMode.MANUAL,
+                    ),
                 )
             ),
             audioRecordings = listOf(

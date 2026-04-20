@@ -46,12 +46,16 @@ class AutomergeGoldenTest {
         assertEquals(StrokeType.RECTANGLE, s2.strokeType)
         assertEquals(true, s2.isGeometric)
 
-        assertEquals(1, data.main.textBlocks.size)
-        val tb = data.main.textBlocks[0]
+        // v2→v3 Automerge migration: TextBlocks in main/cue are moved into the
+        // transcript column on read with anchorTarget stamped by column of origin.
+        assertEquals("main.textBlocks cleared post-migration", 0, data.main.textBlocks.size)
+        assertEquals(1, data.transcript.textBlocks.size)
+        val tb = data.transcript.textBlocks[0]
         assertEquals("golden-tb1", tb.id)
         assertEquals("Golden test memo", tb.text)
         assertEquals(3, tb.words.size)
         assertEquals("Golden", tb.words[0].text)
+        assertEquals(com.writer.model.AnchorTarget.MAIN, tb.anchorTarget)
 
         assertEquals(1, data.main.diagramAreas.size)
         assertEquals("golden-d1", data.main.diagramAreas[0].id)

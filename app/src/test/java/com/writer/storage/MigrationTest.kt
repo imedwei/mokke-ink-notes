@@ -50,7 +50,7 @@ class MigrationTest {
 
         assertEquals(data.main.strokes.size, recovered.main.strokes.size)
         assertEquals(data.main.strokes[0].strokeId, recovered.main.strokes[0].strokeId)
-        assertEquals(data.main.textBlocks, recovered.main.textBlocks)
+        assertEquals(data.transcript.textBlocks, recovered.transcript.textBlocks)
         assertEquals(data.audioRecordings, recovered.audioRecordings)
     }
 
@@ -138,6 +138,8 @@ class MigrationTest {
             strokes = listOf(
                 InkStroke("s1", listOf(StrokePoint(10f, 20f, 0.5f, 1000L)), 3f)
             ),
+        ),
+        transcript = ColumnData(
             textBlocks = listOf(
                 TextBlock(id = "tb1", startLineIndex = 2, heightInLines = 1, text = "memo")
             ),

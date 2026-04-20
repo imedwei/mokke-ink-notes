@@ -93,23 +93,21 @@ class AutomergeSyncTest {
         sync.sync(sampleData(1))
         val headsBefore = sync.document.heads.clone()
 
-        val data = sampleData(1).let {
-            it.copy(main = it.main.copy(
-                textBlocks = listOf(TextBlock(
-                    id = "tb-1", startLineIndex = 2, heightInLines = 1,
-                    text = "hello world",
-                    words = listOf(WordInfo("hello", 0.9f, 0, 300), WordInfo("world", 0.8f, 400, 700))
-                ))
-            ))
-        }
+        val data = sampleData(1).copy(
+            transcript = ColumnData(textBlocks = listOf(TextBlock(
+                id = "tb-1", startLineIndex = 2, heightInLines = 1,
+                text = "hello world",
+                words = listOf(WordInfo("hello", 0.9f, 0, 300), WordInfo("world", 0.8f, 400, 700))
+            )))
+        )
         sync.sync(data)
 
         val delta = sync.document.encodeChangesSince(headsBefore)
         assertTrue("delta should be small (was ${delta.size} bytes)", delta.size < 500)
 
         val result = AutomergeAdapter.fromAutomerge(sync.document)
-        assertEquals(1, result.main.textBlocks.size)
-        assertEquals("hello world", result.main.textBlocks[0].text)
+        assertEquals(1, result.transcript.textBlocks.size)
+        assertEquals("hello world", result.transcript.textBlocks[0].text)
     }
 
     @Test
@@ -183,14 +181,16 @@ class AutomergeSyncTest {
                         StrokePoint(110f + i * 20f, lineY + 15f, 0.7f, i * 1000L + 500),
                     ))
                 },
-                textBlocks = listOf(
-                    TextBlock("tb-1", 2, 1, "hello", "rec.ogg", 0, 1000,
-                        listOf(WordInfo("hello", 0.9f, 0, 500)))
-                ),
                 diagramAreas = listOf(DiagramArea("d-1", 5, 3)),
             ),
             cue = ColumnData(
                 strokes = listOf(InkStroke("cue-1", listOf(StrokePoint(100f, tm + ls + 10f, 0.5f, 100L))))
+            ),
+            transcript = ColumnData(
+                textBlocks = listOf(
+                    TextBlock("tb-1", 2, 1, "hello", "rec.ogg", 0, 1000,
+                        listOf(WordInfo("hello", 0.9f, 0, 500)))
+                ),
             ),
             audioRecordings = listOf(AudioRecording("rec.ogg", 1000L, 5000L)),
         )
@@ -204,7 +204,7 @@ class AutomergeSyncTest {
             assertEquals(data.main.strokes[i].strokeId, result.main.strokes[i].strokeId)
             assertEquals(data.main.strokes[i].points.size, result.main.strokes[i].points.size)
         }
-        assertEquals(data.main.textBlocks, result.main.textBlocks)
+        assertEquals(data.transcript.textBlocks, result.transcript.textBlocks)
         assertEquals(data.main.diagramAreas, result.main.diagramAreas)
         assertEquals(data.cue.strokes.size, result.cue.strokes.size)
         assertEquals(data.audioRecordings, result.audioRecordings)

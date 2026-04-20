@@ -1,5 +1,7 @@
 package com.writer.storage
 
+import com.writer.model.AnchorMode
+import com.writer.model.AnchorTarget
 import com.writer.model.AudioRecording
 import com.writer.model.ColumnData
 import com.writer.model.DiagramArea
@@ -28,7 +30,7 @@ import org.automerge.ObjectType
  */
 object AutomergeAdapter {
 
-    private const val SCHEMA_VERSION = 2
+    private const val SCHEMA_VERSION = 3
 
     fun toAutomerge(data: DocumentData): Document {
         val doc = Document()
@@ -38,6 +40,8 @@ object AutomergeAdapter {
         writeColumn(tx, mainId, data.main)
         val cueId = tx.set(ObjectId.ROOT, "cue", ObjectType.MAP)
         writeColumn(tx, cueId, data.cue)
+        val transcriptId = tx.set(ObjectId.ROOT, "transcript", ObjectType.MAP)
+        writeColumn(tx, transcriptId, data.transcript)
         val recsId = tx.set(ObjectId.ROOT, "audioRecordings", ObjectType.LIST)
         for ((i, rec) in data.audioRecordings.withIndex()) {
             val recId = tx.insert(recsId, i.toLong(), ObjectType.MAP)
@@ -50,12 +54,15 @@ object AutomergeAdapter {
     }
 
     fun fromAutomerge(doc: Document): DocumentData {
-        val main = readColumn(doc, ObjectId.ROOT, "main")
-        val cue = readColumn(doc, ObjectId.ROOT, "cue")
+        val rawMain = readColumn(doc, ObjectId.ROOT, "main")
+        val rawCue = readColumn(doc, ObjectId.ROOT, "cue")
+        val rawTranscript = readColumn(doc, ObjectId.ROOT, "transcript")
         val audioRecordings = readAudioRecordings(doc)
+        val (main, cue, transcript) = migrateTranscriptIfNeeded(rawMain, rawCue, rawTranscript)
         return DocumentData(
             main = main,
             cue = cue,
+            transcript = transcript,
             audioRecordings = audioRecordings,
         )
     }
@@ -69,13 +76,45 @@ object AutomergeAdapter {
         viewportStartLine: Int,
         viewportEndLine: Int,
     ): DocumentData {
-        val main = readColumn(doc, ObjectId.ROOT, "main", viewportStartLine, viewportEndLine)
-        val cue = readColumn(doc, ObjectId.ROOT, "cue", viewportStartLine, viewportEndLine)
+        val rawMain = readColumn(doc, ObjectId.ROOT, "main", viewportStartLine, viewportEndLine)
+        val rawCue = readColumn(doc, ObjectId.ROOT, "cue", viewportStartLine, viewportEndLine)
+        val rawTranscript = readColumn(doc, ObjectId.ROOT, "transcript", viewportStartLine, viewportEndLine)
         val audioRecordings = readAudioRecordings(doc)
+        val (main, cue, transcript) = migrateTranscriptIfNeeded(rawMain, rawCue, rawTranscript)
         return DocumentData(
             main = main,
             cue = cue,
+            transcript = transcript,
             audioRecordings = audioRecordings,
+        )
+    }
+
+    /** v2→v3 Automerge schema migration — same rule as the proto migration:
+     *  any TextBlocks still in main/cue move to transcript with anchorTarget stamped. */
+    private fun migrateTranscriptIfNeeded(
+        main: ColumnData, cue: ColumnData, transcript: ColumnData,
+    ): Triple<ColumnData, ColumnData, ColumnData> {
+        if (main.textBlocks.isEmpty() && cue.textBlocks.isEmpty()) {
+            return Triple(main, cue, transcript)
+        }
+        val fromMain = main.textBlocks.map {
+            it.copy(
+                anchorTarget = AnchorTarget.MAIN,
+                anchorLineIndex = if (it.anchorLineIndex >= 0) it.anchorLineIndex else it.startLineIndex,
+                anchorMode = AnchorMode.AUTO,
+            )
+        }
+        val fromCue = cue.textBlocks.map {
+            it.copy(
+                anchorTarget = AnchorTarget.CUE,
+                anchorLineIndex = if (it.anchorLineIndex >= 0) it.anchorLineIndex else it.startLineIndex,
+                anchorMode = AnchorMode.AUTO,
+            )
+        }
+        return Triple(
+            main.copy(textBlocks = emptyList()),
+            cue.copy(textBlocks = emptyList()),
+            transcript.copy(textBlocks = transcript.textBlocks + fromMain + fromCue),
         )
     }
 
@@ -109,6 +148,9 @@ object AutomergeAdapter {
             tx.set(tbId, "audioFile", tb.audioFile)
             tx.set(tbId, "audioStartMs", tb.audioStartMs.toDouble())
             tx.set(tbId, "audioEndMs", tb.audioEndMs.toDouble())
+            tx.set(tbId, "anchorLineIndex", tb.anchorLineIndex)
+            tx.set(tbId, "anchorTarget", tb.anchorTarget.name)
+            tx.set(tbId, "anchorMode", tb.anchorMode.name)
             val wordsId = tx.set(tbId, "words", ObjectType.LIST)
             for ((j, w) in tb.words.withIndex()) {
                 val wId = tx.insert(wordsId, j.toLong(), ObjectType.MAP)
@@ -193,6 +235,12 @@ object AutomergeAdapter {
         return doc.listItems(tbsId).orElse(emptyArray()).mapNotNull { item ->
             val tbId = item.asMapId() ?: return@mapNotNull null
             val words = readWords(doc, tbId)
+            val anchorTarget = doc.getString(tbId, "anchorTarget")?.let {
+                try { AnchorTarget.valueOf(it) } catch (_: Exception) { AnchorTarget.MAIN }
+            } ?: AnchorTarget.MAIN
+            val anchorMode = doc.getString(tbId, "anchorMode")?.let {
+                try { AnchorMode.valueOf(it) } catch (_: Exception) { AnchorMode.AUTO }
+            } ?: AnchorMode.AUTO
             TextBlock(
                 id = doc.getString(tbId, "id") ?: "",
                 startLineIndex = doc.getInt(tbId, "startLineIndex") ?: 0,
@@ -202,6 +250,9 @@ object AutomergeAdapter {
                 audioStartMs = doc.getDouble(tbId, "audioStartMs")?.toLong() ?: 0L,
                 audioEndMs = doc.getDouble(tbId, "audioEndMs")?.toLong() ?: 0L,
                 words = words,
+                anchorLineIndex = doc.getInt(tbId, "anchorLineIndex") ?: -1,
+                anchorTarget = anchorTarget,
+                anchorMode = anchorMode,
             )
         }
     }

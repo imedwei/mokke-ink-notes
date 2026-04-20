@@ -1,5 +1,7 @@
 package com.writer.storage
 
+import com.writer.model.AnchorMode
+import com.writer.model.AnchorTarget
 import com.writer.model.AudioRecording
 import com.writer.model.ColumnData
 import com.writer.model.DiagramArea
@@ -9,6 +11,8 @@ import com.writer.model.StrokePoint
 import com.writer.model.StrokeType
 import com.writer.model.TextBlock
 import com.writer.model.WordInfo
+import com.writer.model.proto.AnchorModeProto
+import com.writer.model.proto.AnchorTargetProto
 import com.writer.model.proto.AudioRecordingProto
 import com.writer.model.proto.ColumnDataProto
 import com.writer.model.proto.DiagramAreaProto
@@ -30,8 +34,8 @@ fun DocumentData.toProto(): DocumentProto {
     val ls = ScreenMetrics.lineSpacing
     return DocumentProto(
         main = main.toProto(ls),
-        cue = if (cue.strokes.isNotEmpty() || cue.lineTextCache.isNotEmpty() ||
-            cue.diagramAreas.isNotEmpty() || cue.textBlocks.isNotEmpty()) cue.toProto(ls) else null,
+        cue = if (cue.isEmpty()) null else cue.toProto(ls),
+        transcript = if (transcript.isEmpty()) null else transcript.toProto(ls),
         scroll_offset_y = scrollOffsetY / ls,
         highest_line_index = highestLineIndex,
         current_line_index = currentLineIndex,
@@ -40,6 +44,10 @@ fun DocumentData.toProto(): DocumentProto {
         audio_recordings = audioRecordings.map { it.toProto() }
     )
 }
+
+private fun ColumnData.isEmpty(): Boolean =
+    strokes.isEmpty() && lineTextCache.isEmpty() &&
+        diagramAreas.isEmpty() && textBlocks.isEmpty()
 
 private fun ColumnData.toProto(lineSpacing: Float): ColumnDataProto = ColumnDataProto(
     strokes = strokes.map { it.toProto(lineSpacing) },
@@ -95,8 +103,21 @@ fun TextBlock.toProto(): TextBlockProto = TextBlockProto(
     audio_file = audioFile,
     audio_start_ms = audioStartMs,
     audio_end_ms = audioEndMs,
-    words = words.map { it.toProto() }
+    words = words.map { it.toProto() },
+    anchor_line_index = anchorLineIndex,
+    anchor_target = anchorTarget.toProto(),
+    anchor_mode = anchorMode.toProto(),
 )
+
+fun AnchorTarget.toProto(): AnchorTargetProto = when (this) {
+    AnchorTarget.MAIN -> AnchorTargetProto.MAIN
+    AnchorTarget.CUE -> AnchorTargetProto.CUE
+}
+
+fun AnchorMode.toProto(): AnchorModeProto = when (this) {
+    AnchorMode.AUTO -> AnchorModeProto.AUTO
+    AnchorMode.MANUAL -> AnchorModeProto.MANUAL
+}
 
 fun WordInfo.toProto(): WordInfoProto = WordInfoProto(
     text = text,
@@ -138,14 +159,54 @@ fun DocumentProto.toDomain(): DocumentData {
     val isNormalized = (coordinate_system ?: COORD_SYSTEM_LEGACY) == COORD_SYSTEM_NORMALIZED
     val ls = ScreenMetrics.lineSpacing
     val tm = ScreenMetrics.topMargin
+    val rawMain = main?.toDomain(isNormalized, ls, tm) ?: ColumnData()
+    val rawCue = cue?.toDomain(isNormalized, ls, tm) ?: ColumnData()
+    val rawTranscript = transcript?.toDomain(isNormalized, ls, tm) ?: ColumnData()
+
+    // v5→v6 migration: if the legacy main/cue columns carry any TextBlocks, move
+    // them into the transcript column with anchors stamped by column of origin.
+    val (migratedMain, migratedCue, migratedTranscript) = migrateTranscript(
+        rawMain, rawCue, rawTranscript
+    )
+
     return DocumentData(
-        main = main?.toDomain(isNormalized, ls, tm) ?: ColumnData(),
-        cue = cue?.toDomain(isNormalized, ls, tm) ?: ColumnData(),
+        main = migratedMain,
+        cue = migratedCue,
+        transcript = migratedTranscript,
         scrollOffsetY = if (isNormalized) (scroll_offset_y ?: 0f) * ls else (scroll_offset_y ?: 0f),
         highestLineIndex = highest_line_index ?: 0,
         currentLineIndex = current_line_index ?: 0,
         userRenamed = user_renamed ?: false,
         audioRecordings = audio_recordings.map { it.toDomain() }
+    )
+}
+
+private fun migrateTranscript(
+    main: ColumnData,
+    cue: ColumnData,
+    transcript: ColumnData,
+): Triple<ColumnData, ColumnData, ColumnData> {
+    if (main.textBlocks.isEmpty() && cue.textBlocks.isEmpty()) {
+        return Triple(main, cue, transcript)
+    }
+    val fromMain = main.textBlocks.map {
+        it.copy(
+            anchorTarget = AnchorTarget.MAIN,
+            anchorLineIndex = if (it.anchorLineIndex >= 0) it.anchorLineIndex else it.startLineIndex,
+            anchorMode = AnchorMode.AUTO,
+        )
+    }
+    val fromCue = cue.textBlocks.map {
+        it.copy(
+            anchorTarget = AnchorTarget.CUE,
+            anchorLineIndex = if (it.anchorLineIndex >= 0) it.anchorLineIndex else it.startLineIndex,
+            anchorMode = AnchorMode.AUTO,
+        )
+    }
+    return Triple(
+        main.copy(textBlocks = emptyList()),
+        cue.copy(textBlocks = emptyList()),
+        transcript.copy(textBlocks = transcript.textBlocks + fromMain + fromCue),
     )
 }
 
@@ -240,8 +301,21 @@ fun TextBlockProto.toDomain(): TextBlock = TextBlock(
     audioFile = audio_file ?: "",
     audioStartMs = audio_start_ms ?: 0,
     audioEndMs = audio_end_ms ?: 0,
-    words = words.map { it.toDomain() }
+    words = words.map { it.toDomain() },
+    anchorLineIndex = anchor_line_index ?: -1,
+    anchorTarget = anchor_target?.toDomain() ?: AnchorTarget.MAIN,
+    anchorMode = anchor_mode?.toDomain() ?: AnchorMode.AUTO,
 )
+
+fun AnchorTargetProto.toDomain(): AnchorTarget = when (this) {
+    AnchorTargetProto.MAIN -> AnchorTarget.MAIN
+    AnchorTargetProto.CUE -> AnchorTarget.CUE
+}
+
+fun AnchorModeProto.toDomain(): AnchorMode = when (this) {
+    AnchorModeProto.AUTO -> AnchorMode.AUTO
+    AnchorModeProto.MANUAL -> AnchorMode.MANUAL
+}
 
 fun WordInfoProto.toDomain(): WordInfo = WordInfo(
     text = text ?: "",

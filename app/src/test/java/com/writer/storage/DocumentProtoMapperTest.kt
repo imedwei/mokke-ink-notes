@@ -372,16 +372,17 @@ class DocumentProtoMapperTest {
 
     @Test
     fun textBlocks_surviveRoundTrip() {
+        // Post-v6: TextBlocks live in the transcript column, not main.
         val blocks = listOf(
             TextBlock(id = "tb-1", startLineIndex = 2, heightInLines = 3,
                 text = "hello world", audioFile = "rec-001.opus",
                 audioStartMs = 1000L, audioEndMs = 5000L),
             TextBlock(id = "tb-2", startLineIndex = 8, heightInLines = 1, text = "quick memo")
         )
-        val data = DocumentData(main = ColumnData(textBlocks = blocks))
+        val data = DocumentData(main = ColumnData(), transcript = ColumnData(textBlocks = blocks))
         val result = roundTrip(data)
-        assertEquals(2, result.main.textBlocks.size)
-        with(result.main.textBlocks[0]) {
+        assertEquals(2, result.transcript.textBlocks.size)
+        with(result.transcript.textBlocks[0]) {
             assertEquals("tb-1", id)
             assertEquals(2, startLineIndex)
             assertEquals(3, heightInLines)
@@ -390,7 +391,7 @@ class DocumentProtoMapperTest {
             assertEquals(1000L, audioStartMs)
             assertEquals(5000L, audioEndMs)
         }
-        with(result.main.textBlocks[1]) {
+        with(result.transcript.textBlocks[1]) {
             assertEquals("tb-2", id)
             assertEquals(8, startLineIndex)
             assertEquals(1, heightInLines)
@@ -406,6 +407,7 @@ class DocumentProtoMapperTest {
         )))
         val result = roundTrip(data)
         assertEquals(0, result.main.textBlocks.size)
+        assertEquals(0, result.transcript.textBlocks.size)
         assertEquals(1, result.main.strokes.size)
     }
 
@@ -446,6 +448,8 @@ class DocumentProtoMapperTest {
                 strokes = listOf(InkStroke("s1", samplePoints(), 3f)),
                 lineTextCache = mapOf(0 to "written text"),
                 diagramAreas = listOf(DiagramArea(id = "d1", startLineIndex = 5, heightInLines = 3)),
+            ),
+            transcript = ColumnData(
                 textBlocks = listOf(TextBlock(id = "tb-1", startLineIndex = 10, heightInLines = 2, text = "transcribed"))
             ),
             audioRecordings = listOf(AudioRecording(audioFile = "rec-001.opus", startTimeMs = 1000L, durationMs = 5000L)),
@@ -455,8 +459,8 @@ class DocumentProtoMapperTest {
         val result = roundTrip(data)
         assertEquals(1, result.main.strokes.size)
         assertEquals(1, result.main.diagramAreas.size)
-        assertEquals(1, result.main.textBlocks.size)
-        assertEquals("transcribed", result.main.textBlocks[0].text)
+        assertEquals(1, result.transcript.textBlocks.size)
+        assertEquals("transcribed", result.transcript.textBlocks[0].text)
         assertEquals(1, result.audioRecordings.size)
         assertEquals("rec-001.opus", result.audioRecordings[0].audioFile)
         assertTrue(result.userRenamed)

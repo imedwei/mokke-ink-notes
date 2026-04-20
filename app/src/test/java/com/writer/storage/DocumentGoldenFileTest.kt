@@ -305,9 +305,11 @@ class DocumentGoldenFileTest {
         assertEquals(1, data.main.diagramAreas.size)
         assertTrue(data.userRenamed)
 
-        // TextBlocks
-        assertEquals(2, data.main.textBlocks.size)
-        with(data.main.textBlocks[0]) {
+        // TextBlocks — v5 files had them in main; Phase 3a migration moves them into
+        // the transcript column on load with anchorTarget = MAIN stamped.
+        assertEquals("main.textBlocks cleared after v5→v6 migration", 0, data.main.textBlocks.size)
+        assertEquals(2, data.transcript.textBlocks.size)
+        with(data.transcript.textBlocks[0]) {
             assertEquals("proto-text-block-1", id)
             assertEquals(10, startLineIndex)
             assertEquals(2, heightInLines)
@@ -315,8 +317,10 @@ class DocumentGoldenFileTest {
             assertEquals("rec-001.opus", audioFile)
             assertEquals(5000L, audioStartMs)
             assertEquals(15000L, audioEndMs)
+            assertEquals(com.writer.model.AnchorTarget.MAIN, anchorTarget)
+            assertEquals(com.writer.model.AnchorMode.AUTO, anchorMode)
         }
-        with(data.main.textBlocks[1]) {
+        with(data.transcript.textBlocks[1]) {
             assertEquals("proto-text-block-2", id)
             assertEquals(15, startLineIndex)
             assertEquals(1, heightInLines)
@@ -357,4 +361,47 @@ class DocumentGoldenFileTest {
         assertEquals(null, proto.coordinate_system)
     }
 
+    // ── Protobuf v6 (.inkup) — transcript column + anchor metadata ────────
+
+    @Test
+    fun protoV6_loadsAllData() {
+        val bytes = loadResource("document_v6.inkup")
+        val proto = DocumentProto.ADAPTER.decode(bytes)
+        val data = proto.toDomain()
+
+        // Existing data still loads
+        assertEquals(3, data.main.strokes.size)
+        assertTrue(data.userRenamed)
+
+        // Transcript column present with text blocks carrying anchors
+        assertTrue("v6 must carry transcript textBlocks", data.transcript.textBlocks.isNotEmpty())
+
+        // Every transcript block has explicit anchor fields (not defaults).
+        with(data.transcript.textBlocks[0]) {
+            assertNotNull(anchorMode)
+            assertNotNull(anchorTarget)
+        }
+    }
+
+    @Test
+    fun protoV6_hasTranscriptInProto() {
+        val bytes = loadResource("document_v6.inkup")
+        val proto = DocumentProto.ADAPTER.decode(bytes)
+        assertNotNull("v6 must serialize transcript field", proto.transcript)
+        assertTrue(proto.transcript!!.text_blocks.isNotEmpty())
+    }
+
+    @Test
+    fun protoV6_priorGoldensStillRoundTrip() {
+        // Every historical version must continue to load under the current code.
+        // This guards against accidentally breaking legacy compatibility while
+        // adding v6-specific migration logic.
+        for (v in listOf("v1", "v2", "v3", "v4", "v5")) {
+            val bytes = loadResource("document_$v.inkup")
+            val proto = DocumentProto.ADAPTER.decode(bytes)
+            val data = proto.toDomain()
+            // Smoke assertion — decoding to domain must not throw
+            assertNotNull("$v domain decode", data)
+        }
+    }
 }

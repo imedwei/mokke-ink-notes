@@ -83,6 +83,20 @@ message TextBlockProto {
     optional int64 audio_start_ms = 6 [default = 0];
     optional int64 audio_end_ms = 7 [default = 0];
     repeated WordInfoProto words = 8;
+    // v6: per-block anchor metadata. anchor_line_index = -1 means "use start_line_index".
+    optional int32 anchor_line_index = 9 [default = -1];
+    optional AnchorTargetProto anchor_target = 10 [default = MAIN];
+    optional AnchorModeProto anchor_mode = 11 [default = AUTO];
+}
+
+enum AnchorTargetProto {
+    MAIN = 0;
+    CUE = 1;
+}
+
+enum AnchorModeProto {
+    AUTO = 0;
+    MANUAL = 1;
 }
 
 message AudioRecordingProto {
@@ -110,4 +124,7 @@ message DocumentProto {
     // 1 = normalized line-units (convert on load using device LINE_SPACING)
     optional int32 coordinate_system = 7 [default = 0];
     repeated AudioRecordingProto audio_recordings = 8;
+    // v6: transcript column owns all audio-derived TextBlocks. Legacy documents
+    // are migrated on load — see DocumentProtoMapper.
+    optional ColumnDataProto transcript = 9;
 }

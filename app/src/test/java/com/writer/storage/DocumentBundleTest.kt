@@ -31,6 +31,8 @@ class DocumentBundleTest {
                 StrokePoint(30f, 40f, 0.8f, 2000L)
             ), 3f)),
             lineTextCache = mapOf(0 to "hello"),
+        ),
+        transcript = ColumnData(
             textBlocks = listOf(TextBlock(id = "tb1", startLineIndex = 2, heightInLines = 1, text = "memo"))
         ),
         audioRecordings = listOf(AudioRecording("rec-001.opus", 1000L, 5000L))
@@ -74,8 +76,8 @@ class DocumentBundleTest {
         val result = DocumentBundle.readZip(ByteArrayInputStream(bytes))
         assertEquals(1, result.data.main.strokes.size)
         assertEquals("hello", result.data.main.lineTextCache[0])
-        assertEquals(1, result.data.main.textBlocks.size)
-        assertEquals("memo", result.data.main.textBlocks[0].text)
+        assertEquals(1, result.data.transcript.textBlocks.size)
+        assertEquals("memo", result.data.transcript.textBlocks[0].text)
         assertEquals(1, result.data.audioRecordings.size)
     }
 

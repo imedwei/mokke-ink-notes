@@ -55,9 +55,11 @@ class AutomergeSync {
         val tx = document.startTransaction()
         val mainId = getMapId(document, ObjectId.ROOT, "main")
         val cueId = getMapId(document, ObjectId.ROOT, "cue")
+        val transcriptId = getMapId(document, ObjectId.ROOT, "transcript")
 
         if (mainId != null) syncColumn(tx, document, mainId, prev.main, newState.main)
         if (cueId != null) syncColumn(tx, document, cueId, prev.cue, newState.cue)
+        if (transcriptId != null) syncColumn(tx, document, transcriptId, prev.transcript, newState.transcript)
         syncAudioRecordings(tx, document, prev.audioRecordings, newState.audioRecordings)
 
         if (tx.commit().isPresent) {
@@ -221,6 +223,9 @@ class AutomergeSync {
                     tx.set(mapId, "audioFile", tb.audioFile)
                     tx.set(mapId, "audioStartMs", tb.audioStartMs.toDouble())
                     tx.set(mapId, "audioEndMs", tb.audioEndMs.toDouble())
+                    tx.set(mapId, "anchorLineIndex", tb.anchorLineIndex)
+                    tx.set(mapId, "anchorTarget", tb.anchorTarget.name)
+                    tx.set(mapId, "anchorMode", tb.anchorMode.name)
                     // Rewrite words list
                     val wordsId = tx.set(mapId, "words", ObjectType.LIST)
                     for ((j, w) in tb.words.withIndex()) {
@@ -273,6 +278,9 @@ class AutomergeSync {
         tx.set(tbId, "audioFile", tb.audioFile)
         tx.set(tbId, "audioStartMs", tb.audioStartMs.toDouble())
         tx.set(tbId, "audioEndMs", tb.audioEndMs.toDouble())
+        tx.set(tbId, "anchorLineIndex", tb.anchorLineIndex)
+        tx.set(tbId, "anchorTarget", tb.anchorTarget.name)
+        tx.set(tbId, "anchorMode", tb.anchorMode.name)
         val wordsId = tx.set(tbId, "words", ObjectType.LIST)
         for ((j, w) in tb.words.withIndex()) {
             val wId = tx.insert(wordsId, j.toLong(), ObjectType.MAP)
