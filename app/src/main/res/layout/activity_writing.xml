@@ -12,6 +12,23 @@
         android:orientation="horizontal"
         android:background="@color/white">
 
+        <!-- Transcript column: full-height canvas (Phase 3c — hidden until
+             the transcript display mode UI arrives in Phase 3d). -->
+        <com.writer.view.HandwritingCanvasView
+            android:id="@+id/transcriptInkCanvas"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:visibility="gone" />
+
+        <!-- Transcript divider (side-by-side layout only) -->
+        <View
+            android:id="@+id/transcriptColumnDivider"
+            android:layout_width="4dp"
+            android:layout_height="match_parent"
+            android:background="#AAAAAA"
+            android:visibility="gone" />
+
         <!-- Main column: full-height canvas (always visible) -->
         <com.writer.view.HandwritingCanvasView
             android:id="@+id/inkCanvas"

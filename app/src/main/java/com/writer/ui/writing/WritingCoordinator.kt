@@ -63,8 +63,6 @@ class WritingCoordinator(
     private var highestLineIndex = -1
     // Track which line the user is currently writing on
     private var currentLineIndex = -1
-    // Audio recordings associated with this document
-    private val audioRecordings = mutableListOf<com.writer.model.AudioRecording>()
     /** Audio player for TextBlock playback — lifecycle tied to document. */
     val audioPlayer = com.writer.audio.AudioPlayer(inkCanvas.context)
 
@@ -632,7 +630,7 @@ class WritingCoordinator(
             highestLineIndex = highestLineIndex,
             currentLineIndex = currentLineIndex,
             userRenamed = userRenamed,
-            audioRecordings = audioRecordings.toList()
+            audioRecordings = documentModel.audioRecordings.toList(),
         )
     }
 
@@ -641,15 +639,8 @@ class WritingCoordinator(
         highestLineIndex = data.highestLineIndex
         currentLineIndex = data.currentLineIndex
         userRenamed = data.userRenamed
-        audioRecordings.clear()
-        audioRecordings.addAll(data.audioRecordings)
+        documentModel.restoreAudioRecordings(data.audioRecordings)
     }
-
-    fun addAudioRecording(recording: com.writer.model.AudioRecording) {
-        audioRecordings.add(recording)
-    }
-
-    fun hasAnyRecording(): Boolean = audioRecordings.isNotEmpty()
 
     // Debounce timer for TextBlock replacement recognition
     private var textBlockReplaceJob: kotlinx.coroutines.Job? = null

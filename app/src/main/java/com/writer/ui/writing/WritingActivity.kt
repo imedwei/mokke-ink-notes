@@ -66,6 +66,11 @@ class WritingActivity : AppCompatActivity() {
     private lateinit var columnDivider: View
     private lateinit var cueIndicatorStrip: com.writer.view.CueIndicatorStrip
     private lateinit var contextRail: com.writer.view.CueIndicatorStrip
+
+    // Transcript column (owns all audio-derived TextBlocks)
+    private lateinit var transcriptInkCanvas: HandwritingCanvasView
+    private lateinit var transcriptColumnDivider: View
+    private var transcriptCoordinator: WritingCoordinator? = null
     private var cueCoordinator: WritingCoordinator? = null
     private var isLandscape = false
     private var isFoldedToCues = false
@@ -297,14 +302,20 @@ class WritingActivity : AppCompatActivity() {
         columnDivider = findViewById(R.id.columnDivider)
         cueIndicatorStrip = findViewById(R.id.cueIndicatorStrip)
         contextRail = findViewById(R.id.contextRail)
+
+        // Transcript column views (hidden until Phase 3d wires the drawer/fold UI)
+        transcriptInkCanvas = findViewById(R.id.transcriptInkCanvas)
+        transcriptColumnDivider = findViewById(R.id.transcriptColumnDivider)
+        transcriptInkCanvas.deferOnyxInit = true
         isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+        documentModel = DocumentModel()
         columnLayoutLogic = ColumnLayoutLogic(object : ColumnLayoutLogic.Host {
             override val isLargeScreen get() = ScreenMetrics.isLargeScreen
             override var isLandscape
                 get() = this@WritingActivity.isLandscape
                 set(value) { this@WritingActivity.isLandscape = value }
             override val hasAnyRecording: Boolean
-                get() = coordinator?.hasAnyRecording() == true
+                get() = documentModel.hasAnyRecording()
         })
 
         // Cue canvas defers Onyx init — gets SDK session via hover-based swap in landscape.
@@ -394,8 +405,6 @@ class WritingActivity : AppCompatActivity() {
         inkCanvas.touchFilter = touchFilter
         cueIndicatorStrip.touchFilter = touchFilter
         contextRail.touchFilter = touchFilter
-
-        documentModel = DocumentModel()
 
         val tutorialOverlay = findViewById<com.writer.view.TutorialOverlay>(R.id.tutorialOverlay)
 
@@ -557,6 +566,16 @@ class WritingActivity : AppCompatActivity() {
         // Restore cue column data into the model (views are populated in showCueColumn)
         documentModel.cue.activeStrokes.addAll(data.cue.strokes)
         documentModel.cue.diagramAreas.addAll(data.cue.diagramAreas)
+
+        // Restore transcript column data (coordinator + UI wired up in Phase 3d).
+        documentModel.transcript.activeStrokes.addAll(data.transcript.strokes)
+        documentModel.transcript.diagramAreas.addAll(data.transcript.diagramAreas)
+        documentModel.transcript.textBlocks.addAll(data.transcript.textBlocks)
+
+        // Audio recordings are document-level state; sync them to the runtime model
+        // so hasAnyRecording() / transcript visibility reflects what's on disk.
+        documentModel.restoreAudioRecordings(data.audioRecordings)
+        columnLayoutLogic.onRecordingsChanged()
     }
 
     /** Restore coordinator state (text cache, hidden lines) — no recognizer needed. */
@@ -639,10 +658,16 @@ class WritingActivity : AppCompatActivity() {
         coordinator?.reset()
         cueCoordinator?.stop()
         cueCoordinator?.reset()
+        transcriptCoordinator?.stop()
+        transcriptCoordinator?.reset()
         documentModel.main.activeStrokes.clear()
         documentModel.main.diagramAreas.clear()
         documentModel.cue.activeStrokes.clear()
         documentModel.cue.diagramAreas.clear()
+        documentModel.transcript.activeStrokes.clear()
+        documentModel.transcript.diagramAreas.clear()
+        documentModel.transcript.textBlocks.clear()
+        documentModel.restoreAudioRecordings(emptyList())
         inkCanvas.clear()
         cueInkCanvas.clear()
 
@@ -666,6 +691,12 @@ class WritingActivity : AppCompatActivity() {
 
                 documentModel.cue.activeStrokes.addAll(data.cue.strokes)
                 documentModel.cue.diagramAreas.addAll(data.cue.diagramAreas)
+
+                documentModel.transcript.activeStrokes.addAll(data.transcript.strokes)
+                documentModel.transcript.diagramAreas.addAll(data.transcript.diagramAreas)
+                documentModel.transcript.textBlocks.addAll(data.transcript.textBlocks)
+                documentModel.restoreAudioRecordings(data.audioRecordings)
+                columnLayoutLogic.onRecordingsChanged()
 
                 coordinator?.start()
                 coordinator?.restoreState(data)
@@ -716,10 +747,17 @@ class WritingActivity : AppCompatActivity() {
         coordinator?.reset()
         cueCoordinator?.stop()
         cueCoordinator?.reset()
+        transcriptCoordinator?.stop()
+        transcriptCoordinator?.reset()
         documentModel.main.activeStrokes.clear()
         documentModel.main.diagramAreas.clear()
         documentModel.cue.activeStrokes.clear()
         documentModel.cue.diagramAreas.clear()
+        documentModel.transcript.activeStrokes.clear()
+        documentModel.transcript.diagramAreas.clear()
+        documentModel.transcript.textBlocks.clear()
+        documentModel.restoreAudioRecordings(emptyList())
+        columnLayoutLogic.onRecordingsChanged()
         inkCanvas.clear()
         cueInkCanvas.clear()
 
@@ -1177,7 +1215,9 @@ class WritingActivity : AppCompatActivity() {
                 inkCanvas.partialTranscriptionText = ""
                 val startMs = words.firstOrNull()?.startMs ?: 0L
                 val endMs = words.lastOrNull()?.endMs ?: 0L
-                activeCoordinator?.insertTextBlock(
+                // All audio-derived TextBlocks live in the transcript column (Phase 3).
+                // The "active column at stop" rule is gone — recording always routes here.
+                ensureTranscriptCoordinator().insertTextBlock(
                     text, audioFile = recordingName, startMs = startMs, endMs = endMs, words = words
                 )
                 saveNow()
@@ -1233,6 +1273,11 @@ class WritingActivity : AppCompatActivity() {
 
         if (audioBytes != null) {
             val recordingName = "rec-${lectureRecordingStartMs}.ogg"
+            val durationMs = System.currentTimeMillis() - lectureRecordingStartMs
+            documentModel.addAudioRecording(
+                com.writer.model.AudioRecording(recordingName, lectureRecordingStartMs, durationMs)
+            )
+            columnLayoutLogic.onRecordingsChanged()
             val snapshot = createSaveSnapshot()
             if (snapshot != null) {
                 DocumentStorage.save(this, snapshot.name, snapshot.state, mapOf(recordingName to audioBytes))
@@ -1404,10 +1449,15 @@ class WritingActivity : AppCompatActivity() {
         coordinator?.reset()
         cueCoordinator?.stop()
         cueCoordinator?.reset()
+        transcriptCoordinator?.stop()
+        transcriptCoordinator?.reset()
         documentModel.main.activeStrokes.clear()
         documentModel.main.diagramAreas.clear()
         documentModel.cue.activeStrokes.clear()
         documentModel.cue.diagramAreas.clear()
+        documentModel.transcript.activeStrokes.clear()
+        documentModel.transcript.diagramAreas.clear()
+        documentModel.transcript.textBlocks.clear()
         inkCanvas.clear()
         cueInkCanvas.clear()
 
@@ -1419,6 +1469,12 @@ class WritingActivity : AppCompatActivity() {
 
         documentModel.cue.activeStrokes.addAll(data.cue.strokes)
         documentModel.cue.diagramAreas.addAll(data.cue.diagramAreas)
+
+        documentModel.transcript.activeStrokes.addAll(data.transcript.strokes)
+        documentModel.transcript.diagramAreas.addAll(data.transcript.diagramAreas)
+        documentModel.transcript.textBlocks.addAll(data.transcript.textBlocks)
+        documentModel.restoreAudioRecordings(data.audioRecordings)
+        columnLayoutLogic.onRecordingsChanged()
 
         coordinator?.start()
         coordinator?.restoreState(data)
@@ -1475,6 +1531,26 @@ class WritingActivity : AppCompatActivity() {
         )
 
         orientationManager.updateButtonVisibility()
+    }
+
+    /** Lazily build the transcript coordinator. Safe to call before the transcript
+     *  canvas becomes user-visible (Phase 3d) — it just holds the column's state
+     *  and receives TextBlock inserts. Once started, it must survive for the
+     *  activity lifetime; we don't tear it down on drawer close. */
+    private fun ensureTranscriptCoordinator(): WritingCoordinator {
+        val existing = transcriptCoordinator
+        if (existing != null) return existing
+        val created = WritingCoordinator(
+            documentModel = documentModel,
+            columnModel = documentModel.transcript,
+            recognizer = recognizer,
+            inkCanvas = transcriptInkCanvas,
+            scope = lifecycleScope,
+            onStatusUpdate = {},
+        )
+        transcriptCoordinator = created
+        created.start()
+        return created
     }
 
     private fun ensureCueCoordinator() {
@@ -2047,7 +2123,12 @@ class WritingActivity : AppCompatActivity() {
             strokes = documentModel.cue.activeStrokes.toList(),
             diagramAreas = documentModel.cue.diagramAreas.toList()
         )
-        val state = mainState.copy(cue = cueColumnData)
+        val transcriptColumnData = transcriptCoordinator?.getColumnState() ?: ColumnData(
+            strokes = documentModel.transcript.activeStrokes.toList(),
+            diagramAreas = documentModel.transcript.diagramAreas.toList(),
+            textBlocks = documentModel.transcript.textBlocks.toList(),
+        )
+        val state = mainState.copy(cue = cueColumnData, transcript = transcriptColumnData)
         return AutoSaver.Snapshot(
             name = currentDocumentName,
             state = state,
