@@ -303,6 +303,8 @@ class WritingActivity : AppCompatActivity() {
             override var isLandscape
                 get() = this@WritingActivity.isLandscape
                 set(value) { this@WritingActivity.isLandscape = value }
+            override val hasAnyRecording: Boolean
+                get() = coordinator?.hasAnyRecording() == true
         })
 
         // Cue canvas defers Onyx init — gets SDK session via hover-based swap in landscape.

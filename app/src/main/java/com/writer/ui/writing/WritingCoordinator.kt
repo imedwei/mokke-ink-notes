@@ -649,6 +649,8 @@ class WritingCoordinator(
         audioRecordings.add(recording)
     }
 
+    fun hasAnyRecording(): Boolean = audioRecordings.isNotEmpty()
+
     // Debounce timer for TextBlock replacement recognition
     private var textBlockReplaceJob: kotlinx.coroutines.Job? = null
     private var pendingReplaceBlock: TextBlock? = null

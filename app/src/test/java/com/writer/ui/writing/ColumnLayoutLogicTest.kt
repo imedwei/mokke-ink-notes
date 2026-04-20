@@ -276,10 +276,161 @@ class ColumnLayoutLogicTest {
         assertFalse(logic.canFoldUnfold)
     }
 
+    // ── Phase 3b: transcript column visibility + tri-state activeColumn ────
+
+    @Test
+    fun `transcript hidden when no recordings`() {
+        host = FakeHost(isLargeScreen = true, isLandscape = true, hasAnyRecording = false)
+        logic = ColumnLayoutLogic(host)
+        assertFalse("transcript hides when document has no audio", logic.transcriptVisible)
+    }
+
+    @Test
+    fun `transcript visible appears after first recording`() {
+        host = FakeHost(isLargeScreen = true, isLandscape = true, hasAnyRecording = false)
+        logic = ColumnLayoutLogic(host)
+        assertFalse(logic.transcriptVisible)
+
+        host.hasAnyRecording = true
+        logic.onRecordingsChanged()
+
+        assertTrue("transcript becomes visible after first recording", logic.transcriptVisible)
+    }
+
+    @Test
+    fun `transcript hides when last recording deleted`() {
+        host = FakeHost(isLargeScreen = true, isLandscape = true, hasAnyRecording = true)
+        logic = ColumnLayoutLogic(host)
+        assertTrue(logic.transcriptVisible)
+
+        host.hasAnyRecording = false
+        logic.onRecordingsChanged()
+
+        assertFalse("transcript hides when last recording removed", logic.transcriptVisible)
+    }
+
+    @Test
+    fun `transcript visibility fires listener`() {
+        host = FakeHost(isLargeScreen = true, isLandscape = true, hasAnyRecording = false)
+        logic = ColumnLayoutLogic(host)
+        val changes = mutableListOf<Boolean>()
+        logic.onTranscriptVisibilityChanged = { changes.add(it) }
+
+        host.hasAnyRecording = true
+        logic.onRecordingsChanged()
+        host.hasAnyRecording = false
+        logic.onRecordingsChanged()
+
+        assertEquals(listOf(true, false), changes)
+    }
+
+    @Test
+    fun `visibility listener does not fire when unchanged`() {
+        host = FakeHost(isLargeScreen = true, isLandscape = true, hasAnyRecording = true)
+        logic = ColumnLayoutLogic(host)
+        val changes = mutableListOf<Boolean>()
+        logic.onTranscriptVisibilityChanged = { changes.add(it) }
+
+        // Same state — no fire
+        logic.onRecordingsChanged()
+        assertTrue("no listener fire when state is unchanged", changes.isEmpty())
+    }
+
+    // ── Phase 3b: transcriptDisplayMode per form factor ─────────────────────
+
+    @Test
+    fun `tabXc landscape shows three columns side by side`() {
+        host = FakeHost(isLargeScreen = true, isLandscape = true, hasAnyRecording = true)
+        logic = ColumnLayoutLogic(host)
+        assertEquals(
+            ColumnLayoutLogic.TranscriptDisplayMode.SIDE_BY_SIDE,
+            logic.transcriptDisplayMode
+        )
+    }
+
+    @Test
+    fun `tabXc portrait renders transcript as drawer`() {
+        host = FakeHost(isLargeScreen = true, isLandscape = false, hasAnyRecording = true)
+        logic = ColumnLayoutLogic(host)
+        assertEquals(
+            ColumnLayoutLogic.TranscriptDisplayMode.DRAWER,
+            logic.transcriptDisplayMode
+        )
+    }
+
+    @Test
+    fun `palma landscape renders transcript as drawer`() {
+        // Three side-by-side columns don't fit on small landscape — use a drawer.
+        host = FakeHost(isLargeScreen = false, isLandscape = true, hasAnyRecording = true)
+        logic = ColumnLayoutLogic(host)
+        assertEquals(
+            ColumnLayoutLogic.TranscriptDisplayMode.DRAWER,
+            logic.transcriptDisplayMode
+        )
+    }
+
+    @Test
+    fun `palma portrait fold unfold cycles three views`() {
+        host = FakeHost(isLargeScreen = false, isLandscape = false, hasAnyRecording = true)
+        logic = ColumnLayoutLogic(host)
+        assertEquals(
+            ColumnLayoutLogic.TranscriptDisplayMode.FOLD,
+            logic.transcriptDisplayMode
+        )
+    }
+
+    // ── Phase 3b: tri-state activeColumn ────────────────────────────────────
+
+    @Test
+    fun `activeColumn tri-state default is MAIN`() {
+        assertEquals(ColumnLayoutLogic.ActiveColumn.MAIN, logic.activeColumn)
+    }
+
+    @Test
+    fun `activeColumn tri-state transitions MAIN to CUE to TRANSCRIPT`() {
+        host = FakeHost(isLargeScreen = true, isLandscape = true, hasAnyRecording = true)
+        logic = ColumnLayoutLogic(host)
+
+        logic.activeColumn = ColumnLayoutLogic.ActiveColumn.CUE
+        assertEquals(ColumnLayoutLogic.ActiveColumn.CUE, logic.activeColumn)
+
+        logic.activeColumn = ColumnLayoutLogic.ActiveColumn.TRANSCRIPT
+        assertEquals(ColumnLayoutLogic.ActiveColumn.TRANSCRIPT, logic.activeColumn)
+
+        logic.activeColumn = ColumnLayoutLogic.ActiveColumn.MAIN
+        assertEquals(ColumnLayoutLogic.ActiveColumn.MAIN, logic.activeColumn)
+    }
+
+    // ── Phase 3b: orientation change behavior ───────────────────────────────
+
+    @Test
+    fun `orientation change preserves transcript visibility and resets cue expand`() {
+        host = FakeHost(isLargeScreen = true, isLandscape = false, hasAnyRecording = true)
+        logic = ColumnLayoutLogic(host)
+        logic.toggleCueExpand()
+        assertTrue(logic.isCueExpanded)
+        assertTrue(logic.transcriptVisible)
+
+        logic.onOrientationChanged(nowLandscape = true)
+
+        assertFalse("cue expand resets on rotation", logic.isCueExpanded)
+        assertTrue("transcript visibility persists across rotation", logic.transcriptVisible)
+    }
+
+    @Test
+    fun `toggleCueExpand does not alter transcriptVisible`() {
+        host = FakeHost(isLargeScreen = true, isLandscape = false, hasAnyRecording = true)
+        logic = ColumnLayoutLogic(host)
+        val before = logic.transcriptVisible
+        logic.toggleCueExpand()
+        assertEquals("cue expand does not touch transcript visibility", before, logic.transcriptVisible)
+    }
+
     // ── Fake host ───────────────────────────────────────────────────────────
 
     private class FakeHost(
         override val isLargeScreen: Boolean,
-        override var isLandscape: Boolean
+        override var isLandscape: Boolean,
+        override var hasAnyRecording: Boolean = false,
     ) : ColumnLayoutLogic.Host
 }
