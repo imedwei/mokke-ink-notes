@@ -52,7 +52,11 @@ class ColumnLayoutLogic(private val host: Host) {
         FOLD,
     }
 
-    data class ColumnWidths(val mainWidthPx: Int, val cueWidthPx: Int)
+    data class ColumnWidths(
+        val mainWidthPx: Int,
+        val cueWidthPx: Int,
+        val transcriptWidthPx: Int = 0,
+    )
 
     /** True when the main + cue columns are both visible side by side. */
     val isDualColumn: Boolean
@@ -128,21 +132,29 @@ class ColumnLayoutLogic(private val host: Host) {
      * Returns the column widths in pixels for the current state.
      * On large screens, widths are fixed pixel values from [ScreenMetrics].
      * On small screens, returns zero (use layout weights instead).
+     *
+     * When the transcript column is visible in SIDE_BY_SIDE mode, its width is
+     * carved out of the cue column — never main — so main's writing space stays
+     * fixed across the two-col → three-col transition.
      */
     fun columnWidths(): ColumnWidths {
         if (!host.isLargeScreen) return ColumnWidths(0, 0)
+        val transcript = if (transcriptVisible &&
+            transcriptDisplayMode == TranscriptDisplayMode.SIDE_BY_SIDE
+        ) ScreenMetrics.portraitCueWidthPx else 0
         return when {
             host.isLandscape -> ColumnWidths(
                 mainWidthPx = ScreenMetrics.mainColumnWidthPx,
-                cueWidthPx = ScreenMetrics.landscapeCueWidthPx
+                cueWidthPx = ScreenMetrics.landscapeCueWidthPx - transcript,
+                transcriptWidthPx = transcript,
             )
             isCueExpanded -> ColumnWidths(
                 mainWidthPx = ScreenMetrics.expandedPortraitMainWidthPx,
-                cueWidthPx = ScreenMetrics.landscapeCueWidthPx
+                cueWidthPx = ScreenMetrics.landscapeCueWidthPx,
             )
             else -> ColumnWidths(
                 mainWidthPx = ScreenMetrics.mainColumnWidthPx,
-                cueWidthPx = ScreenMetrics.portraitCueWidthPx
+                cueWidthPx = ScreenMetrics.portraitCueWidthPx,
             )
         }
     }

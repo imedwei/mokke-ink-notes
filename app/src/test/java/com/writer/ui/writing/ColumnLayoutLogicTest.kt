@@ -426,6 +426,97 @@ class ColumnLayoutLogicTest {
         assertEquals("cue expand does not touch transcript visibility", before, logic.transcriptVisible)
     }
 
+    // ── Phase 3d.1: three-column widths for SIDE_BY_SIDE mode ───────────────
+
+    @Test
+    fun `columnWidths returns zero transcript width when transcript hidden`() {
+        initTabXC()
+        host = FakeHost(isLargeScreen = true, isLandscape = true, hasAnyRecording = false)
+        logic = ColumnLayoutLogic(host)
+        assertEquals("no transcript when no recordings", 0, logic.columnWidths().transcriptWidthPx)
+    }
+
+    @Test
+    fun `columnWidths returns zero transcript width in DRAWER mode`() {
+        // Large+portrait: transcript is visible but displayed as drawer — not in-flow.
+        initTabXC()
+        host = FakeHost(isLargeScreen = true, isLandscape = false, hasAnyRecording = true)
+        logic = ColumnLayoutLogic(host)
+        assertEquals(ColumnLayoutLogic.TranscriptDisplayMode.DRAWER, logic.transcriptDisplayMode)
+        assertEquals("drawer doesn't occupy a column slot", 0, logic.columnWidths().transcriptWidthPx)
+    }
+
+    @Test
+    fun `columnWidths returns zero transcript width in FOLD mode`() {
+        // Small+portrait uses layout weights (all widths = 0) anyway, but the transcript
+        // slot is specifically 0 since it's a fold stop, not an in-flow column.
+        initPalma()
+        host = FakeHost(isLargeScreen = false, isLandscape = false, hasAnyRecording = true)
+        logic = ColumnLayoutLogic(host)
+        assertEquals(ColumnLayoutLogic.TranscriptDisplayMode.FOLD, logic.transcriptDisplayMode)
+        assertEquals(0, logic.columnWidths().transcriptWidthPx)
+    }
+
+    @Test
+    fun `columnWidths returns nonzero transcript width on large landscape when visible`() {
+        initTabXC()
+        host = FakeHost(isLargeScreen = true, isLandscape = true, hasAnyRecording = true)
+        logic = ColumnLayoutLogic(host)
+        assertEquals(ColumnLayoutLogic.TranscriptDisplayMode.SIDE_BY_SIDE, logic.transcriptDisplayMode)
+        val widths = logic.columnWidths()
+        assertTrue("transcript column is given width > 0", widths.transcriptWidthPx > 0)
+    }
+
+    @Test
+    fun `mainWidth unchanged when transcript appears`() {
+        // Per plan: transcript width is taken from cue, not main, so main's writing
+        // space stays fixed at ScreenMetrics.mainColumnWidthPx.
+        initTabXC()
+        host = FakeHost(isLargeScreen = true, isLandscape = true, hasAnyRecording = false)
+        logic = ColumnLayoutLogic(host)
+        val mainBefore = logic.columnWidths().mainWidthPx
+
+        host.hasAnyRecording = true
+        logic.onRecordingsChanged()
+        val mainAfter = logic.columnWidths().mainWidthPx
+
+        assertEquals("main column width is not reduced by transcript appearance", mainBefore, mainAfter)
+    }
+
+    @Test
+    fun `cueWidth shrinks when transcript appears on large landscape`() {
+        initTabXC()
+        host = FakeHost(isLargeScreen = true, isLandscape = true, hasAnyRecording = false)
+        logic = ColumnLayoutLogic(host)
+        val cueBefore = logic.columnWidths().cueWidthPx
+
+        host.hasAnyRecording = true
+        logic.onRecordingsChanged()
+        val widths = logic.columnWidths()
+
+        assertTrue(
+            "cue shrinks to make room for transcript: was $cueBefore, is ${widths.cueWidthPx}",
+            widths.cueWidthPx < cueBefore
+        )
+    }
+
+    @Test
+    fun `three-column widths sum consistently with two-column layout`() {
+        // (transcript + main + cue) on three-column == (main + cue) on two-column — the
+        // transcript width is entirely subtracted from cue.
+        initTabXC()
+        host = FakeHost(isLargeScreen = true, isLandscape = true, hasAnyRecording = false)
+        logic = ColumnLayoutLogic(host)
+        val twoColSum = logic.columnWidths().mainWidthPx + logic.columnWidths().cueWidthPx
+
+        host.hasAnyRecording = true
+        logic.onRecordingsChanged()
+        val w = logic.columnWidths()
+        val threeColSum = w.transcriptWidthPx + w.mainWidthPx + w.cueWidthPx
+
+        assertEquals("three-col total matches two-col total", twoColSum, threeColSum)
+    }
+
     // ── Fake host ───────────────────────────────────────────────────────────
 
     private class FakeHost(

@@ -317,6 +317,9 @@ class WritingActivity : AppCompatActivity() {
             override val hasAnyRecording: Boolean
                 get() = documentModel.hasAnyRecording()
         })
+        columnLayoutLogic.onTranscriptVisibilityChanged = { visible ->
+            onTranscriptVisibilityChanged(visible)
+        }
 
         // Cue canvas defers Onyx init — gets SDK session via hover-based swap in landscape.
         cueInkCanvas.deferOnyxInit = true
@@ -1526,11 +1529,56 @@ class WritingActivity : AppCompatActivity() {
                         cueIndicatorStrip.visibility = View.VISIBLE
                         updateCueIndicatorStrip()
                     }
+                    // Orientation change may switch transcriptDisplayMode
+                    // (SIDE_BY_SIDE ↔ DRAWER) — refresh the transcript's presentation.
+                    refreshTranscriptPresentation()
                 }
             }
         )
 
         orientationManager.updateButtonVisibility()
+    }
+
+    /** Re-evaluate transcript column presentation for the current display mode. Called
+     *  on orientation change and after the initial document load. */
+    private fun refreshTranscriptPresentation() {
+        onTranscriptVisibilityChanged(columnLayoutLogic.transcriptVisible)
+    }
+
+    /** Responds to transcript column visibility transitions. In SIDE_BY_SIDE mode
+     *  (large+landscape) the column joins the in-flow column layout; DRAWER and
+     *  FOLD modes are handled in later Phase 3d sub-slices. In any non-SIDE_BY_SIDE
+     *  mode the in-flow canvas is hidden — if DRAWER/FOLD want to show the column
+     *  later they do it outside the main LinearLayout. */
+    private fun onTranscriptVisibilityChanged(visible: Boolean) {
+        val mode = columnLayoutLogic.transcriptDisplayMode
+        if (mode == ColumnLayoutLogic.TranscriptDisplayMode.SIDE_BY_SIDE && visible) {
+            showTranscriptSideBySide()
+        } else {
+            hideTranscriptSideBySide()
+        }
+    }
+
+    private fun showTranscriptSideBySide() {
+        transcriptInkCanvas.visibility = View.VISIBLE
+        transcriptColumnDivider.visibility = View.VISIBLE
+        ensureTranscriptCoordinator()
+        // Load persisted transcript-column strokes / text blocks into the canvas.
+        transcriptInkCanvas.loadStrokes(documentModel.transcript.activeStrokes.toList())
+        transcriptInkCanvas.diagramAreas = documentModel.transcript.diagramAreas.toList()
+        transcriptInkCanvas.textBlocks = documentModel.transcript.textBlocks.toList()
+        applyColumnWidths()
+        transcriptInkCanvas.post {
+            transcriptInkCanvas.drawToSurface()
+        }
+        Log.i(TAG, "Transcript column shown (side-by-side)")
+    }
+
+    private fun hideTranscriptSideBySide() {
+        transcriptInkCanvas.visibility = View.GONE
+        transcriptColumnDivider.visibility = View.GONE
+        applyColumnWidths()
+        Log.i(TAG, "Transcript column hidden")
     }
 
     /** Lazily build the transcript coordinator. Safe to call before the transcript
@@ -1635,21 +1683,27 @@ class WritingActivity : AppCompatActivity() {
         val widths = columnLayoutLogic.columnWidths()
         val mainParams = inkCanvas.layoutParams as LinearLayout.LayoutParams
         val cueParams = cueInkCanvas.layoutParams as LinearLayout.LayoutParams
+        val transcriptParams = transcriptInkCanvas.layoutParams as LinearLayout.LayoutParams
         if (widths.mainWidthPx > 0) {
             // Large screen: fixed pixel widths
             mainParams.width = widths.mainWidthPx
             mainParams.weight = 0f
             cueParams.width = widths.cueWidthPx
             cueParams.weight = 0f
+            transcriptParams.width = widths.transcriptWidthPx
+            transcriptParams.weight = 0f
         } else {
             // Small screen: equal weights (50/50)
             mainParams.width = 0
             mainParams.weight = 1f
             cueParams.width = 0
             cueParams.weight = 1f
+            transcriptParams.width = 0
+            transcriptParams.weight = 0f
         }
         inkCanvas.layoutParams = mainParams
         cueInkCanvas.layoutParams = cueParams
+        transcriptInkCanvas.layoutParams = transcriptParams
     }
 
     private fun hideCueColumn() {
