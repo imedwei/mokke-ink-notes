@@ -104,8 +104,19 @@ class ColumnLayoutLogic(private val host: Host) {
             else -> TranscriptDisplayMode.DRAWER
         }
 
-    /** Which column currently owns pen input / undo-redo scope. Default MAIN. */
+    /** Which column currently owns pen input / undo-redo scope. In FOLD mode this
+     *  is also the fold-view state machine (which of main / cue / transcript the
+     *  user is viewing full-screen). Default MAIN. */
     var activeColumn: ActiveColumn = ActiveColumn.MAIN
+        set(value) {
+            if (field == value) return
+            field = value
+            onActiveColumnChanged?.invoke(value)
+        }
+
+    /** Fires on transitions of [activeColumn] — activity uses this to swap
+     *  visible canvas in FOLD mode (small portrait). */
+    var onActiveColumnChanged: ((ActiveColumn) -> Unit)? = null
 
     /** Whether the transcript drawer is currently open. Only meaningful in DRAWER mode;
      *  SIDE_BY_SIDE has no drawer concept (transcript is always in-flow when visible)
@@ -128,12 +139,28 @@ class ColumnLayoutLogic(private val host: Host) {
         isTranscriptDrawerOpen = !isTranscriptDrawerOpen
     }
 
-    /** Called when orientation changes. Resets cue-expand and drawer state. Transcript
-     *  visibility itself is tied to document contents, not orientation, and survives. */
+    /** Advance the fold-view state machine: MAIN → CUE → (TRANSCRIPT if visible) → MAIN.
+     *  Only applies in FOLD mode (small screen, portrait). In other modes the user has
+     *  other navigation affordances (side-by-side columns, drawer) and fold cycling is a
+     *  no-op. Fires [onActiveColumnChanged] on every real transition. */
+    fun cycleFold() {
+        if (!canFoldUnfold) return
+        val next = when (activeColumn) {
+            ActiveColumn.MAIN -> ActiveColumn.CUE
+            ActiveColumn.CUE -> if (transcriptVisible) ActiveColumn.TRANSCRIPT else ActiveColumn.MAIN
+            ActiveColumn.TRANSCRIPT -> ActiveColumn.MAIN
+        }
+        activeColumn = next
+    }
+
+    /** Called when orientation changes. Resets cue-expand, drawer, and fold-view
+     *  state. Transcript visibility itself is tied to document contents, not
+     *  orientation, and survives. */
     fun onOrientationChanged(nowLandscape: Boolean) {
         host.isLandscape = nowLandscape
         isCueExpanded = false
         isTranscriptDrawerOpen = false
+        activeColumn = ActiveColumn.MAIN
     }
 
     /** Called by the activity after an AudioRecording is added or removed from the document. */
@@ -141,7 +168,13 @@ class ColumnLayoutLogic(private val host: Host) {
         val nowVisible = host.hasAnyRecording
         if (nowVisible == transcriptVisible) return
         transcriptVisible = nowVisible
-        if (!nowVisible) isTranscriptDrawerOpen = false
+        if (!nowVisible) {
+            isTranscriptDrawerOpen = false
+            // If the user was stranded on the transcript fold-view when the column
+            // disappeared, revert them to MAIN rather than leaving them on an
+            // invisible column.
+            if (activeColumn == ActiveColumn.TRANSCRIPT) activeColumn = ActiveColumn.MAIN
+        }
         onTranscriptVisibilityChanged?.invoke(nowVisible)
     }
 

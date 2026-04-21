@@ -605,6 +605,148 @@ class ColumnLayoutLogicTest {
         assertFalse("drawer auto-closes when transcript hides", logic.isTranscriptDrawerOpen)
     }
 
+    // ── Phase 3d.3: fold-cycle for FOLD mode (small portrait) ───────────────
+
+    @Test
+    fun `activeColumn defaults to MAIN`() {
+        initPalma()
+        host = FakeHost(isLargeScreen = false, isLandscape = false)
+        logic = ColumnLayoutLogic(host)
+        assertEquals(ColumnLayoutLogic.ActiveColumn.MAIN, logic.activeColumn)
+    }
+
+    @Test
+    fun `cycleFold is noop on large screen`() {
+        initTabXC()
+        host = FakeHost(isLargeScreen = true, isLandscape = false)
+        logic = ColumnLayoutLogic(host)
+        val before = logic.activeColumn
+        logic.cycleFold()
+        assertEquals("cycleFold only applies in FOLD mode", before, logic.activeColumn)
+    }
+
+    @Test
+    fun `cycleFold is noop in landscape`() {
+        initPalma()
+        host = FakeHost(isLargeScreen = false, isLandscape = true)
+        logic = ColumnLayoutLogic(host)
+        val before = logic.activeColumn
+        logic.cycleFold()
+        assertEquals(before, logic.activeColumn)
+    }
+
+    @Test
+    fun `cycleFold cycles MAIN to CUE to MAIN when transcript hidden`() {
+        initPalma()
+        host = FakeHost(isLargeScreen = false, isLandscape = false, hasAnyRecording = false)
+        logic = ColumnLayoutLogic(host)
+
+        logic.cycleFold()
+        assertEquals("MAIN → CUE", ColumnLayoutLogic.ActiveColumn.CUE, logic.activeColumn)
+
+        logic.cycleFold()
+        assertEquals("CUE → MAIN (transcript not visible, skipped)",
+            ColumnLayoutLogic.ActiveColumn.MAIN, logic.activeColumn)
+    }
+
+    @Test
+    fun `cycleFold cycles MAIN to CUE to TRANSCRIPT to MAIN when transcript visible`() {
+        initPalma()
+        host = FakeHost(isLargeScreen = false, isLandscape = false, hasAnyRecording = true)
+        logic = ColumnLayoutLogic(host)
+
+        logic.cycleFold()
+        assertEquals(ColumnLayoutLogic.ActiveColumn.CUE, logic.activeColumn)
+
+        logic.cycleFold()
+        assertEquals(ColumnLayoutLogic.ActiveColumn.TRANSCRIPT, logic.activeColumn)
+
+        logic.cycleFold()
+        assertEquals(ColumnLayoutLogic.ActiveColumn.MAIN, logic.activeColumn)
+    }
+
+    @Test
+    fun `cycleFold fires onActiveColumnChanged on each transition`() {
+        initPalma()
+        host = FakeHost(isLargeScreen = false, isLandscape = false, hasAnyRecording = true)
+        logic = ColumnLayoutLogic(host)
+        val transitions = mutableListOf<ColumnLayoutLogic.ActiveColumn>()
+        logic.onActiveColumnChanged = { transitions.add(it) }
+
+        logic.cycleFold()
+        logic.cycleFold()
+        logic.cycleFold()
+
+        assertEquals(
+            listOf(
+                ColumnLayoutLogic.ActiveColumn.CUE,
+                ColumnLayoutLogic.ActiveColumn.TRANSCRIPT,
+                ColumnLayoutLogic.ActiveColumn.MAIN,
+            ),
+            transitions,
+        )
+    }
+
+    @Test
+    fun `onActiveColumnChanged does not fire on noop cycleFold`() {
+        initTabXC()
+        host = FakeHost(isLargeScreen = true, isLandscape = false)
+        logic = ColumnLayoutLogic(host)
+        val transitions = mutableListOf<ColumnLayoutLogic.ActiveColumn>()
+        logic.onActiveColumnChanged = { transitions.add(it) }
+
+        logic.cycleFold()
+        assertTrue("no listener fire when cycle is a no-op", transitions.isEmpty())
+    }
+
+    @Test
+    fun `activeColumn reverts to MAIN when transcript hides while active`() {
+        initPalma()
+        host = FakeHost(isLargeScreen = false, isLandscape = false, hasAnyRecording = true)
+        logic = ColumnLayoutLogic(host)
+        logic.cycleFold() // → CUE
+        logic.cycleFold() // → TRANSCRIPT
+        assertEquals(ColumnLayoutLogic.ActiveColumn.TRANSCRIPT, logic.activeColumn)
+
+        host.hasAnyRecording = false
+        logic.onRecordingsChanged()
+
+        assertEquals(
+            "stranded on TRANSCRIPT → revert to MAIN when column disappears",
+            ColumnLayoutLogic.ActiveColumn.MAIN,
+            logic.activeColumn,
+        )
+    }
+
+    @Test
+    fun `activeColumn unchanged when transcript hides while not on transcript view`() {
+        initPalma()
+        host = FakeHost(isLargeScreen = false, isLandscape = false, hasAnyRecording = true)
+        logic = ColumnLayoutLogic(host)
+        logic.cycleFold() // → CUE
+
+        host.hasAnyRecording = false
+        logic.onRecordingsChanged()
+
+        assertEquals("CUE view is unaffected by transcript hiding",
+            ColumnLayoutLogic.ActiveColumn.CUE, logic.activeColumn)
+    }
+
+    @Test
+    fun `orientation change resets activeColumn to MAIN`() {
+        // Folding is a small-portrait concept; on rotation to landscape the fold view
+        // makes no sense, so we revert to MAIN.
+        initPalma()
+        host = FakeHost(isLargeScreen = false, isLandscape = false, hasAnyRecording = true)
+        logic = ColumnLayoutLogic(host)
+        logic.cycleFold() // → CUE
+        logic.cycleFold() // → TRANSCRIPT
+        assertEquals(ColumnLayoutLogic.ActiveColumn.TRANSCRIPT, logic.activeColumn)
+
+        logic.onOrientationChanged(nowLandscape = true)
+        assertEquals("rotation resets fold view", ColumnLayoutLogic.ActiveColumn.MAIN, logic.activeColumn)
+    }
+
     // ── Fake host ───────────────────────────────────────────────────────────
 
     private class FakeHost(
