@@ -107,17 +107,33 @@ class ColumnLayoutLogic(private val host: Host) {
     /** Which column currently owns pen input / undo-redo scope. Default MAIN. */
     var activeColumn: ActiveColumn = ActiveColumn.MAIN
 
+    /** Whether the transcript drawer is currently open. Only meaningful in DRAWER mode;
+     *  SIDE_BY_SIDE has no drawer concept (transcript is always in-flow when visible)
+     *  and FOLD uses the three-way fold instead. Auto-resets to closed on rotation
+     *  or when the transcript column becomes hidden. */
+    var isTranscriptDrawerOpen: Boolean = false
+        private set
+
     /** Toggle cue expand/contract. Only effective on large screen portrait. */
     fun toggleCueExpand() {
         if (!host.isLargeScreen || host.isLandscape) return
         isCueExpanded = !isCueExpanded
     }
 
-    /** Called when orientation changes. Resets cue-expand state. Transcript visibility
-     *  is tied to document contents, not orientation, and survives the rotation. */
+    /** Toggle the transcript drawer open/closed. Only effective when transcript is
+     *  visible AND the display mode is DRAWER (large+portrait, small+landscape). */
+    fun toggleTranscriptDrawer() {
+        if (!transcriptVisible) return
+        if (transcriptDisplayMode != TranscriptDisplayMode.DRAWER) return
+        isTranscriptDrawerOpen = !isTranscriptDrawerOpen
+    }
+
+    /** Called when orientation changes. Resets cue-expand and drawer state. Transcript
+     *  visibility itself is tied to document contents, not orientation, and survives. */
     fun onOrientationChanged(nowLandscape: Boolean) {
         host.isLandscape = nowLandscape
         isCueExpanded = false
+        isTranscriptDrawerOpen = false
     }
 
     /** Called by the activity after an AudioRecording is added or removed from the document. */
@@ -125,6 +141,7 @@ class ColumnLayoutLogic(private val host: Host) {
         val nowVisible = host.hasAnyRecording
         if (nowVisible == transcriptVisible) return
         transcriptVisible = nowVisible
+        if (!nowVisible) isTranscriptDrawerOpen = false
         onTranscriptVisibilityChanged?.invoke(nowVisible)
     }
 
@@ -139,9 +156,14 @@ class ColumnLayoutLogic(private val host: Host) {
      */
     fun columnWidths(): ColumnWidths {
         if (!host.isLargeScreen) return ColumnWidths(0, 0)
-        val transcript = if (transcriptVisible &&
-            transcriptDisplayMode == TranscriptDisplayMode.SIDE_BY_SIDE
-        ) ScreenMetrics.portraitCueWidthPx else 0
+        val transcript = when {
+            !transcriptVisible -> 0
+            transcriptDisplayMode == TranscriptDisplayMode.SIDE_BY_SIDE ->
+                ScreenMetrics.portraitCueWidthPx
+            transcriptDisplayMode == TranscriptDisplayMode.DRAWER && isTranscriptDrawerOpen ->
+                ScreenMetrics.portraitCueWidthPx
+            else -> 0
+        }
         return when {
             host.isLandscape -> ColumnWidths(
                 mainWidthPx = ScreenMetrics.mainColumnWidthPx,
@@ -155,6 +177,7 @@ class ColumnLayoutLogic(private val host: Host) {
             else -> ColumnWidths(
                 mainWidthPx = ScreenMetrics.mainColumnWidthPx,
                 cueWidthPx = ScreenMetrics.portraitCueWidthPx,
+                transcriptWidthPx = transcript,
             )
         }
     }

@@ -517,6 +517,94 @@ class ColumnLayoutLogicTest {
         assertEquals("three-col total matches two-col total", twoColSum, threeColSum)
     }
 
+    // ── Phase 3d.2: drawer state for DRAWER display mode ────────────────────
+
+    @Test
+    fun `drawer starts closed`() {
+        initTabXC()
+        host = FakeHost(isLargeScreen = true, isLandscape = false, hasAnyRecording = true)
+        logic = ColumnLayoutLogic(host)
+        assertEquals(ColumnLayoutLogic.TranscriptDisplayMode.DRAWER, logic.transcriptDisplayMode)
+        assertFalse("drawer closed by default on fresh load", logic.isTranscriptDrawerOpen)
+    }
+
+    @Test
+    fun `toggleTranscriptDrawer opens and closes in DRAWER mode`() {
+        initTabXC()
+        host = FakeHost(isLargeScreen = true, isLandscape = false, hasAnyRecording = true)
+        logic = ColumnLayoutLogic(host)
+
+        logic.toggleTranscriptDrawer()
+        assertTrue("drawer opens on first toggle", logic.isTranscriptDrawerOpen)
+
+        logic.toggleTranscriptDrawer()
+        assertFalse("drawer closes on second toggle", logic.isTranscriptDrawerOpen)
+    }
+
+    @Test
+    fun `toggleTranscriptDrawer is noop in SIDE_BY_SIDE mode`() {
+        // SIDE_BY_SIDE always shows the column in-flow — no drawer concept applies.
+        initTabXC()
+        host = FakeHost(isLargeScreen = true, isLandscape = true, hasAnyRecording = true)
+        logic = ColumnLayoutLogic(host)
+        assertEquals(ColumnLayoutLogic.TranscriptDisplayMode.SIDE_BY_SIDE, logic.transcriptDisplayMode)
+
+        logic.toggleTranscriptDrawer()
+        assertFalse("drawer state does not flip in SIDE_BY_SIDE", logic.isTranscriptDrawerOpen)
+    }
+
+    @Test
+    fun `toggleTranscriptDrawer is noop when transcript hidden`() {
+        initTabXC()
+        host = FakeHost(isLargeScreen = true, isLandscape = false, hasAnyRecording = false)
+        logic = ColumnLayoutLogic(host)
+        assertFalse(logic.transcriptVisible)
+
+        logic.toggleTranscriptDrawer()
+        assertFalse("cannot open drawer without any recordings", logic.isTranscriptDrawerOpen)
+    }
+
+    @Test
+    fun `drawer open reports nonzero transcript width in DRAWER mode`() {
+        initTabXC()
+        host = FakeHost(isLargeScreen = true, isLandscape = false, hasAnyRecording = true)
+        logic = ColumnLayoutLogic(host)
+        assertEquals(0, logic.columnWidths().transcriptWidthPx)
+
+        logic.toggleTranscriptDrawer()
+        assertTrue(
+            "open drawer exposes transcript width to UI layer",
+            logic.columnWidths().transcriptWidthPx > 0
+        )
+    }
+
+    @Test
+    fun `drawer closes on orientation change`() {
+        // Rotation likely switches transcriptDisplayMode (DRAWER ↔ SIDE_BY_SIDE).
+        // Whatever the previous drawer state, after rotation it resets to closed.
+        initTabXC()
+        host = FakeHost(isLargeScreen = true, isLandscape = false, hasAnyRecording = true)
+        logic = ColumnLayoutLogic(host)
+        logic.toggleTranscriptDrawer()
+        assertTrue(logic.isTranscriptDrawerOpen)
+
+        logic.onOrientationChanged(nowLandscape = true)
+        assertFalse("rotation resets drawer state", logic.isTranscriptDrawerOpen)
+    }
+
+    @Test
+    fun `drawer closes when last recording removed`() {
+        initTabXC()
+        host = FakeHost(isLargeScreen = true, isLandscape = false, hasAnyRecording = true)
+        logic = ColumnLayoutLogic(host)
+        logic.toggleTranscriptDrawer()
+        assertTrue(logic.isTranscriptDrawerOpen)
+
+        host.hasAnyRecording = false
+        logic.onRecordingsChanged()
+        assertFalse("drawer auto-closes when transcript hides", logic.isTranscriptDrawerOpen)
+    }
+
     // ── Fake host ───────────────────────────────────────────────────────────
 
     private class FakeHost(
