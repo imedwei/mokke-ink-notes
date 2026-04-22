@@ -79,6 +79,15 @@
         android:layout_gravity="start"
         android:visibility="gone" />
 
+    <!-- Main indicator strip (right edge, shown only in transcript view): lets
+         the user peek main content which is spatially to the right of transcript. -->
+    <com.writer.view.CueIndicatorStrip
+        android:id="@+id/mainIndicatorStripRight"
+        android:layout_width="40dp"
+        android:layout_height="match_parent"
+        android:layout_gravity="end"
+        android:visibility="gone" />
+
 
     <!-- Floating gutter overlay: menu + undo + redo (top-right, independent of views) -->
     <LinearLayout

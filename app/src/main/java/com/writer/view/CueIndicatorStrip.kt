@@ -3,6 +3,7 @@ package com.writer.view
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.graphics.drawable.Drawable
 import android.os.Handler
 import android.os.Looper
 import android.util.AttributeSet
@@ -80,6 +81,15 @@ class CueIndicatorStrip @JvmOverloads constructor(
      *  If false (default), right-aligned (for right-side cue strip). */
     var alignLeft: Boolean = false
 
+    /** Column-identity icon drawn at the top of the strip (above the dot track).
+     *  Gives the reader a persistent visual cue of which column this strip peeks
+     *  into. Null = no header. */
+    var headerIcon: Drawable? = null
+        set(value) {
+            field = value
+            invalidate()
+        }
+
     /** Called when the strip is tapped — triggers fold to cue view. */
     var onTap: (() -> Unit)? = null
 
@@ -120,17 +130,36 @@ class CueIndicatorStrip @JvmOverloads constructor(
         canvas.drawLine(lineX, canvasTopOffset, lineX, height.toFloat(), linePaint)
 
         val cx = stripX + visualWidth / 2
+        val iconSize = ScreenMetrics.dp(18f).toInt()
+        val iconGap = ScreenMetrics.dp(4f)
+
         for (block in visualBlocks) {
+            val topY = dotScreenY(block.first)
+            val bottomY = dotScreenY(block.last)
+
+            // Per-block identity icon sits just above the first dot/segment and scrolls
+            // with the block. Each contiguous block gets its own marker so the reader
+            // can tell at a glance which column a cluster of dots belongs to.
+            headerIcon?.let { icon ->
+                val iconTop = (topY - dotRadius - iconGap - iconSize).toInt()
+                if (iconTop + iconSize >= 0 && iconTop <= height) {
+                    icon.setBounds(
+                        cx.toInt() - iconSize / 2,
+                        iconTop,
+                        cx.toInt() + iconSize / 2,
+                        iconTop + iconSize,
+                    )
+                    icon.draw(canvas)
+                }
+            }
+
             if (block.first == block.last) {
                 // Single-line block: draw a dot
-                val y = dotScreenY(block.first)
-                if (y >= 0 && y <= height) {
-                    canvas.drawCircle(cx, y, dotRadius, dotPaint)
+                if (topY >= 0 && topY <= height) {
+                    canvas.drawCircle(cx, topY, dotRadius, dotPaint)
                 }
             } else {
                 // Multi-line block: draw a thick vertical segment
-                val topY = dotScreenY(block.first)
-                val bottomY = dotScreenY(block.last)
                 if (bottomY >= 0 && topY <= height) {
                     canvas.drawLine(cx, topY.coerceAtLeast(0f), cx, bottomY.coerceAtMost(height.toFloat()), segmentPaint)
                 }

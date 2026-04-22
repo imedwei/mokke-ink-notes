@@ -71,6 +71,7 @@ class WritingActivity : AppCompatActivity() {
     private lateinit var transcriptInkCanvas: HandwritingCanvasView
     private lateinit var transcriptColumnDivider: View
     private lateinit var transcriptIndicatorStrip: com.writer.view.CueIndicatorStrip
+    private lateinit var mainIndicatorStripRight: com.writer.view.CueIndicatorStrip
     private var transcriptCoordinator: WritingCoordinator? = null
     private var cueCoordinator: WritingCoordinator? = null
     private var isLandscape = false
@@ -322,6 +323,7 @@ class WritingActivity : AppCompatActivity() {
         cueIndicatorStrip = findViewById(R.id.cueIndicatorStrip)
         contextRail = findViewById(R.id.contextRail)
         transcriptIndicatorStrip = findViewById(R.id.transcriptIndicatorStrip)
+        mainIndicatorStripRight = findViewById(R.id.mainIndicatorStripRight)
 
         // Transcript column views (hidden until Phase 3d wires the drawer/fold UI)
         transcriptInkCanvas = findViewById(R.id.transcriptInkCanvas)
@@ -352,6 +354,25 @@ class WritingActivity : AppCompatActivity() {
         cueIndicatorStrip.onDotLongPress = { lineIndex, screenY -> showCuePeek(lineIndex, screenY) }
         contextRail.alignLeft = true
         contextRail.onDotLongPress = { lineIndex, screenY -> showMainPeek(lineIndex, screenY) }
+        transcriptIndicatorStrip.alignLeft = true
+        transcriptIndicatorStrip.onDotLongPress = { lineIndex, screenY ->
+            showTranscriptPeek(lineIndex, screenY)
+        }
+        mainIndicatorStripRight.alignLeft = false
+        mainIndicatorStripRight.onDotLongPress = { lineIndex, screenY ->
+            showMainPeek(lineIndex, screenY)
+        }
+
+        // Column-identity header icons so the reader knows at a glance which strip
+        // peeks which column.
+        cueIndicatorStrip.headerIcon =
+            androidx.core.content.ContextCompat.getDrawable(this, R.drawable.ic_cue)
+        contextRail.headerIcon =
+            androidx.core.content.ContextCompat.getDrawable(this, R.drawable.ic_notes)
+        transcriptIndicatorStrip.headerIcon =
+            androidx.core.content.ContextCompat.getDrawable(this, R.drawable.ic_mic)
+        mainIndicatorStripRight.headerIcon =
+            androidx.core.content.ContextCompat.getDrawable(this, R.drawable.ic_notes)
 
         // Floating gutter overlay — reject palm touches and long holds on buttons.
         gutterOverlay = findViewById(R.id.gutterOverlay)
@@ -411,6 +432,12 @@ class WritingActivity : AppCompatActivity() {
 
         inkCanvas.onTextBlockTap = { block, wordStartMs -> handleTextBlockTap(block, wordStartMs) }
         inkCanvas.onPlaybackStop = { playbackController.onTapOutside() }
+        // TextBlocks live on the transcript canvas post-Phase-3 — route its taps too.
+        transcriptInkCanvas.onTextBlockTap = { block, wordStartMs -> handleTextBlockTap(block, wordStartMs) }
+        transcriptInkCanvas.onPlaybackStop = { playbackController.onTapOutside() }
+        // Legacy docs may still have TextBlocks on cue until migration runs — wire for safety.
+        cueInkCanvas.onTextBlockTap = { block, wordStartMs -> handleTextBlockTap(block, wordStartMs) }
+        cueInkCanvas.onPlaybackStop = { playbackController.onTapOutside() }
 
         playbackOverlay = findViewById(R.id.playbackOverlay)
         playbackOverlay.onPauseToggle = { playbackController.onPauseToggle() }
@@ -554,6 +581,14 @@ class WritingActivity : AppCompatActivity() {
         val cueTouchFilter = TouchFilter()
         cueInkCanvas.touchFilter = cueTouchFilter
 
+        // Transcript canvas needs its own TouchFilter so finger-tap detection works —
+        // without one, handleFingerTouch returns false immediately and onTextBlockTap
+        // never fires for word-level audio playback.
+        val transcriptTouchFilter = TouchFilter()
+        transcriptInkCanvas.touchFilter = transcriptTouchFilter
+        transcriptIndicatorStrip.touchFilter = transcriptTouchFilter
+        mainIndicatorStripRight.touchFilter = transcriptTouchFilter
+
         // Show cue column if dual-column mode, otherwise show indicator strip
         if (columnLayoutLogic.isDualColumn) {
             showCueColumn()
@@ -568,6 +603,8 @@ class WritingActivity : AppCompatActivity() {
                 cueIndicatorStrip.canvasTopOffset = (canvasLoc[1] - stripLoc[1]).toFloat()
             }
             updateCueIndicatorStrip()
+            updateTranscriptIndicatorStrip()
+            updateMainIndicatorStripRight()
         }
 
         // Initialize recognizer in the background
@@ -636,8 +673,12 @@ class WritingActivity : AppCompatActivity() {
         coordinator?.onHeadingDetected = { heading -> autoRenameFromHeading(heading) }
         coordinator?.onUndoRedoStateChanged = { updateUndoRedoButtons() }
         coordinator?.onTutorialAction = { actionId -> tutorialManager.onStepAction(actionId) }
-        // Sync cue indicator strip scroll with canvas (portrait mode)
-        coordinator?.onLinkedScroll = { cueIndicatorStrip.scrollOffsetY = inkCanvas.scrollOffsetY }
+        // Sync all right/left edge strips' scroll with the main canvas so their dots
+        // and per-block icons track the content they represent.
+        coordinator?.onLinkedScroll = {
+            cueIndicatorStrip.scrollOffsetY = inkCanvas.scrollOffsetY
+            transcriptIndicatorStrip.scrollOffsetY = inkCanvas.scrollOffsetY
+        }
         coordinator?.start()
 
     }
@@ -1021,7 +1062,12 @@ class WritingActivity : AppCompatActivity() {
     }
 
     private fun playAudio(audioFileName: String, seekMs: Long) {
-        val coord = activeCoordinator ?: return
+        // Audio-bearing TextBlocks live on the transcript column post-Phase-3, and
+        // they render on transcriptInkCanvas. We route playback through the transcript
+        // coordinator's AudioPlayer + highlight on the transcript canvas so the
+        // currently-playing block shows its word-position indicator regardless of
+        // which fold view the user navigates to.
+        val coord = ensureTranscriptCoordinator()
         val player = coord.audioPlayer
         val audioFile = ensureAudioFile(audioFileName)
         if (audioFile == null) {
@@ -1034,20 +1080,22 @@ class WritingActivity : AppCompatActivity() {
             playbackOverlay.updateProgress(posMs, player.durationMs)
 
             // Update which text block is visually highlighted
-            val allBlocks = documentModel.main.textBlocks.filter { it.audioFile.isNotEmpty() }
+            val allBlocks = documentModel.transcript.textBlocks.filter { it.audioFile.isNotEmpty() }
             val activeBlock = allBlocks.find { posMs >= it.audioStartMs && posMs < it.audioEndMs }
-            if (activeBlock != null && activeBlock.id != inkCanvas.playingTextBlockId) {
-                inkCanvas.playingTextBlockId = activeBlock.id
+            if (activeBlock != null && activeBlock.id != transcriptInkCanvas.playingTextBlockId) {
+                transcriptInkCanvas.playingTextBlockId = activeBlock.id
             }
         }
 
         player.onCompleted = {
             playbackController.onPlaybackCompleted()
+            transcriptInkCanvas.playingTextBlockId = null
             inkCanvas.playingTextBlockId = null
             playbackOverlay.hide()
         }
 
-        inkCanvas.playingTextBlockId = playbackController.playingBlockId
+        transcriptInkCanvas.playingTextBlockId = playbackController.playingBlockId
+        inkCanvas.playingTextBlockId = null
         playbackOverlay.setPaused(false)
         playbackOverlay.updateProgress(0, 0)
         playbackOverlay.show()
@@ -1056,23 +1104,24 @@ class WritingActivity : AppCompatActivity() {
     }
 
     private fun stopAudio() {
-        activeCoordinator?.audioPlayer?.stop()
+        transcriptCoordinator?.audioPlayer?.stop()
+        transcriptInkCanvas.playingTextBlockId = null
         inkCanvas.playingTextBlockId = null
         playbackOverlay.hide()
     }
 
     private fun onPlaybackSeek(seekMs: Long) {
-        activeCoordinator?.audioPlayer?.seekTo(seekMs)
-        inkCanvas.playingTextBlockId = playbackController.playingBlockId
+        transcriptCoordinator?.audioPlayer?.seekTo(seekMs)
+        transcriptInkCanvas.playingTextBlockId = playbackController.playingBlockId
     }
 
     private fun onPlaybackPause() {
-        activeCoordinator?.audioPlayer?.pause()
+        transcriptCoordinator?.audioPlayer?.pause()
         playbackOverlay.setPaused(true)
     }
 
     private fun onPlaybackResume() {
-        activeCoordinator?.audioPlayer?.resume()
+        transcriptCoordinator?.audioPlayer?.resume()
         playbackOverlay.setPaused(false)
     }
 
@@ -1098,15 +1147,20 @@ class WritingActivity : AppCompatActivity() {
         return cacheFile
     }
 
-    /** Advance the recording placeholder past all current content. */
+    /** Advance the recording placeholder past all transcript-column content.
+     *  The placeholder shows where the next transcribed TextBlock will land; since
+     *  Phase 3, that's always in the transcript column. */
     private fun updateRecordingPlaceholder() {
         if (!lectureMode) return
         val segmenter = com.writer.recognition.LineSegmenter()
-        val highestStroke = if (documentModel.main.activeStrokes.isNotEmpty())
-            documentModel.main.activeStrokes.maxOf { segmenter.getStrokeLineIndex(it) } else -1
-        val highestBlock = if (documentModel.main.textBlocks.isNotEmpty())
-            documentModel.main.textBlocks.maxOf { it.endLineIndex } else -1
-        inkCanvas.recordingPlaceholderLine = maxOf(highestStroke, highestBlock) + 1
+        val col = documentModel.transcript
+        val highestStroke = if (col.activeStrokes.isNotEmpty())
+            col.activeStrokes.maxOf { segmenter.getStrokeLineIndex(it) } else -1
+        val highestBlock = if (col.textBlocks.isNotEmpty())
+            col.textBlocks.maxOf { it.endLineIndex } else -1
+        transcriptInkCanvas.recordingPlaceholderLine = maxOf(highestStroke, highestBlock) + 1
+        // Clear any stale placeholder on the main canvas from pre-Phase-3 documents
+        inkCanvas.recordingPlaceholderLine = -1
     }
 
     // --- Voice Memo ---
@@ -1243,13 +1297,13 @@ class WritingActivity : AppCompatActivity() {
 
         transcriber.onPartialResult = { text ->
             if (text.isNotBlank() && lectureMode) {
-                inkCanvas.partialTranscriptionText = text
+                transcriptInkCanvas.partialTranscriptionText = text
             }
         }
 
         transcriber.onFinalResultWithWords = { text, words ->
             if (text.isNotBlank() && lectureMode) {
-                inkCanvas.partialTranscriptionText = ""
+                transcriptInkCanvas.partialTranscriptionText = ""
                 val startMs = words.firstOrNull()?.startMs ?: 0L
                 val endMs = words.lastOrNull()?.endMs ?: 0L
                 // All audio-derived TextBlocks live in the transcript column (Phase 3).
@@ -1259,6 +1313,8 @@ class WritingActivity : AppCompatActivity() {
                 )
                 saveNow()
                 updateCueIndicatorStrip()
+                updateTranscriptIndicatorStrip()
+                updateMainIndicatorStripRight()
                 updateRecordingPlaceholder()
                 android.util.Log.i("WritingActivity", "Sherpa transcribed: $text (${words.size} words) audio=$recordingName")
 
@@ -1292,10 +1348,11 @@ class WritingActivity : AppCompatActivity() {
         micButton.setImageResource(R.drawable.ic_mic)
         inkCanvas.lectureRecording = false
         inkCanvas.recordingPlaceholderLine = -1
+        transcriptInkCanvas.recordingPlaceholderLine = -1
         recordingOverlay.hide()
         recordingBackCallback.isEnabled = false
 
-        inkCanvas.partialTranscriptionText = ""
+        transcriptInkCanvas.partialTranscriptionText = ""
 
         val transcriber = audioTranscriber
         transcriber?.stop()
@@ -1586,6 +1643,8 @@ class WritingActivity : AppCompatActivity() {
         val hasInlineSlot = columnLayoutLogic.columnWidths().transcriptWidthPx > 0
         if (hasInlineSlot) showTranscriptInline() else hideTranscriptInline()
         updateTranscriptButtonState()
+        updateTranscriptIndicatorStrip()
+        updateMainIndicatorStripRight()
     }
 
     /** Kept around so ColumnLayoutLogic.onTranscriptVisibilityChanged has a
@@ -1643,6 +1702,11 @@ class WritingActivity : AppCompatActivity() {
             scope = lifecycleScope,
             onStatusUpdate = {},
         )
+        // Sync the main-content right-edge strip's scroll offset while the user is
+        // viewing transcript so its dots + icons track the content.
+        created.onLinkedScroll = {
+            mainIndicatorStripRight.scrollOffsetY = transcriptInkCanvas.scrollOffsetY
+        }
         transcriptCoordinator = created
         created.start()
         return created
@@ -1759,7 +1823,10 @@ class WritingActivity : AppCompatActivity() {
         cueCoordinator?.onSpaceChanged = null
         coordinator?.onSpaceChanged = null
         // Restore portrait strip scroll sync
-        coordinator?.onLinkedScroll = { cueIndicatorStrip.scrollOffsetY = inkCanvas.scrollOffsetY }
+        coordinator?.onLinkedScroll = {
+            cueIndicatorStrip.scrollOffsetY = inkCanvas.scrollOffsetY
+            transcriptIndicatorStrip.scrollOffsetY = inkCanvas.scrollOffsetY
+        }
 
         closeDualCanvasOnyx()
         columnDivider.visibility = View.GONE
@@ -1783,13 +1850,15 @@ class WritingActivity : AppCompatActivity() {
      *  Called from the fold-state-change dispatcher; the state transition is owned by
      *  [ColumnLayoutLogic.activeColumn] so this method only handles view work. */
     private fun foldToCues() {
-        // Hide main column, show cue column
+        // Hide main column, show cue column. In cue view contextRail owns the left
+        // edge for peeking at main content — transcriptIndicatorStrip is hidden to
+        // avoid competing for touches (both would have layout_gravity=start).
         inkCanvas.visibility = View.GONE
         cueIndicatorStrip.visibility = View.GONE
         cueInkCanvas.visibility = View.VISIBLE
         contextRail.visibility = View.VISIBLE
-        transcriptIndicatorStrip.visibility =
-            if (columnLayoutLogic.transcriptVisible) View.VISIBLE else View.GONE
+        updateTranscriptIndicatorStrip()
+        updateMainIndicatorStripRight()
         updateViewToggleIcon()
 
         // Populate context rail with main content indicators
@@ -1836,8 +1905,8 @@ class WritingActivity : AppCompatActivity() {
         cueIndicatorStrip.visibility = View.VISIBLE
         cueInkCanvas.visibility = View.GONE
         contextRail.visibility = View.GONE
-        transcriptIndicatorStrip.visibility =
-            if (columnLayoutLogic.transcriptVisible) View.VISIBLE else View.GONE
+        updateTranscriptIndicatorStrip()
+        updateMainIndicatorStripRight()
         updateViewToggleIcon()
 
         // Stop cue coordinator, transfer Onyx SDK back to main
@@ -1861,13 +1930,16 @@ class WritingActivity : AppCompatActivity() {
 
     /** Portrait: transition from cue view to transcript view (cycleFold step 2 of 3). */
     private fun foldCueToTranscript() {
-        // Hide cue, show transcript
+        // Hide cue canvas, show transcript canvas. The main-content peek strip goes on
+        // the RIGHT edge since main sits spatially to the right of transcript in the
+        // logical column order (transcript | main | cue). Cue is not represented —
+        // the user can cycle back to reach it.
         cueInkCanvas.visibility = View.GONE
         contextRail.visibility = View.GONE
         transcriptInkCanvas.visibility = View.VISIBLE
-        cueIndicatorStrip.visibility = View.VISIBLE  // cue indicators peekable from transcript
-        contextRail.visibility = View.VISIBLE         // main indicators peekable from transcript
-        transcriptIndicatorStrip.visibility = View.GONE
+        cueIndicatorStrip.visibility = View.GONE
+        updateTranscriptIndicatorStrip()
+        updateMainIndicatorStripRight()
         updateViewToggleIcon()
 
         // Set transcript canvas to fill width
@@ -1902,8 +1974,8 @@ class WritingActivity : AppCompatActivity() {
         contextRail.visibility = View.GONE
         inkCanvas.visibility = View.VISIBLE
         cueIndicatorStrip.visibility = View.VISIBLE
-        transcriptIndicatorStrip.visibility =
-            if (columnLayoutLogic.transcriptVisible) View.VISIBLE else View.GONE
+        updateTranscriptIndicatorStrip()
+        updateMainIndicatorStripRight()
         updateViewToggleIcon()
 
         // Stop transcript coordinator, transfer Onyx SDK back to main
@@ -2135,6 +2207,79 @@ class WritingActivity : AppCompatActivity() {
         }
         cuePeekPopup = popup
         popup.showAtLocation(inkCanvas, android.view.Gravity.NO_GRAVITY, popupX, popupY)
+    }
+
+    /** Populate the transcript indicator strip with transcript-column content markers,
+     *  and show/hide it based on whether we're viewing a column from which peeking the
+     *  transcript makes sense (main or cue fold view on small portrait). */
+    private fun updateTranscriptIndicatorStrip() {
+        val segmenter = com.writer.recognition.LineSegmenter()
+        val col = documentModel.transcript
+        val transcriptLines = col.activeStrokes.map { segmenter.getStrokeLineIndex(it) }.toSet() +
+            col.textBlocks.flatMap { it.startLineIndex..it.endLineIndex }.toSet()
+        transcriptIndicatorStrip.cueLineIndices = transcriptLines
+        transcriptIndicatorStrip.cueDiagramAreas = col.diagramAreas.toList()
+
+        // Strip lives on the left edge; its dots should render flush-left.
+        transcriptIndicatorStrip.alignLeft = true
+
+        // Visible only in FOLD mode on the main fold view when the transcript column
+        // actually has content. In cue view, contextRail occupies the left edge;
+        // in transcript view, the strip itself is the active column.
+        val shouldShow = columnLayoutLogic.canFoldUnfold &&
+            columnLayoutLogic.activeColumn == ColumnLayoutLogic.ActiveColumn.MAIN &&
+            columnLayoutLogic.transcriptVisible
+        transcriptIndicatorStrip.visibility = if (shouldShow) View.VISIBLE else View.GONE
+        if (!shouldShow) return
+
+        transcriptIndicatorStrip.scrollOffsetY = inkCanvas.scrollOffsetY
+        inkCanvas.post {
+            val canvasLoc = IntArray(2)
+            val stripLoc = IntArray(2)
+            inkCanvas.getLocationOnScreen(canvasLoc)
+            transcriptIndicatorStrip.getLocationOnScreen(stripLoc)
+            transcriptIndicatorStrip.canvasTopOffset = (canvasLoc[1] - stripLoc[1]).toFloat()
+            transcriptIndicatorStrip.invalidate()
+        }
+    }
+
+    /** Populate the right-edge main strip and show it only while viewing
+     *  transcript. The main column sits spatially to the right of transcript
+     *  (layout order: transcript | main | cue) so its peek affordance belongs
+     *  on the right edge in transcript view. */
+    private fun updateMainIndicatorStripRight() {
+        val segmenter = com.writer.recognition.LineSegmenter()
+        val col = documentModel.main
+        val lines = col.activeStrokes.map { segmenter.getStrokeLineIndex(it) }.toSet() +
+            col.textBlocks.flatMap { it.startLineIndex..it.endLineIndex }.toSet()
+        mainIndicatorStripRight.cueLineIndices = lines
+        mainIndicatorStripRight.cueDiagramAreas = col.diagramAreas.toList()
+
+        val shouldShow = columnLayoutLogic.canFoldUnfold &&
+            columnLayoutLogic.activeColumn == ColumnLayoutLogic.ActiveColumn.TRANSCRIPT
+        mainIndicatorStripRight.visibility = if (shouldShow) View.VISIBLE else View.GONE
+        if (!shouldShow) return
+
+        mainIndicatorStripRight.scrollOffsetY = transcriptInkCanvas.scrollOffsetY
+        transcriptInkCanvas.post {
+            val canvasLoc = IntArray(2)
+            val stripLoc = IntArray(2)
+            transcriptInkCanvas.getLocationOnScreen(canvasLoc)
+            mainIndicatorStripRight.getLocationOnScreen(stripLoc)
+            mainIndicatorStripRight.canvasTopOffset = (canvasLoc[1] - stripLoc[1]).toFloat()
+            mainIndicatorStripRight.invalidate()
+        }
+    }
+
+    /** Show a floating preview of transcript strokes / text blocks around [lineIndex]. */
+    private fun showTranscriptPeek(lineIndex: Int, screenY: Float) {
+        showStrokePeek(
+            lineIndex, screenY,
+            documentModel.transcript.activeStrokes,
+            documentModel.transcript.diagramAreas,
+            documentModel.transcript.textBlocks,
+            transcriptIndicatorStrip
+        )
     }
 
     /** Populate the context rail with main content indicators (dots/segments). */
