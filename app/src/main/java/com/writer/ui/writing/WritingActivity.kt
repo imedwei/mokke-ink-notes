@@ -79,6 +79,9 @@ class WritingActivity : AppCompatActivity() {
     // View toggle button in gutter (Notes ↔ Cues)
     private lateinit var viewToggleButton: ImageView
 
+    // Transcript drawer toggle (only in DRAWER display mode)
+    private lateinit var transcriptButton: ImageView
+
     // Active cue peek popup (dismissed on orientation change)
     private var cuePeekPopup: android.widget.PopupWindow? = null
 
@@ -354,10 +357,11 @@ class WritingActivity : AppCompatActivity() {
         spaceInsertButton = findViewById(R.id.spaceInsertButton)
         micButton = findViewById(R.id.micButton)
         viewToggleButton = findViewById(R.id.viewToggleButton)
+        transcriptButton = findViewById(R.id.transcriptButton)
         val rotateButton = findViewById<ImageView>(R.id.rotateButton)
         orientationManager = OrientationManager(this, rotateButton)
 
-        for (btn in listOf(menuButton, undoButton, redoButton, spaceInsertButton, micButton, viewToggleButton, rotateButton)) {
+        for (btn in listOf(menuButton, undoButton, redoButton, spaceInsertButton, micButton, viewToggleButton, transcriptButton, rotateButton)) {
             btn.setOnTouchListener(palmGuard)
         }
 
@@ -377,6 +381,10 @@ class WritingActivity : AppCompatActivity() {
             }
         }
         viewToggleButton.setOnClickListener { toggleNotesCues() }
+        transcriptButton.setOnClickListener {
+            columnLayoutLogic.toggleTranscriptDrawer()
+            refreshTranscriptPresentation()
+        }
         rotateButton.setOnClickListener { orientationManager.toggleOrientation() }
 
         inkCanvas.onTextBlockTap = { block, wordStartMs -> handleTextBlockTap(block, wordStartMs) }
@@ -1539,27 +1547,25 @@ class WritingActivity : AppCompatActivity() {
         orientationManager.updateButtonVisibility()
     }
 
-    /** Re-evaluate transcript column presentation for the current display mode. Called
-     *  on orientation change and after the initial document load. */
+    /** Re-evaluate transcript column presentation from the canonical source:
+     *  [ColumnLayoutLogic.columnWidths]. A nonzero transcriptWidthPx means the
+     *  column should be in-flow in the LinearLayout right now (true for
+     *  SIDE_BY_SIDE, and for DRAWER with the drawer open). Called on orientation
+     *  change, drawer toggle, and after the initial document load. */
     private fun refreshTranscriptPresentation() {
-        onTranscriptVisibilityChanged(columnLayoutLogic.transcriptVisible)
+        val hasInlineSlot = columnLayoutLogic.columnWidths().transcriptWidthPx > 0
+        if (hasInlineSlot) showTranscriptInline() else hideTranscriptInline()
+        updateTranscriptButtonState()
     }
 
-    /** Responds to transcript column visibility transitions. In SIDE_BY_SIDE mode
-     *  (large+landscape) the column joins the in-flow column layout; DRAWER and
-     *  FOLD modes are handled in later Phase 3d sub-slices. In any non-SIDE_BY_SIDE
-     *  mode the in-flow canvas is hidden — if DRAWER/FOLD want to show the column
-     *  later they do it outside the main LinearLayout. */
+    /** Kept around so ColumnLayoutLogic.onTranscriptVisibilityChanged has a
+     *  stable entry point — the actual decision logic now lives in
+     *  [refreshTranscriptPresentation]. */
     private fun onTranscriptVisibilityChanged(visible: Boolean) {
-        val mode = columnLayoutLogic.transcriptDisplayMode
-        if (mode == ColumnLayoutLogic.TranscriptDisplayMode.SIDE_BY_SIDE && visible) {
-            showTranscriptSideBySide()
-        } else {
-            hideTranscriptSideBySide()
-        }
+        refreshTranscriptPresentation()
     }
 
-    private fun showTranscriptSideBySide() {
+    private fun showTranscriptInline() {
         transcriptInkCanvas.visibility = View.VISIBLE
         transcriptColumnDivider.visibility = View.VISIBLE
         ensureTranscriptCoordinator()
@@ -1571,14 +1577,25 @@ class WritingActivity : AppCompatActivity() {
         transcriptInkCanvas.post {
             transcriptInkCanvas.drawToSurface()
         }
-        Log.i(TAG, "Transcript column shown (side-by-side)")
+        Log.i(TAG, "Transcript column shown (inline)")
     }
 
-    private fun hideTranscriptSideBySide() {
+    private fun hideTranscriptInline() {
         transcriptInkCanvas.visibility = View.GONE
         transcriptColumnDivider.visibility = View.GONE
         applyColumnWidths()
         Log.i(TAG, "Transcript column hidden")
+    }
+
+    /** Show the transcript toggle button only in DRAWER mode when the column
+     *  is visible at all. Alpha reflects whether the drawer is currently open. */
+    private fun updateTranscriptButtonState() {
+        val inDrawerMode = columnLayoutLogic.transcriptDisplayMode ==
+            ColumnLayoutLogic.TranscriptDisplayMode.DRAWER
+        val showButton = columnLayoutLogic.transcriptVisible && inDrawerMode
+        transcriptButton.visibility = if (showButton) View.VISIBLE else View.GONE
+        transcriptButton.imageAlpha =
+            if (columnLayoutLogic.isTranscriptDrawerOpen) 255 else 128
     }
 
     /** Lazily build the transcript coordinator. Safe to call before the transcript

@@ -148,6 +148,18 @@
             />
 
         <ImageView
+            android:id="@+id/transcriptButton"
+            android:layout_marginTop="16dp"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:padding="6dp"
+            android:src="@drawable/ic_transcript"
+            android:background="?android:attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Toggle transcript drawer"
+            android:visibility="gone"
+            />
+
+        <ImageView
             android:id="@+id/rotateButton"
             android:layout_marginTop="16dp"
             android:layout_width="40dp"
