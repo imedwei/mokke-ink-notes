@@ -70,6 +70,15 @@
         android:layout_gravity="start"
         android:visibility="gone" />
 
+    <!-- Transcript indicator strip (small portrait: left edge in notes/cue view,
+         shows dots where transcript text blocks exist; long-press to peek) -->
+    <com.writer.view.CueIndicatorStrip
+        android:id="@+id/transcriptIndicatorStrip"
+        android:layout_width="40dp"
+        android:layout_height="match_parent"
+        android:layout_gravity="start"
+        android:visibility="gone" />
+
 
     <!-- Floating gutter overlay: menu + undo + redo (top-right, independent of views) -->
     <LinearLayout

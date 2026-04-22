@@ -70,11 +70,22 @@ class WritingActivity : AppCompatActivity() {
     // Transcript column (owns all audio-derived TextBlocks)
     private lateinit var transcriptInkCanvas: HandwritingCanvasView
     private lateinit var transcriptColumnDivider: View
+    private lateinit var transcriptIndicatorStrip: com.writer.view.CueIndicatorStrip
     private var transcriptCoordinator: WritingCoordinator? = null
     private var cueCoordinator: WritingCoordinator? = null
     private var isLandscape = false
-    private var isFoldedToCues = false
     private lateinit var columnLayoutLogic: ColumnLayoutLogic
+    /** Which column is currently on-screen in FOLD mode (small portrait). Mirror of
+     *  [ColumnLayoutLogic.activeColumn], kept separately so the view-transition
+     *  dispatcher knows the "from" column when the listener fires with the "to". */
+    private var currentFoldView: ColumnLayoutLogic.ActiveColumn = ColumnLayoutLogic.ActiveColumn.MAIN
+    /** True when the user is currently viewing the cue canvas full-screen (small portrait).
+     *  Derived from [ColumnLayoutLogic.activeColumn] so there's one source of truth. */
+    private val isFoldedToCues: Boolean
+        get() = columnLayoutLogic.activeColumn == ColumnLayoutLogic.ActiveColumn.CUE
+    /** True when the user is currently viewing the transcript canvas full-screen. */
+    private val isFoldedToTranscript: Boolean
+        get() = columnLayoutLogic.activeColumn == ColumnLayoutLogic.ActiveColumn.TRANSCRIPT
 
     // View toggle button in gutter (Notes ↔ Cues)
     private lateinit var viewToggleButton: ImageView
@@ -86,10 +97,15 @@ class WritingActivity : AppCompatActivity() {
     private var cuePeekPopup: android.widget.PopupWindow? = null
 
     /** The active coordinator — routes undo/redo to the right column.
-     *  In portrait cue view, always use cue coordinator.
+     *  In portrait fold views, the coordinator matches the fold-view canvas.
      *  In dual-column mode, use whichever canvas the pen last wrote on. */
     private val activeCoordinator: WritingCoordinator?
-        get() = if (isFoldedToCues || (columnLayoutLogic.isDualColumn && isCueCanvasActive)) cueCoordinator else coordinator
+        get() = when {
+            isFoldedToTranscript -> transcriptCoordinator
+            isFoldedToCues -> cueCoordinator
+            columnLayoutLogic.isDualColumn && isCueCanvasActive -> cueCoordinator
+            else -> coordinator
+        }
     private var isCueCanvasActive = false
 
     // Floating gutter overlay
@@ -305,6 +321,7 @@ class WritingActivity : AppCompatActivity() {
         columnDivider = findViewById(R.id.columnDivider)
         cueIndicatorStrip = findViewById(R.id.cueIndicatorStrip)
         contextRail = findViewById(R.id.contextRail)
+        transcriptIndicatorStrip = findViewById(R.id.transcriptIndicatorStrip)
 
         // Transcript column views (hidden until Phase 3d wires the drawer/fold UI)
         transcriptInkCanvas = findViewById(R.id.transcriptInkCanvas)
@@ -322,6 +339,11 @@ class WritingActivity : AppCompatActivity() {
         })
         columnLayoutLogic.onTranscriptVisibilityChanged = { visible ->
             onTranscriptVisibilityChanged(visible)
+        }
+        columnLayoutLogic.onActiveColumnChanged = { newColumn ->
+            val from = currentFoldView
+            currentFoldView = newColumn
+            if (columnLayoutLogic.canFoldUnfold) dispatchFoldTransition(from, newColumn)
         }
 
         // Cue canvas defers Onyx init — gets SDK session via hover-based swap in landscape.
@@ -426,8 +448,10 @@ class WritingActivity : AppCompatActivity() {
             getPendingRestore = { pendingRestore },
             clearPendingRestore = { pendingRestore = null },
             onClosed = {
-                // Unfold from cue view if tutorial ended there
-                if (isFoldedToCues) unfoldToNotes()
+                // Unfold back to main if tutorial ended on a non-main fold view
+                if (isFoldedToCues || isFoldedToTranscript) {
+                    columnLayoutLogic.activeColumn = ColumnLayoutLogic.ActiveColumn.MAIN
+                }
                 // Restore cue data that was cleared for tutorial
                 restoreCueDataAfterTutorial()
                 updateUndoRedoButtons()
@@ -448,7 +472,9 @@ class WritingActivity : AppCompatActivity() {
         tutorialManager.onNextStep = { stepId ->
             when (stepId) {
                 "switch_to_cues" -> {
-                    if (!isFoldedToCues) foldToCues()
+                    if (!isFoldedToCues) {
+                        columnLayoutLogic.activeColumn = ColumnLayoutLogic.ActiveColumn.CUE
+                    }
                 }
             }
         }
@@ -1504,9 +1530,13 @@ class WritingActivity : AppCompatActivity() {
 
         val wasDualColumn = columnLayoutLogic.isDualColumn
 
-        // Unfold from cue view BEFORE updating orientation — unfoldToNotes()
-        // checks isDualColumn and returns early if already dual.
-        if (nowLandscape && isFoldedToCues) unfoldToNotes()
+        // Unfold from any non-main fold view BEFORE updating orientation —
+        // the listener dispatches the correct teardown while canFoldUnfold is
+        // still true. Setting activeColumn here (rather than relying on
+        // onOrientationChanged's reset) gives us the from→to transition.
+        if (nowLandscape && (isFoldedToCues || isFoldedToTranscript)) {
+            columnLayoutLogic.activeColumn = ColumnLayoutLogic.ActiveColumn.MAIN
+        }
 
         // Update orientation state and refresh ScreenMetrics for new width
         columnLayoutLogic.onOrientationChanged(nowLandscape)
@@ -1750,16 +1780,16 @@ class WritingActivity : AppCompatActivity() {
     }
 
     /** Portrait: fold from notes to cues view — show cue column full-width, hide main.
-     *  Only available on small screens in portrait (not dual-column mode). */
+     *  Called from the fold-state-change dispatcher; the state transition is owned by
+     *  [ColumnLayoutLogic.activeColumn] so this method only handles view work. */
     private fun foldToCues() {
-        if (columnLayoutLogic.isDualColumn || isFoldedToCues) return
-        isFoldedToCues = true
-
         // Hide main column, show cue column
         inkCanvas.visibility = View.GONE
         cueIndicatorStrip.visibility = View.GONE
         cueInkCanvas.visibility = View.VISIBLE
         contextRail.visibility = View.VISIBLE
+        transcriptIndicatorStrip.visibility =
+            if (columnLayoutLogic.transcriptVisible) View.VISIBLE else View.GONE
         updateViewToggleIcon()
 
         // Populate context rail with main content indicators
@@ -1798,17 +1828,16 @@ class WritingActivity : AppCompatActivity() {
         }
     }
 
-    /** Portrait: unfold from cues back to notes view.
-     *  Only available on small screens in portrait (not dual-column mode). */
+    /** Portrait: unfold from cues back to notes view. View-only; state transition
+     *  is owned by [ColumnLayoutLogic.activeColumn]. */
     private fun unfoldToNotes() {
-        if (columnLayoutLogic.isDualColumn || !isFoldedToCues) return
-        isFoldedToCues = false
-
         // Show main column, hide cue column
         inkCanvas.visibility = View.VISIBLE
         cueIndicatorStrip.visibility = View.VISIBLE
         cueInkCanvas.visibility = View.GONE
         contextRail.visibility = View.GONE
+        transcriptIndicatorStrip.visibility =
+            if (columnLayoutLogic.transcriptVisible) View.VISIBLE else View.GONE
         updateViewToggleIcon()
 
         // Stop cue coordinator, transfer Onyx SDK back to main
@@ -1828,6 +1857,69 @@ class WritingActivity : AppCompatActivity() {
         spaceInsertButton.visibility = View.VISIBLE
 
         Log.i(TAG, "Unfolded to notes (portrait)")
+    }
+
+    /** Portrait: transition from cue view to transcript view (cycleFold step 2 of 3). */
+    private fun foldCueToTranscript() {
+        // Hide cue, show transcript
+        cueInkCanvas.visibility = View.GONE
+        contextRail.visibility = View.GONE
+        transcriptInkCanvas.visibility = View.VISIBLE
+        cueIndicatorStrip.visibility = View.VISIBLE  // cue indicators peekable from transcript
+        contextRail.visibility = View.VISIBLE         // main indicators peekable from transcript
+        transcriptIndicatorStrip.visibility = View.GONE
+        updateViewToggleIcon()
+
+        // Set transcript canvas to fill width
+        val params = transcriptInkCanvas.layoutParams as LinearLayout.LayoutParams
+        params.weight = 1f
+        transcriptInkCanvas.layoutParams = params
+
+        // Transfer Onyx SDK from cue to transcript
+        cueCoordinator?.stop()
+        cueInkCanvas.closeRawDrawing()
+        cueInkCanvas.deferOnyxInit = true
+
+        transcriptInkCanvas.post {
+            transcriptInkCanvas.loadStrokes(documentModel.transcript.activeStrokes.toList())
+            transcriptInkCanvas.diagramAreas = documentModel.transcript.diagramAreas.toList()
+            transcriptInkCanvas.textBlocks = documentModel.transcript.textBlocks.toList()
+            transcriptInkCanvas.scrollOffsetY = cueInkCanvas.scrollOffsetY
+            transcriptInkCanvas.drawToSurface()
+
+            ensureTranscriptCoordinator()
+            transcriptInkCanvas.deferOnyxInit = false
+            transcriptInkCanvas.reinitializeRawDrawing()
+
+            Log.i(TAG, "Folded cue → transcript (portrait)")
+        }
+    }
+
+    /** Portrait: transition from transcript view back to notes view (cycleFold wraps to MAIN). */
+    private fun unfoldTranscriptToNotes() {
+        // Hide transcript, show main
+        transcriptInkCanvas.visibility = View.GONE
+        contextRail.visibility = View.GONE
+        inkCanvas.visibility = View.VISIBLE
+        cueIndicatorStrip.visibility = View.VISIBLE
+        transcriptIndicatorStrip.visibility =
+            if (columnLayoutLogic.transcriptVisible) View.VISIBLE else View.GONE
+        updateViewToggleIcon()
+
+        // Stop transcript coordinator, transfer Onyx SDK back to main
+        transcriptCoordinator?.stop()
+        transcriptInkCanvas.closeRawDrawing()
+        transcriptInkCanvas.deferOnyxInit = true
+
+        inkCanvas.scrollOffsetY = transcriptInkCanvas.scrollOffsetY
+        inkCanvas.reinitializeRawDrawing()
+        inkCanvas.drawToSurface()
+
+        updateCueIndicatorStrip()
+
+        spaceInsertButton.visibility = View.VISIBLE
+
+        Log.i(TAG, "Unfolded transcript → notes (portrait)")
     }
 
     /**
@@ -1901,29 +1993,61 @@ class WritingActivity : AppCompatActivity() {
                 applyColumnWidths()
             }
             ColumnLayoutLogic.ToggleAction.FOLD_UNFOLD -> {
-                // Small screen portrait: fold/unfold between notes and cues
-                // During tutorial basics, toggle is disabled
+                // Small screen portrait: cycle through main ↔ cue ↔ (transcript).
+                // During tutorial basics, toggle is disabled.
                 if (tutorialManager.isActive && !tutorialManager.isCornellPhase()) return
-                if (isFoldedToCues) {
-                    unfoldToNotes()
-                    tutorialManager.onStepAction("unfolded_to_notes")
-                } else {
-                    foldToCues()
-                    tutorialManager.onStepAction("folded_to_cues")
-                }
+                val before = columnLayoutLogic.activeColumn
+                columnLayoutLogic.cycleFold() // listener dispatches the view transition
+                val after = columnLayoutLogic.activeColumn
+                tutorialManager.onStepAction(foldActionForTransition(before, after))
+            }
+        }
+    }
+
+    private fun foldActionForTransition(
+        from: ColumnLayoutLogic.ActiveColumn,
+        to: ColumnLayoutLogic.ActiveColumn,
+    ): String = when (to) {
+        ColumnLayoutLogic.ActiveColumn.CUE -> "folded_to_cues"
+        ColumnLayoutLogic.ActiveColumn.TRANSCRIPT -> "folded_to_transcript"
+        ColumnLayoutLogic.ActiveColumn.MAIN ->
+            if (from == ColumnLayoutLogic.ActiveColumn.TRANSCRIPT) "unfolded_from_transcript"
+            else "unfolded_to_notes"
+    }
+
+    /** Dispatch the FOLD-mode view transition based on the [from]→[to] column change. */
+    private fun dispatchFoldTransition(
+        from: ColumnLayoutLogic.ActiveColumn,
+        to: ColumnLayoutLogic.ActiveColumn,
+    ) {
+        when (from to to) {
+            ColumnLayoutLogic.ActiveColumn.MAIN to ColumnLayoutLogic.ActiveColumn.CUE -> foldToCues()
+            ColumnLayoutLogic.ActiveColumn.CUE to ColumnLayoutLogic.ActiveColumn.MAIN -> unfoldToNotes()
+            ColumnLayoutLogic.ActiveColumn.CUE to ColumnLayoutLogic.ActiveColumn.TRANSCRIPT -> foldCueToTranscript()
+            ColumnLayoutLogic.ActiveColumn.TRANSCRIPT to ColumnLayoutLogic.ActiveColumn.MAIN -> unfoldTranscriptToNotes()
+            else -> {
+                // Includes MAIN→TRANSCRIPT and TRANSCRIPT→CUE, which cycleFold never produces,
+                // and MAIN→MAIN identity.
+                Log.w(TAG, "Unexpected fold transition: $from → $to")
             }
         }
     }
 
     /** Update the gutter toggle icon to show what tapping will switch TO. */
     private fun updateViewToggleIcon() {
-        if (isFoldedToCues) {
-            viewToggleButton.setImageResource(R.drawable.ic_notes)
-            viewToggleButton.contentDescription = "Switch to notes"
-        } else {
-            viewToggleButton.setImageResource(R.drawable.ic_cue)
-            viewToggleButton.contentDescription = "Switch to cues"
+        val (iconRes, description) = when (columnLayoutLogic.activeColumn) {
+            ColumnLayoutLogic.ActiveColumn.MAIN ->
+                R.drawable.ic_cue to "Switch to cues"
+            ColumnLayoutLogic.ActiveColumn.CUE ->
+                if (columnLayoutLogic.transcriptVisible)
+                    R.drawable.ic_transcript to "Switch to transcript"
+                else
+                    R.drawable.ic_notes to "Switch to notes"
+            ColumnLayoutLogic.ActiveColumn.TRANSCRIPT ->
+                R.drawable.ic_notes to "Switch to notes"
         }
+        viewToggleButton.setImageResource(iconRes)
+        viewToggleButton.contentDescription = description
         // Dim during tutorial basics (inactive), bright during Cornell phase or normal use
         val dimmed = tutorialManager.isActive && !tutorialManager.isCornellPhase()
         viewToggleButton.imageAlpha = if (dimmed) 40 else 255
@@ -2252,8 +2376,10 @@ class WritingActivity : AppCompatActivity() {
         cueIndicatorStrip.cueDiagramAreas = emptyList()
         cueIndicatorStrip.visibility = View.GONE
 
-        // If in cue portrait view, unfold first
-        if (isFoldedToCues) unfoldToNotes()
+        // If on a non-main fold view, unfold first
+        if (isFoldedToCues || isFoldedToTranscript) {
+            columnLayoutLogic.activeColumn = ColumnLayoutLogic.ActiveColumn.MAIN
+        }
 
         tutorialManager.show()
     }
