@@ -426,7 +426,21 @@ class WritingActivity : AppCompatActivity() {
         viewToggleButton.setOnClickListener { toggleNotesCues() }
         transcriptButton.setOnClickListener {
             columnLayoutLogic.toggleTranscriptDrawer()
-            refreshTranscriptPresentation()
+            // Small-landscape DRAWER mode can't use the width-based showTranscriptInline
+            // path (columnWidths returns 0 on small screens), so we do a direct
+            // full-column swap — hide main+cue, show transcript — and restore on close.
+            val mode = columnLayoutLogic.transcriptDisplayMode
+            val isSmallLandscape = mode == ColumnLayoutLogic.TranscriptDisplayMode.DRAWER &&
+                !ScreenMetrics.isLargeScreen
+            if (isSmallLandscape) {
+                if (columnLayoutLogic.isTranscriptDrawerOpen) openTranscriptDrawerSmallLandscape()
+                else closeTranscriptDrawerSmallLandscape()
+                updateTranscriptButtonState()
+                updateTranscriptIndicatorStrip()
+                updateMainIndicatorStripRight()
+            } else {
+                refreshTranscriptPresentation()
+            }
         }
         rotateButton.setOnClickListener { orientationManager.toggleOrientation() }
 
@@ -1994,6 +2008,62 @@ class WritingActivity : AppCompatActivity() {
         Log.i(TAG, "Unfolded transcript → notes (portrait)")
     }
 
+    /** Small-landscape DRAWER open: show transcript at 50% alongside main at 50%.
+     *  Cue is hidden for the duration of the drawer. Main keeps its Onyx SDK session
+     *  (the primary writing surface); transcript stays read-only — tap to play audio,
+     *  long-press to peek, but no stylus capture. */
+    private fun openTranscriptDrawerSmallLandscape() {
+        // Tear down dual-canvas hover-swap (main↔cue); keep main's Onyx session alive.
+        closeDualCanvasOnyx()
+        cueCoordinator?.stop()
+        cueInkCanvas.closeRawDrawing()
+        cueInkCanvas.deferOnyxInit = true
+
+        cueInkCanvas.visibility = View.GONE
+        columnDivider.visibility = View.GONE
+        transcriptInkCanvas.visibility = View.VISIBLE
+
+        // Main shrinks to 50%, transcript takes the other 50%.
+        val mainParams = inkCanvas.layoutParams as LinearLayout.LayoutParams
+        mainParams.width = 0
+        mainParams.weight = 1f
+        inkCanvas.layoutParams = mainParams
+
+        val tParams = transcriptInkCanvas.layoutParams as LinearLayout.LayoutParams
+        tParams.width = 0
+        tParams.weight = 1f
+        transcriptInkCanvas.layoutParams = tParams
+
+        // Transcript is read-only in this mode — don't let it claim the Onyx session.
+        transcriptInkCanvas.deferOnyxInit = true
+
+        transcriptInkCanvas.post {
+            transcriptInkCanvas.loadStrokes(documentModel.transcript.activeStrokes.toList())
+            transcriptInkCanvas.diagramAreas = documentModel.transcript.diagramAreas.toList()
+            transcriptInkCanvas.textBlocks = documentModel.transcript.textBlocks.toList()
+            transcriptInkCanvas.drawToSurface()
+
+            ensureTranscriptCoordinator()
+            Log.i(TAG, "Transcript drawer opened (small landscape — 50/50 with main)")
+        }
+    }
+
+    /** Small-landscape DRAWER close: restore main+cue 50/50, hide transcript. */
+    private fun closeTranscriptDrawerSmallLandscape() {
+        transcriptCoordinator?.stop()
+        transcriptInkCanvas.closeRawDrawing()
+        transcriptInkCanvas.deferOnyxInit = true
+        transcriptInkCanvas.visibility = View.GONE
+
+        cueInkCanvas.visibility = View.VISIBLE
+        columnDivider.visibility = View.VISIBLE
+
+        applyColumnWidths()
+        // Re-establish the main↔cue hover-swap SDK that was torn down on open.
+        initDualCanvasOnyx()
+        Log.i(TAG, "Transcript drawer closed (small landscape)")
+    }
+
     /**
      * Initialize per-canvas Onyx SDK with hover-based swap between canvases.
      * Each canvas gets its own TouchHelper bound directly to the SurfaceView,
@@ -2223,15 +2293,26 @@ class WritingActivity : AppCompatActivity() {
         // Strip lives on the left edge; its dots should render flush-left.
         transcriptIndicatorStrip.alignLeft = true
 
-        // Visible only in FOLD mode on the main fold view when the transcript column
-        // actually has content. In cue view, contextRail occupies the left edge;
-        // in transcript view, the strip itself is the active column.
-        val shouldShow = columnLayoutLogic.canFoldUnfold &&
-            columnLayoutLogic.activeColumn == ColumnLayoutLogic.ActiveColumn.MAIN &&
-            columnLayoutLogic.transcriptVisible
+        // Show the strip whenever transcript exists AND can't already be seen:
+        //   - SIDE_BY_SIDE (large+landscape): transcript is already inline → skip.
+        //   - DRAWER (large+portrait, small+landscape): show when drawer is closed so
+        //     the user can peek without opening it. Hide while drawer is open.
+        //   - FOLD (small+portrait): show in main view; cue/transcript views hide it.
+        val mode = columnLayoutLogic.transcriptDisplayMode
+        val shouldShow = columnLayoutLogic.transcriptVisible && when (mode) {
+            ColumnLayoutLogic.TranscriptDisplayMode.SIDE_BY_SIDE -> false
+            ColumnLayoutLogic.TranscriptDisplayMode.DRAWER ->
+                !columnLayoutLogic.isTranscriptDrawerOpen &&
+                    columnLayoutLogic.activeColumn != ColumnLayoutLogic.ActiveColumn.TRANSCRIPT
+            ColumnLayoutLogic.TranscriptDisplayMode.FOLD ->
+                columnLayoutLogic.activeColumn == ColumnLayoutLogic.ActiveColumn.MAIN
+        }
         transcriptIndicatorStrip.visibility = if (shouldShow) View.VISIBLE else View.GONE
         if (!shouldShow) return
 
+        // Strip tracks whichever canvas the user is currently looking at. In DRAWER +
+        // dual-column modes that's the main canvas; in FOLD main view it's the main
+        // canvas too.
         transcriptIndicatorStrip.scrollOffsetY = inkCanvas.scrollOffsetY
         inkCanvas.post {
             val canvasLoc = IntArray(2)
