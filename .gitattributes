@@ -1,3 +1,23 @@
+# Normalize text files to LF in the repo; working-tree eol is LF on all OSes.
+* text=auto eol=lf
+
+# Windows-only scripts keep CRLF.
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+
+# Binary formats — never mangle.
+*.apk   binary
+*.jar   binary
+*.keystore binary
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.webp  binary
+*.ogg   binary
+*.mp3   binary
+*.wav   binary
+*.inkup binary
+
 # Test fixture JSON files: treat as binary for cleaner diffs and mark as
 # linguist-generated so they don't count toward language statistics.
 app/src/androidTest/assets/fixtures/*.json binary linguist-generated
