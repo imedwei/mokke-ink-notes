@@ -280,11 +280,13 @@ class BigmeInkController : InkController {
         private val mainHandler = android.os.Handler(view.context.mainLooper)
         private val paint = android.graphics.Paint().apply {
             // EPD uses discrete greyscale levels; anti-aliased edges end up
-            // dithered differently on each inValidate commit, producing the
+            // dithered differently on each inValidate commit, producing
             // "train track" ghosting. Non-AA renders cleanly on e-ink.
             isAntiAlias = false
             color = android.graphics.Color.BLACK
-            strokeWidth = 3f
+            // Match the Canvas-fallback stroke width so the daemon-painted
+            // ink and the bitmap-rendered ink don't look different sizes.
+            strokeWidth = com.writer.view.CanvasTheme.DEFAULT_STROKE_WIDTH
             style = android.graphics.Paint.Style.STROKE
             strokeCap = android.graphics.Paint.Cap.ROUND
             strokeJoin = android.graphics.Paint.Join.ROUND
