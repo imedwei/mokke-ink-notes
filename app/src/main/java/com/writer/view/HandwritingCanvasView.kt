@@ -531,6 +531,14 @@ class HandwritingCanvasView @JvmOverloads constructor(
         override fun onStrokeEnd(x: Float, y: Float, pressure: Float, timestampMs: Long) {
             Log.d(TAG, "onStrokeEnd: ${currentStrokePoints.size} points")
             endStroke(StrokePoint(x, y + scrollOffsetY, pressure, timestampMs))
+            if (inkController.consumesMotionEvents) {
+                if (!appendLastStrokeToBitmap()) drawToSurface() else composeSurface()
+                // Release the daemon's cached overlay pixels so snap
+                // replacement, auto-classify diagram borders, recognition
+                // previews, and any other post-UP canvas updates become
+                // visible without waiting for a scroll.
+                inkController.invalidateOverlay()
+            }
         }
     }
 

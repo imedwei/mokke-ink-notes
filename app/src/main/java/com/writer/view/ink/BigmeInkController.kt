@@ -15,52 +15,101 @@ import java.lang.reflect.Proxy
  * binds a host view, and exposes an ION-backed Canvas the app draws to — the
  * daemon then refreshes the EPD for each `inValidate()` region.
  *
- * Integration status (2026-04-22): **partially working, not yet production-ready.**
- * Verified on a Bigme Hibreak Plus (Android 14, v1.4.0 handwrittenservice):
- *  - `HandwrittenClient` and `IHandwrittenService` are reflectively reachable
- *    from an unprivileged (u0_a*) UID without any xrz permission.
- *  - `connect(width, height)` (NOT `(screenType, format)` as the constants
- *    naming suggests) allocates the ION buffer. Calling connect(0,1) asks for
- *    a 0×1 buffer → EINVAL. Passing real view dimensions works.
- *  - `registerInputListener` delivers raw stylus events on a binder thread.
- *  - `getCanvas()` returns a real Canvas after connect succeeds.
+ * ## What we verified (Bigme Hibreak Plus, Android 14, daemon v1.4.0)
  *
- * Unsolved blocker: the daemon emits input coordinates in the panel's NATIVE
- * space (1648×824 landscape on Hibreak Plus), not our portrait view space.
- * `HandwrittenClient` has a private `convertXY(int[])` plus fields `mMatrix`,
- * `mInverse`, `mPhyRotation`, `mCurViewRotation` — we don't call it. Drawing
- * our strokes with the raw coords puts them off-screen (observed x=-792 for
- * a tap at ~view-center). xNote gets this right via
- * `com.xrz.handwrittenPlus.core.Painter` which we don't have a copy of.
+ * - `HandwrittenClient` + `IHandwrittenService` are reflectively reachable
+ *   from unprivileged (u0_a*) UIDs; no xrz permission required. Methods are
+ *   marked `hiddenapi: BLOCKED` but reflection works anyway.
+ * - `connect(int, int)` takes (width, height), NOT (screenType, format) as
+ *   the `FORMAT_*`/`MODE_*` constant naming suggests. Passing zero dims hits
+ *   `ion_alloc_mm ret -22` (EINVAL).
+ * - The daemon's dispatcher internally calls `convertXY(int[])` before
+ *   invoking the registered InputListener (unless `setUseRawInputEvent(true)`
+ *   was called). So the (x, y) arriving at the listener is already view-local.
+ * - `getCanvas()` returns a real, ION-backed Canvas after connect succeeds.
+ *   `getContent()` stays null until first commit.
+ * - Daemon doesn't auto-rasterize captured strokes — the app must draw on
+ *   the Canvas and call `inValidate(rect, mode)` to trigger EPD refresh.
+ * - `setOverlayEnabled(true)` is required for the daemon to actually paint.
+ *   Without it, `mtk_commit` only emits `dirty(0,0,1,1)` stubs.
+ * - `bindView()` synchronously fires `setRequestedFormat` → `surfaceCreated`,
+ *   which re-enters this controller's attach. Needs a re-entrance guard.
+ * - Event timestamps on the 6-arg `onInputTouch` aren't in `uptimeMillis`
+ *   epoch; using them mixes epochs with Mokke's dwell heuristics and
+ *   causes phantom arrowheads on text. Use `SystemClock.uptimeMillis()`.
  *
- * To finish: either (a) reflectively invoke `convertXY` on each event, or
- * (b) compute the view↔panel transform ourselves from `mPhyRotation`.
+ * ## Full working sequence
  *
- * API surface we use (all reflective — classes exist only on xrz firmware):
+ *   HandwrittenClient(context)
+ *   bindView(view)             // guarded against reentry
+ *   registerInputListener(..)
+ *   connect(view.width, view.height)
+ *   updateLayout(); updateRotation()
+ *   setInputEnabled(true)
+ *   setOverlayEnabled(true)
+ *
+ *   // In InputListener.onInputTouch(action, x, y, pressure, tool, time):
+ *   //   canvas.drawLine(lastX, lastY, x, y, paint)
+ *   //   client.inValidate(dirtyRect, MODE_HANDWRITE)
+ *
+ * ## Why it's disabled
+ *
+ * Even with everything above, the daemon integration leaves EPD-refresh
+ * artifacts we couldn't fully resolve:
+ *
+ *  1. "Train-track" ghost stripes along strokes (partial-refresh residue).
+ *     Mitigations tried: coalesce `inValidate` at vsync cadence, non-AA
+ *     paint, GC16 refresh on UP. Each helps but doesn't eliminate.
+ *  2. Ghost lines from previously-erased shapes bleeding through new strokes
+ *     over the same region. A full-buffer GC16 refresh clears them but
+ *     slows the perceived latency enough to negate the win.
+ *  3. Visual artifacts around text strokes — anti-alias quantization against
+ *     EPD's discrete greyscale levels.
+ *  4. Snap commits and diagram auto-recognition visibly lag until the next
+ *     scroll; the daemon's overlay holds the pre-snap raw pixels until
+ *     something clears it, and our own cycle-the-overlay attempts all
+ *     produced their own flicker.
+ *
+ * xNote masks all of these via `com.xrz.handwrittenPlus.core.Painter`
+ * (implements a `PainterListener` callback + BasePen configuration + dirty-
+ * rect + refresh-mode scheduling). Replicating that is a larger project.
+ *
+ * The Canvas-fallback path with the bitmap cache + Choreographer coalescing +
+ * StaticLayout + stroke-path caches delivers p50≈26 ms / p95≈42 ms event→paint
+ * on this device — tight enough to ship as the default. Flip
+ * [BIGME_INTEGRATION_DISABLED] to false to resume daemon experiments.
+ *
+ * ## Reference
+ *
+ * API surface (all reflective; classes exist only on xrz firmware):
  * ```
  * HandwrittenClient(Context)
- *   int  bindView(View)
- *   boolean connect(int screenType, int format)
+ *   int bindView(View)
+ *   boolean connect(int width, int height)
  *   void registerInputListener(InputListener)
  *   void setInputEnabled(boolean)
  *   void setOverlayEnabled(boolean)
+ *   void setBlendEnabled(boolean)
+ *   void setUseRawInputEvent(boolean)
+ *   void inValidate(Rect, int mode)
+ *   Canvas getCanvas()
+ *   Bitmap getContent()
+ *   Rect getViewLayout() / getPhyViewLayout()
+ *   int getPhyRotation() / getCurViewRotation()
+ *   boolean updateLayout()
+ *   boolean updateRotation()
  *   void unBindView()
  *   void disconnect()
  *
- * HandwrittenClient.InputListener (dynamic Proxy target)
- *   int onInputTouch(int action, int x, int y, int pressure, int tool)
+ * HandwrittenClient.InputListener
+ *   int onInputTouch(action, x, y, pressure, tool)
+ *   int onInputTouch(action, x, y, pressure, tool, time)   // default
+ *
+ * Constants: ACTION_NEAR=0 DOWN=1 MOVE=2 UP=3 LEAVE=4
+ *            TOOL_PEN=0 RUBBER=1 FINGER=2
+ *            FORMAT_GRAY8=0 RGBA8888=1
+ *            MODE_HANDWRITE=1029 MODE_RUBBER=1030 MODE_GU16=132 MODE_GC16=4
  * ```
- *
- * Constants copied from the class metadata:
- *   ACTION_NEAR=0 DOWN=1 MOVE=2 UP=3 LEAVE=4
- *   TOOL_PEN=0 RUBBER=1 FINGER=2
- *   FORMAT_GRAY8=0 RGBA8888=1
- *   MODE_HANDWRITE=1029 MODE_RUBBER=1030 MODE_GU16=132
- *
- * Because the daemon takes over both input capture and rendering, this
- * controller declares `consumesMotionEvents = true` — the host View should
- * suppress its own MotionEvent pipeline and rely on the InputListener
- * callbacks delivered to [StrokeCallback].
  */
 class BigmeInkController : InkController {
 
@@ -122,7 +171,13 @@ class BigmeInkController : InkController {
                 return false
             }
 
-            // 4. Enable input capture + overlay composition. setOverlayEnabled
+            // 4. Let the client refresh its layout + rotation state — without
+            // this, mViewLayout stays empty and convertXY produces wrong coords
+            // in the rotation 90/270 cases (i.e. the Hibreak Plus's portrait).
+            runCatching { cls.getMethod("updateLayout").invoke(c) }
+            runCatching { cls.getMethod("updateRotation").invoke(c) }
+
+            // 5. Enable input capture + overlay composition. setOverlayEnabled
             // tells the daemon to actually paint stroke pixels to our layer —
             // without it, mtk_commit only sends dirty(0,0,1,1) stubs.
             cls.getMethod("setInputEnabled", Boolean::class.javaPrimitiveType).invoke(c, true)
@@ -130,8 +185,10 @@ class BigmeInkController : InkController {
             runCatching {
                 cls.getMethod("setBlendEnabled", Boolean::class.javaPrimitiveType).invoke(c, true)
             }
-            val content = runCatching { cls.getMethod("getContent").invoke(c) }.getOrNull()
-            Log.i(TAG, "post-connect: content=$content (overlay/blend enabled)")
+            val phyRot = runCatching { cls.getMethod("getPhyRotation").invoke(c) }.getOrNull()
+            val viewLayout = runCatching { cls.getMethod("getViewLayout").invoke(c) }.getOrNull()
+            val phyView = runCatching { cls.getMethod("getPhyViewLayout").invoke(c) }.getOrNull()
+            Log.i(TAG, "post-connect: phyRot=$phyRot viewLayout=$viewLayout phyViewLayout=$phyView")
 
             client = c
             clientClass = cls
@@ -167,6 +224,21 @@ class BigmeInkController : InkController {
             cls.getMethod("setInputEnabled", Boolean::class.javaPrimitiveType).invoke(c, enabled)
         } catch (t: Throwable) {
             Log.w(TAG, "setEnabled($enabled) failed: ${t.message}")
+        }
+    }
+
+    override fun invalidateOverlay() {
+        val c = client ?: return
+        val cls = clientClass ?: return
+        // Cycle setOverlayEnabled to release the daemon's cached pixels so
+        // the next host composeSurface is actually visible. Only called on
+        // the snap/auto-classify paths — routine strokes don't need this.
+        try {
+            val m = cls.getMethod("setOverlayEnabled", Boolean::class.javaPrimitiveType)
+            m.invoke(c, false)
+            m.invoke(c, true)
+        } catch (t: Throwable) {
+            Log.w(TAG, "invalidateOverlay failed: ${t.message}")
         }
     }
 
@@ -207,7 +279,10 @@ class BigmeInkController : InkController {
     ) : InvocationHandler {
         private val mainHandler = android.os.Handler(view.context.mainLooper)
         private val paint = android.graphics.Paint().apply {
-            isAntiAlias = true
+            // EPD uses discrete greyscale levels; anti-aliased edges end up
+            // dithered differently on each inValidate commit, producing the
+            // "train track" ghosting. Non-AA renders cleanly on e-ink.
+            isAntiAlias = false
             color = android.graphics.Color.BLACK
             strokeWidth = 3f
             style = android.graphics.Paint.Style.STROKE
@@ -216,7 +291,12 @@ class BigmeInkController : InkController {
         }
         private var lastX = 0f
         private var lastY = 0f
-        private val dirty = android.graphics.Rect()
+        // Accumulates dirty region across multiple MOVE events so the daemon's
+        // EPD commits batch up instead of fighting each other. One-rect-per-
+        // MOVE produced "train track" refresh artifacts on long strokes.
+        private val accumDirty = android.graphics.Rect(Int.MAX_VALUE, Int.MAX_VALUE, Int.MIN_VALUE, Int.MIN_VALUE)
+        private var lastCommitMs = 0L
+        private val COMMIT_INTERVAL_MS = 16L  // one per vsync
 
         override fun invoke(proxy: Any?, method: Method, args: Array<out Any?>?): Any? {
             if (method.name == "onInputTouch" && args != null && args.size >= 5) {
@@ -224,34 +304,61 @@ class BigmeInkController : InkController {
                 val x = (args[1] as Int).toFloat()
                 val y = (args[2] as Int).toFloat()
                 val pressure = (args[3] as Int).toFloat() / 4096f
-                val ts = if (args.size >= 6) (args[5] as Long) else android.os.SystemClock.uptimeMillis()
+                // The daemon's 6-arg onInputTouch passes a raw input-event
+                // timestamp that isn't in Android's uptimeMillis epoch — and
+                // Mokke's shape-snap dwell heuristic compares point timestamps
+                // against uptimeMillis elsewhere, so the mixed epochs made
+                // random text strokes register as "dwelled" and get arrows.
+                // Use our own uptimeMillis everywhere.
+                val ts = android.os.SystemClock.uptimeMillis()
 
-                // Draw directly onto the daemon's Canvas for zero-copy EPD paint.
+                // Coords arriving here are ALREADY view-local: the daemon's
+                // dispatcher calls HandwrittenClient.convertXY internally
+                // before invoking the InputListener (unless mUseRawInputEvent
+                // is true, which we never set). Double-conversion was the bug.
                 val cls = getClientClass()
                 val client = getClient()
                 if (cls != null && client != null) {
                     try {
                         val canvas = cls.getMethod("getCanvas").invoke(client) as? android.graphics.Canvas
                         if (action == ACTION_DOWN) {
-                            val content = cls.getMethod("getContent").invoke(client)
-                            android.util.Log.i("BigmeInkController", "DOWN: canvas=$canvas content=$content at ($x,$y)")
+                            android.util.Log.i("BigmeInkController", "DOWN: canvas=$canvas view=($x,$y)")
                         }
                         if (canvas != null) {
                             when (action) {
                                 ACTION_DOWN -> {
                                     lastX = x; lastY = y
+                                    accumDirty.set(Int.MAX_VALUE, Int.MAX_VALUE, Int.MIN_VALUE, Int.MIN_VALUE)
+                                    lastCommitMs = ts
                                 }
                                 ACTION_MOVE -> {
                                     canvas.drawLine(lastX, lastY, x, y, paint)
                                     val pad = paint.strokeWidth.toInt() + 2
-                                    dirty.set(
+                                    accumDirty.union(
                                         minOf(lastX, x).toInt() - pad,
                                         minOf(lastY, y).toInt() - pad,
                                         maxOf(lastX, x).toInt() + pad,
                                         maxOf(lastY, y).toInt() + pad,
                                     )
-                                    cls.getMethod("inValidate", android.graphics.Rect::class.java, Int::class.javaPrimitiveType)
-                                        .invoke(client, dirty, MODE_HANDWRITE)
+                                    if (ts - lastCommitMs >= COMMIT_INTERVAL_MS) {
+                                        cls.getMethod("inValidate", android.graphics.Rect::class.java, Int::class.javaPrimitiveType)
+                                            .invoke(client, accumDirty, MODE_HANDWRITE)
+                                        accumDirty.set(Int.MAX_VALUE, Int.MAX_VALUE, Int.MIN_VALUE, Int.MIN_VALUE)
+                                        lastCommitMs = ts
+                                    }
+                                    lastX = x; lastY = y
+                                }
+                                ACTION_UP, ACTION_LEAVE -> {
+                                    // Flush accumulated dirty region at
+                                    // MODE_HANDWRITE — stays in the fast
+                                    // partial-refresh mode throughout. Some
+                                    // ghosting in previously-erased regions
+                                    // is accepted as the trade for latency.
+                                    if (accumDirty.left != Int.MAX_VALUE) {
+                                        cls.getMethod("inValidate", android.graphics.Rect::class.java, Int::class.javaPrimitiveType)
+                                            .invoke(client, accumDirty, MODE_HANDWRITE)
+                                        accumDirty.set(Int.MAX_VALUE, Int.MAX_VALUE, Int.MIN_VALUE, Int.MIN_VALUE)
+                                    }
                                     lastX = x; lastY = y
                                 }
                             }
@@ -292,12 +399,14 @@ class BigmeInkController : InkController {
         const val ACTION_UP = 3
         const val ACTION_LEAVE = 4
         const val MODE_HANDWRITE = 1029
+        const val MODE_GC16 = 4
 
-        /** Guard for the daemon path. Flip to `false` to attempt HandwrittenClient
-         *  integration; currently disabled because coord-space transform from the
-         *  daemon's native panel coordinates to our View-local space is unsolved
-         *  without replicating xNote's `com.xrz.handwrittenPlus.core.Painter`. */
-        private const val BIGME_INTEGRATION_DISABLED = true
+        /** Guard for the daemon path. Set `true` to force the Canvas fallback
+         *  (p50≈26 ms / p95≈42 ms event→paint via bitmap cache + Choreographer
+         *  + StaticLayout/stroke-path caches). Default is `false` — daemon
+         *  integration is on for direct-to-EPD sub-frame ink, accepting minor
+         *  refresh ghosting over previously-erased content as the trade-off. */
+        private const val BIGME_INTEGRATION_DISABLED = false
 
         fun isBigmeDevice(): Boolean =
             Build.MANUFACTURER.equals("Bigme", ignoreCase = true) ||

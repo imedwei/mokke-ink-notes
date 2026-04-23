@@ -47,6 +47,14 @@ interface InkController {
     fun setEnabled(enabled: Boolean)
 
     /**
+     * Invalidate any daemon-held overlay pixels so the next host compose
+     * is visible on the EPD. Needed after a stroke is REPLACED client-side
+     * (snap, auto-classify) — the daemon's overlay still holds the original
+     * raw pixels until something forces it to release. Default: no-op.
+     */
+    fun invalidateOverlay() = Unit
+
+    /**
      * Detach — release the raw-drawing session. After this, [isActive] is
      * false. [attach] must be called again to resume low-latency ink.
      */
