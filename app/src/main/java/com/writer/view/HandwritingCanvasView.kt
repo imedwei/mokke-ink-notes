@@ -1,6 +1,7 @@
 package com.writer.view
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
@@ -16,11 +17,12 @@ import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import com.writer.ui.writing.AnnotationStroke
+import com.writer.ui.writing.PerfCounters
+import com.writer.ui.writing.PerfMetric
 import com.writer.ui.writing.TextAnnotation
-import com.onyx.android.sdk.data.note.TouchPoint
-import com.onyx.android.sdk.pen.RawInputCallback
-import com.onyx.android.sdk.pen.TouchHelper
-import com.onyx.android.sdk.pen.data.TouchPointList
+import com.writer.view.ink.InkController
+import com.writer.view.ink.InkControllerFactory
+import com.writer.view.ink.StrokeCallback
 import android.text.TextPaint
 import com.writer.model.DiagramArea
 import com.writer.model.TextBlock
@@ -39,9 +41,10 @@ import kotlin.math.hypot
 import kotlin.math.sin
 
 /**
- * Primary ink input surface. Uses Onyx Pen SDK for low-latency
- * e-ink rendering on Boox devices via SurfaceView. Falls back to standard
- * Android MotionEvent handling on non-Boox devices (for emulator testing).
+ * Primary ink input surface. Delegates low-latency pen rendering to an
+ * [InkController] (currently Onyx Boox only — see the [com.writer.view.ink]
+ * package). When no hardware ink pipeline is available, falls back to
+ * standard Android MotionEvent + Canvas rendering.
  */
 class HandwritingCanvasView @JvmOverloads constructor(
     context: Context,
@@ -69,6 +72,64 @@ class HandwritingCanvasView @JvmOverloads constructor(
     private val currentPath = Path()
     // Reused during rendering to avoid allocating a new Path per stroke per frame
     private val renderPath = Path()
+
+    // Offscreen bitmap caching the static scene (background, ruled lines,
+    // completed strokes, text blocks, overlays that don't change per pointer
+    // event). Rebuilt by [drawToSurface]; reused by [drawOverlayOnlyToSurface]
+    // during ACTION_MOVE so per-move updates skip the full scene redraw that
+    // otherwise dominates latency on the Canvas-fallback (non-Onyx) path.
+    private var contentBitmap: Bitmap? = null
+
+    // Choreographer-coalesced overlay composer. ACTION_MOVE events arrive faster
+    // than the SurfaceFlinger can post frames, so a naive compose-per-event
+    // backs up the main thread by hundreds of ms. Instead we mark a pending
+    // frame and let the next vsync drain it — any intervening MOVE updates to
+    // `currentPath` are captured automatically in the next compose.
+    private val choreographer = android.view.Choreographer.getInstance()
+    private var overlayFrameScheduled = false
+    // Oldest MOTIONEvent eventTime pending since the last compose. Drained on
+    // each frame to record true end-to-end latency (event → pixel on screen).
+    private var pendingOverlayEventTime = 0L
+    private val overlayFrameCallback = android.view.Choreographer.FrameCallback {
+        overlayFrameScheduled = false
+        if (surfaceReady && contentBitmap != null) {
+            PerfCounters.time(PerfMetric.INK_COMPOSE_OVERLAY) { composeSurface() }
+            val eventTime = pendingOverlayEventTime
+            if (eventTime > 0L) {
+                val latencyNs = (android.os.SystemClock.uptimeMillis() - eventTime) * 1_000_000L
+                if (latencyNs >= 0) PerfCounters.recordDirect(PerfMetric.INK_MOVE_LATENCY, latencyNs)
+                pendingOverlayEventTime = 0L
+            }
+        }
+    }
+
+    private fun scheduleOverlayFrame(eventTimeMs: Long) {
+        if (pendingOverlayEventTime == 0L) pendingOverlayEventTime = eventTimeMs
+        if (overlayFrameScheduled) return
+        overlayFrameScheduled = true
+        choreographer.postFrameCallback(overlayFrameCallback)
+    }
+
+    private fun cancelPendingOverlayFrame() {
+        if (overlayFrameScheduled) {
+            choreographer.removeFrameCallback(overlayFrameCallback)
+            overlayFrameScheduled = false
+        }
+        pendingOverlayEventTime = 0L
+    }
+
+    // Scroll and other state mutations trigger drawToSurface. Unlike overlay
+    // compose (dirty-rect, ~10 ms), a full scene rebuild is ~100 ms on this
+    // HAL, so firing one per MotionEvent makes scroll stall-prone. Coalesce
+    // to at most one rebuild per vsync via Choreographer.
+    private var rebuildComposeScheduled = false
+    private val rebuildComposeCallback = android.view.Choreographer.FrameCallback {
+        rebuildComposeScheduled = false
+        if (!surfaceReady) return@FrameCallback
+        cancelPendingOverlayFrame()
+        PerfCounters.time(PerfMetric.INK_RENDER_STATIC) { rebuildContentBitmap() }
+        composeSurface()
+    }
 
     private val strokePaint = CanvasTheme.newStrokePaint()
     private val linePaint = CanvasTheme.newLinePaint()
@@ -352,8 +413,9 @@ class HandwritingCanvasView @JvmOverloads constructor(
      *  The activity should transfer the session before pen-down. */
     var onRequestOnyxSession: ((Float, Float) -> Unit)? = null
 
-    private var useOnyxSdk = false
-    private var touchHelper: TouchHelper? = null
+    private val inkController: InkController = InkControllerFactory.create()
+    /** True iff an attached hardware ink overlay is currently rendering strokes. */
+    private val useOnyxSdk: Boolean get() = inkController.isActive
     private var surfaceReady = false
 
     // ── Running stroke bounding box ───────────────────────────────────────────
@@ -411,38 +473,19 @@ class HandwritingCanvasView @JvmOverloads constructor(
         handler.postDelayed(idleRunnable, IDLE_TIMEOUT_MS)
     }
 
-    private val onyxCallback = object : RawInputCallback() {
-        override fun onBeginRawDrawing(b: Boolean, tp: TouchPoint) {
-            beginStroke(tp.toDocStrokePoint())
+    private val overlayStrokeCallback = object : StrokeCallback {
+        override fun onStrokeBegin(x: Float, y: Float, pressure: Float, timestampMs: Long) {
+            beginStroke(StrokePoint(x, y + scrollOffsetY, pressure, timestampMs))
         }
 
-        override fun onRawDrawingTouchPointMoveReceived(tp: TouchPoint) {
-            addStrokePoint(tp.toDocStrokePoint())
+        override fun onStrokeMove(x: Float, y: Float, pressure: Float, timestampMs: Long) {
+            addStrokePoint(StrokePoint(x, y + scrollOffsetY, pressure, timestampMs))
         }
 
-        override fun onRawDrawingTouchPointListReceived(tpl: TouchPointList) {
-            // Batch delivery — used by SDK after stroke ends
+        override fun onStrokeEnd(x: Float, y: Float, pressure: Float, timestampMs: Long) {
+            Log.d(TAG, "onStrokeEnd: ${currentStrokePoints.size} points")
+            endStroke(StrokePoint(x, y + scrollOffsetY, pressure, timestampMs))
         }
-
-        override fun onEndRawDrawing(b: Boolean, tp: TouchPoint) {
-            Log.d(TAG, "onEndRawDrawing: ${currentStrokePoints.size} points")
-            endStroke(tp.toDocStrokePoint())
-        }
-
-        override fun onBeginRawErasing(b: Boolean, tp: TouchPoint) {}
-        override fun onEndRawErasing(b: Boolean, tp: TouchPoint) {}
-        override fun onRawErasingTouchPointMoveReceived(tp: TouchPoint) {}
-        override fun onRawErasingTouchPointListReceived(tpl: TouchPointList) {}
-    }
-
-    /** Convert SDK TouchPoint to document-space StrokePoint. */
-    private fun TouchPoint.toDocStrokePoint(): StrokePoint {
-        return StrokePoint(
-            x = this.x,
-            y = this.y + scrollOffsetY,
-            pressure = this.pressure,
-            timestamp = this.timestamp
-        )
     }
 
     // --- SurfaceHolder.Callback ---
@@ -467,10 +510,10 @@ class HandwritingCanvasView @JvmOverloads constructor(
         val dimensionsChanged = width != lastSurfaceWidth || height != lastSurfaceHeight
         lastSurfaceWidth = width
         lastSurfaceHeight = height
-        if (useOnyxSdk && dimensionsChanged) {
+        if (inkController.isActive && dimensionsChanged) {
             // Delay reinitialize to let the system fully settle after rotation.
-            // The Onyx SDK caches the view's screen position at TouchHelper.create()
-            // time — if we reinitialize too early, it picks up stale coordinates.
+            // The Onyx SDK caches the view's screen position at attach time —
+            // if we reinitialize too early, it picks up stale coordinates.
             handler.removeCallbacks(reinitOnyxRunnable)
             handler.postDelayed(reinitOnyxRunnable, 500L)
         }
@@ -479,12 +522,14 @@ class HandwritingCanvasView @JvmOverloads constructor(
     override fun surfaceDestroyed(holder: SurfaceHolder) {
         surfaceReady = false
         handler.removeCallbacks(idleRunnable)
-        try {
-            touchHelper?.closeRawDrawing()
-        } catch (e: Exception) {
-            Log.w(TAG, "Error closing Onyx SDK: ${e.message}")
+        cancelPendingOverlayFrame()
+        if (rebuildComposeScheduled) {
+            choreographer.removeFrameCallback(rebuildComposeCallback)
+            rebuildComposeScheduled = false
         }
-        useOnyxSdk = false
+        inkController.detach()
+        contentBitmap?.recycle()
+        contentBitmap = null
     }
 
     /** When true, skip auto-init of Onyx SDK on surfaceCreated. The session
@@ -496,35 +541,11 @@ class HandwritingCanvasView @JvmOverloads constructor(
     var externalOnyxActive = false
 
     private fun tryInitOnyx() {
-        if (useOnyxSdk) return // already initialized
+        if (inkController.isActive) return
         if (deferOnyxInit) return // will be initialized on demand
-
-        try {
-            val limit = Rect()
-            getLocalVisibleRect(limit)
-
-            touchHelper = TouchHelper.create(this, onyxCallback)
-            touchHelper?.setStrokeWidth(CanvasTheme.DEFAULT_STROKE_WIDTH)
-            touchHelper?.setStrokeStyle(TouchHelper.STROKE_STYLE_PENCIL)
-            touchHelper?.setStrokeColor(Color.BLACK)
-            touchHelper?.setLimitRect(limit, emptyList())
-            touchHelper?.openRawDrawing()
-            touchHelper?.setRawDrawingEnabled(true)
-
-            // Also set EPD controller region to full view to avoid hardware dead zone
-            try {
-                com.onyx.android.sdk.api.device.epd.EpdController.setScreenHandWritingRegionLimit(this)
-            } catch (e: Exception) {
-                Log.w(TAG, "EpdController.setScreenHandWritingRegionLimit failed: ${e.message}")
-            }
-
-            useOnyxSdk = true
-            Log.i(TAG, "Onyx SDK initialized: limitRect=$limit")
-        } catch (e: Exception) {
-            Log.w(TAG, "Onyx SDK init failed, falling back to standard touch: ${e.message}")
-            useOnyxSdk = false
-            touchHelper = null
-        }
+        val limit = Rect()
+        getLocalVisibleRect(limit)
+        inkController.attach(this, limit, overlayStrokeCallback)
     }
 
     // --- Hover handling (for Onyx SDK session swap between canvases) ---
@@ -575,8 +596,12 @@ class HandwritingCanvasView @JvmOverloads constructor(
             onRequestOnyxSession?.invoke(event.x, event.y)
         }
 
-        // If using Onyx SDK (per-canvas or shared), pen input is handled by SDK callbacks
-        if (useOnyxSdk || externalOnyxActive) return true
+        // Controllers that consume MotionEvents (Onyx TouchHelper, or an external
+        // shared Onyx session) — pen input is handled by SDK callbacks, swallow here.
+        // Bigme's xrz path does NOT consume MotionEvents: the native daemon paints
+        // the visible ink at the framebuffer while the app still processes the
+        // logical stroke through the code below.
+        if (inkController.consumesMotionEvents || externalOnyxActive) return true
 
         // Stylus/mouse on canvas → writing (fallback for non-Boox devices)
         val x = event.x
@@ -589,7 +614,10 @@ class HandwritingCanvasView @JvmOverloads constructor(
                 currentPath.reset()
                 currentPath.moveTo(x, y)
                 beginStroke(StrokePoint(x, y, pressure, timestamp))
-                drawToSurface()
+                // No rebuild needed: the cached bitmap already reflects all
+                // completed state (every mutation path calls drawToSurface).
+                // Just compose the existing scene.
+                if (contentBitmap != null) composeSurface() else drawToSurface()
                 return true
             }
             MotionEvent.ACTION_MOVE -> {
@@ -603,13 +631,19 @@ class HandwritingCanvasView @JvmOverloads constructor(
                 }
                 currentPath.lineTo(x, y)
                 addStrokePoint(StrokePoint(x, y, pressure, timestamp))
-                drawToSurface()
+                // Schedule a coalesced overlay compose for the next vsync.
+                // Many MOVE events per frame collapse into one paint.
+                drawOverlayOnlyToSurface(event.eventTime)
                 return true
             }
             MotionEvent.ACTION_UP -> {
                 currentPath.lineTo(x, y)
                 endStroke(StrokePoint(x, y, pressure, timestamp))
-                drawToSurface()
+                // Incremental commit: paint the just-finished stroke into the
+                // existing cached bitmap instead of re-rasterizing everything.
+                // Full rebuild is O(N strokes) × ~100ms; incremental is O(1)
+                // per stroke and runs in the low milliseconds even on this HAL.
+                if (!appendLastStrokeToBitmap()) drawToSurface() else composeSurface()
                 return true
             }
         }
@@ -1304,15 +1338,116 @@ class HandwritingCanvasView @JvmOverloads constructor(
     /** Draw all content to the SurfaceView's surface. */
     fun drawToSurface() {
         if (!surfaceReady) return
-        val canvas = holder.lockCanvas() ?: return
+        // Coalesce to one rebuild+compose per vsync — dozens of scroll/state
+        // mutations in one burst collapse into a single scene rebuild.
+        if (rebuildComposeScheduled) return
+        rebuildComposeScheduled = true
+        choreographer.postFrameCallback(rebuildComposeCallback)
+    }
+
+    /** Fast path for ACTION_MOVE: reuse the cached static scene and only paint
+     *  the in-progress stroke + dwell-dot overlay. Any mutation of completed
+     *  strokes, scroll offset, text blocks, or other static content must go
+     *  through [drawToSurface] so the cache is rebuilt.
+     *
+     *  Coalesces to one compose per display frame via Choreographer — many
+     *  MOVE events within one vsync collapse into a single redraw. */
+    private fun drawOverlayOnlyToSurface(eventTimeMs: Long) {
+        if (!surfaceReady) return
+        if (contentBitmap == null) {
+            drawToSurface()
+            return
+        }
+        scheduleOverlayFrame(eventTimeMs)
+    }
+
+    private fun rebuildContentBitmap() {
+        val w = width; val h = height
+        if (w <= 0 || h <= 0) return
+        val existing = contentBitmap
+        val bmp = if (existing != null && existing.width == w && existing.height == h) {
+            existing
+        } else {
+            existing?.recycle()
+            Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).also { contentBitmap = it }
+        }
+        renderStaticContent(Canvas(bmp))
+    }
+
+    /** Paint just the most recently completed stroke into the existing cached
+     *  bitmap — avoids a full O(N) rebuild on ACTION_UP. Returns false if the
+     *  cache doesn't exist yet (caller should fall back to a full rebuild). */
+    private fun appendLastStrokeToBitmap(): Boolean {
+        val bmp = contentBitmap ?: return false
+        val stroke = completedStrokes.lastOrNull() ?: return false
+        val c = Canvas(bmp)
+        c.save()
+        c.translate(0f, -scrollOffsetY)
+        drawStroke(c, stroke)
+        c.restore()
+        return true
+    }
+
+    private fun composeSurface() {
+        val bmp = contentBitmap ?: return
+        val dirty = computeOverlayDirtyRect(bmp.width, bmp.height)
+        val canvas = if (dirty != null) holder.lockCanvas(dirty) else holder.lockCanvas()
+        if (canvas == null) return
         try {
-            renderContent(canvas)
+            if (dirty != null) {
+                // Partial compose: only the region around the in-progress stroke.
+                // SurfaceFlinger preserves pixels outside [dirty] from the
+                // previous posted buffer, so blitting the whole bitmap here is
+                // waste. Clip to the dirty region and copy just that slice.
+                canvas.clipRect(dirty)
+                canvas.drawBitmap(bmp, dirty, dirty, null)
+            } else {
+                canvas.drawBitmap(bmp, 0f, 0f, null)
+            }
+            drawDynamicOverlay(canvas)
         } finally {
             holder.unlockCanvasAndPost(canvas)
         }
     }
 
-    private fun renderContent(canvas: Canvas) {
+    /** Bounding rectangle (screen-space, inflated for stroke width) of the
+     *  in-progress stroke — used to limit the surface compose to just the
+     *  region that changes during ACTION_MOVE. Returns null when no live
+     *  stroke exists, forcing a full compose. */
+    private fun computeOverlayDirtyRect(surfaceW: Int, surfaceH: Int): Rect? {
+        if (currentStrokePoints.size < 2) return null
+        // Stroke bounds are tracked in document space; translate to screen and
+        // pad by stroke-width plus a safety margin for antialias bleed.
+        val pad = strokePaint.strokeWidth.toInt() + 4
+        val left = (strokeMinX - pad).toInt().coerceAtLeast(0)
+        val top = (strokeMinY - scrollOffsetY - pad).toInt().coerceAtLeast(0)
+        val right = (strokeMaxX + pad).toInt().coerceAtMost(surfaceW)
+        val bottom = (strokeMaxY - scrollOffsetY + pad).toInt().coerceAtMost(surfaceH)
+        if (right <= left || bottom <= top) return null
+        return Rect(left, top, right, bottom)
+    }
+
+    /** In-progress stroke + dwell dot — the parts that change per pointer event.
+     *  Both are stored in document coordinates (see stroke-capture path in
+     *  onTouchEvent, which adds scrollOffsetY), so we apply the same scroll
+     *  translation [renderStaticContent] uses before painting onto the
+     *  screen-space surface. */
+    private fun drawDynamicOverlay(canvas: Canvas) {
+        val hasLiveStroke = !inkController.consumesMotionEvents && currentStrokePoints.size > 1
+        val hasDwellDot = dwellDotCenter != null
+        if (!hasLiveStroke && !hasDwellDot) return
+        canvas.save()
+        canvas.translate(0f, -scrollOffsetY)
+        if (hasLiveStroke) {
+            canvas.drawPath(currentPath, strokePaint)
+        }
+        dwellDotCenter?.let { dot ->
+            canvas.drawCircle(dot.x, dot.y, CanvasTheme.DEFAULT_STROKE_WIDTH * 3f, dwellDotPaint)
+        }
+        canvas.restore()
+    }
+
+    private fun renderStaticContent(canvas: Canvas) {
         // Clear background
         canvas.drawColor(Color.WHITE)
 
@@ -1393,15 +1528,8 @@ class HandwritingCanvasView @JvmOverloads constructor(
             }
         }
 
-        // Draw current in-progress stroke (fallback only)
-        if (!useOnyxSdk && currentStrokePoints.size > 1) {
-            canvas.drawPath(currentPath, strokePaint)
-        }
-
-        // Draw dwell indicator dot (start-dwell)
-        dwellDotCenter?.let { dot ->
-            canvas.drawCircle(dot.x, dot.y, CanvasTheme.DEFAULT_STROKE_WIDTH * 3f, dwellDotPaint)
-        }
+        // (In-progress stroke + dwell dot are rendered by drawDynamicOverlay
+        // directly onto the live SurfaceView after this cached scene is blitted.)
 
         // Draw borders around all diagram areas (shifted during space-insert preview).
         // Use solid borders in space-insert mode to distinguish from dashed line markers.
@@ -1663,65 +1791,36 @@ class HandwritingCanvasView @JvmOverloads constructor(
         CanvasTheme.drawStroke(canvas, stroke, renderPath, strokePaint)
     }
 
-    /** Fully close Onyx SDK raw drawing session (e.g. before launching another activity). */
+    /** Fully close the ink overlay session (e.g. before launching another activity). */
     fun closeRawDrawing() {
-        if (useOnyxSdk) {
-            try {
-                touchHelper?.setRawDrawingEnabled(false)
-                touchHelper?.setRawInputReaderEnable(false)
-                touchHelper?.closeRawDrawing()
-                useOnyxSdk = false
-                Log.i(TAG, "Onyx SDK raw drawing closed")
-            } catch (e: Exception) {
-                Log.w(TAG, "Error closing raw drawing: ${e.message}")
-            }
-        }
+        inkController.detach()
     }
 
-    /** Reopen Onyx SDK raw drawing after it was closed (e.g. returning from another activity). */
+    /** Reopen the ink overlay after it was closed (e.g. returning from another activity). */
     fun reopenRawDrawing() {
         if (!surfaceReady) return
-        if (useOnyxSdk) return
+        if (inkController.isActive) return
         tryInitOnyx()
         drawToSurface()
     }
 
-    /** Fully close and reopen the SDK to reset internal state (e.g. after canvas resize). */
+    /** Fully close and reopen the overlay to reset internal state (e.g. after canvas resize). */
     fun reinitializeRawDrawing() {
-        if (useOnyxSdk) {
-            try {
-                touchHelper?.closeRawDrawing()
-                useOnyxSdk = false
-            } catch (e: Exception) {
-                Log.w(TAG, "Error closing SDK for reinit: ${e.message}")
-            }
-        }
+        inkController.detach()
         if (surfaceReady) {
             tryInitOnyx()
             drawToSurface()
         }
     }
 
-    /** Pause Onyx SDK raw drawing (needed before scrolling/screen refresh). */
+    /** Pause the ink overlay (needed before scrolling/screen refresh). */
     fun pauseRawDrawing() {
-        if (useOnyxSdk) {
-            try {
-                touchHelper?.setRawDrawingEnabled(false)
-            } catch (e: Exception) {
-                Log.w(TAG, "Error pausing raw drawing: ${e.message}")
-            }
-        }
+        inkController.setEnabled(false)
     }
 
-    /** Resume Onyx SDK raw drawing after scrolling/screen refresh. */
+    /** Resume the ink overlay after scrolling/screen refresh. */
     fun resumeRawDrawing() {
-        if (useOnyxSdk) {
-            try {
-                touchHelper?.setRawDrawingEnabled(true)
-            } catch (e: Exception) {
-                Log.w(TAG, "Error resuming raw drawing: ${e.message}")
-            }
-        }
+        inkController.setEnabled(true)
     }
 
     /** Remove strokes by ID from the canvas and redraw. */
@@ -1790,7 +1889,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
         textAnnotations = emptyList()
     }
 
-    fun isUsingOnyxSdk(): Boolean = useOnyxSdk
+    fun isUsingOnyxSdk(): Boolean = inkController.isActive
 
     /** True if a stroke is currently being drawn (pen is in contact). */
     fun isPenActive(): Boolean = touchFilter?.penActive == true

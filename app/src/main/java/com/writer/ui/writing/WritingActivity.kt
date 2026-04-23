@@ -175,6 +175,12 @@ class WritingActivity : AppCompatActivity() {
         override fun onReceive(context: android.content.Context?, intent: android.content.Intent?) {
             val file = coordinator?.generateBugReport()
             Log.i(TAG, if (file != null) "Bug report generated: ${file.absolutePath}" else "No strokes to report")
+            // Also dump perf counters to logcat — they're easier to grep via adb
+            // than pulling the full bug-report file (which is permission-gated).
+            for ((metric, snap) in PerfCounters.snapshot()) {
+                if (snap.count == 0L) continue
+                Log.i("PerfDump", "${metric.label} count=${snap.count} p50=${snap.p50Ms}ms p95=${snap.p95Ms}ms max=${snap.maxMs}ms last=${snap.lastMs}ms")
+            }
         }
     }
 
@@ -269,7 +275,9 @@ class WritingActivity : AppCompatActivity() {
 
         val filter = android.content.IntentFilter("${packageName}.GENERATE_BUG_REPORT")
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(bugReportReceiver, filter, RECEIVER_NOT_EXPORTED)
+            // RECEIVER_EXPORTED so `adb shell am broadcast` can trigger debug
+            // dumps from outside the app's UID.
+            registerReceiver(bugReportReceiver, filter, RECEIVER_EXPORTED)
         } else {
             registerReceiver(bugReportReceiver, filter)
         }
@@ -327,10 +335,12 @@ class WritingActivity : AppCompatActivity() {
         contextRail.onDotLongPress = { lineIndex, screenY -> showMainPeek(lineIndex, screenY) }
 
         // Floating gutter overlay — reject palm touches and long holds on buttons.
+        // Threshold must accommodate devices whose driver reports inflated touch
+        // sizes (Bigme Hibreak Plus reports ~60-80dp for a normal fingertip).
         gutterOverlay = findViewById(R.id.gutterOverlay)
         val touchGuard = GutterTouchGuard(
             palmThresholdPx = android.util.TypedValue.applyDimension(
-                android.util.TypedValue.COMPLEX_UNIT_DIP, 30f, resources.displayMetrics),
+                android.util.TypedValue.COMPLEX_UNIT_DIP, 120f, resources.displayMetrics),
             maxTapMs = android.view.ViewConfiguration.getLongPressTimeout().toLong(),
             isPenBusy = ::isPenBusy
         )

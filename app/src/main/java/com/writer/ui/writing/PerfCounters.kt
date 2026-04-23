@@ -10,6 +10,10 @@ enum class PerfMetric(val label: String) {
     PREVIEW_DRAW("preview.draw"),
     SAVE_SYNC("save.sync"),
     SAVE_INCREMENTAL("save.incremental"),
+    // Ink-latency metrics — recorded by HandwritingCanvasView.
+    INK_RENDER_STATIC("ink.render_static"),       // rebuildContentBitmap wall time
+    INK_COMPOSE_OVERLAY("ink.compose_overlay"),   // drawOverlayOnlyToSurface wall time
+    INK_MOVE_LATENCY("ink.move_latency"),         // MotionEvent.eventTime → overlay committed
 }
 
 /**
