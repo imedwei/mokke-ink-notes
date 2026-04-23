@@ -54,6 +54,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
 
     companion object {
         private const val TAG = "HandwritingCanvas"
+        private const val TEXT_BLOCK_LAYOUT_CACHE_MAX = 32
         // Line spacing and top margin are DPI-scaled via ScreenMetrics.
         val LINE_SPACING get() = ScreenMetrics.lineSpacing
         // Idle timeout before checking scroll condition (ms)
@@ -79,6 +80,51 @@ class HandwritingCanvasView @JvmOverloads constructor(
     // during ACTION_MOVE so per-move updates skip the full scene redraw that
     // otherwise dominates latency on the Canvas-fallback (non-Onyx) path.
     private var contentBitmap: Bitmap? = null
+
+    // Cache of wrapped text-block StaticLayouts keyed by (text, width). Building
+    // a StaticLayout requires measuring + line-breaking the full text; doing
+    // this for every text block on every scene rebuild was a multi-tens-of-ms
+    // cost. LinkedHashMap gives access-order LRU eviction.
+    private val textBlockLayoutCache: LinkedHashMap<Pair<String, Int>, android.text.StaticLayout> =
+        object : LinkedHashMap<Pair<String, Int>, android.text.StaticLayout>(16, 0.75f, true) {
+            override fun removeEldestEntry(
+                eldest: Map.Entry<Pair<String, Int>, android.text.StaticLayout>
+            ): Boolean = size > TEXT_BLOCK_LAYOUT_CACHE_MAX
+        }
+
+    private fun getOrBuildBlockLayout(text: String, width: Int): android.text.StaticLayout {
+        val key = text to width
+        return textBlockLayoutCache[key] ?: android.text.StaticLayout.Builder
+            .obtain(text, 0, text.length, textBlockPaint, width)
+            .setAlignment(android.text.Layout.Alignment.ALIGN_NORMAL)
+            .build()
+            .also { textBlockLayoutCache[key] = it }
+    }
+
+    // Cache of per-stroke Path objects. Building the path is O(points) —
+    // significant for long freehand strokes when the full scene rebuilds
+    // many times (snap processing, recognition updates). Path is immutable
+    // once populated for a stroke, so a strokeId-keyed cache is safe.
+    private val strokePathCache = HashMap<String, Path>()
+
+    private fun cachedStrokePath(stroke: com.writer.model.InkStroke): Path {
+        strokePathCache[stroke.strokeId]?.let { return it }
+        val p = Path()
+        CanvasTheme.populateStrokePath(stroke, p)
+        strokePathCache[stroke.strokeId] = p
+        return p
+    }
+
+    /** Drop cached paths for strokes no longer in [completedStrokes]. */
+    private fun trimStrokePathCache() {
+        if (strokePathCache.isEmpty()) return
+        val live = HashSet<String>(completedStrokes.size)
+        for (s in completedStrokes) live.add(s.strokeId)
+        val it = strokePathCache.entries.iterator()
+        while (it.hasNext()) {
+            if (it.next().key !in live) it.remove()
+        }
+    }
 
     // Choreographer-coalesced overlay composer. ACTION_MOVE events arrive faster
     // than the SurfaceFlinger can post frames, so a naive compose-per-event
@@ -998,7 +1044,17 @@ class HandwritingCanvasView @JvmOverloads constructor(
     /** Force e-ink refresh by cycling the Onyx raw drawing mode. */
     private fun flushAndRedraw() {
         pauseRawDrawing()
-        drawToSurface()
+        if (inkController.consumesMotionEvents) {
+            // Onyx-style overlay: raw-draw pixels will clear and the cached
+            // bitmap is the only source of truth — must rebuild it with the
+            // just-snapped/replaced stroke visible.
+            drawToSurface()
+        } else {
+            // Canvas-fallback path: the ACTION_UP handler in onTouchEvent
+            // follows this call with appendLastStrokeToBitmap + composeSurface,
+            // which paints the snapped stroke incrementally. A full rebuild
+            // here would duplicate that work and stall the UI for ~100 ms.
+        }
         resumeRawDrawing()
     }
 
@@ -1371,6 +1427,10 @@ class HandwritingCanvasView @JvmOverloads constructor(
             existing?.recycle()
             Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).also { contentBitmap = it }
         }
+        // Keep the path cache bounded: raw strokes replaced by snap leave stale
+        // entries that the mutation paths (remove/replace/clear/load) don't know
+        // to evict. Trim them at each full rebuild — cheap O(N) scan.
+        if (strokePathCache.size > completedStrokes.size + 16) trimStrokePathCache()
         renderStaticContent(Canvas(bmp))
     }
 
@@ -1556,11 +1616,10 @@ class HandwritingCanvasView @JvmOverloads constructor(
                 block.startLineIndex >= spaceInsertAnchorLine
             ) previewShiftPx else 0f
 
-            // Build a StaticLayout for word wrapping
-            val layout = android.text.StaticLayout.Builder
-                .obtain(block.text, 0, block.text.length, textBlockPaint, textWidth)
-                .setAlignment(android.text.Layout.Alignment.ALIGN_NORMAL)
-                .build()
+            // Build (or reuse) a StaticLayout for word wrapping. StaticLayout
+            // construction is ~10-30ms per block — caching saves this on every
+            // scene rebuild for text that hasn't changed.
+            val layout = getOrBuildBlockLayout(block.text, textWidth)
 
             // Draw each wrapped line with its baseline on the ruled line.
             // Ruled line is at TOP_MARGIN + (lineIndex+1) * LINE_SPACING.
@@ -1788,7 +1847,9 @@ class HandwritingCanvasView @JvmOverloads constructor(
     }
 
     private fun drawStroke(canvas: Canvas, stroke: InkStroke) {
-        CanvasTheme.drawStroke(canvas, stroke, renderPath, strokePaint)
+        if (stroke.points.size < 2) return
+        canvas.drawPath(cachedStrokePath(stroke), strokePaint)
+        CanvasTheme.drawStrokeArrowheads(canvas, stroke, strokePaint)
     }
 
     /** Fully close the ink overlay session (e.g. before launching another activity). */
@@ -1826,6 +1887,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
     /** Remove strokes by ID from the canvas and redraw. */
     fun removeStrokes(strokeIds: Set<String>) {
         completedStrokes.removeAll { it.strokeId in strokeIds }
+        for (id in strokeIds) strokePathCache.remove(id)
         drawToSurface()
     }
 
@@ -1834,6 +1896,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
         for (i in completedStrokes.indices) {
             val replacement = replacements[completedStrokes[i].strokeId]
             if (replacement != null) {
+                strokePathCache.remove(completedStrokes[i].strokeId)
                 completedStrokes[i] = replacement
             }
         }
@@ -1858,6 +1921,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
 
     fun clear() {
         completedStrokes.clear()
+        strokePathCache.clear()
         currentStrokePoints.clear()
         currentPath.reset()
         scrollOffsetY = 0f
@@ -1871,6 +1935,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
     /** Load strokes from saved data (for restoring persisted documents). */
     fun loadStrokes(strokes: List<InkStroke>) {
         completedStrokes.clear()
+        strokePathCache.clear()
         completedStrokes.addAll(strokes)
         currentStrokePoints.clear()
         currentPath.reset()

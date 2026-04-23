@@ -42,10 +42,12 @@ object CanvasTheme {
     }
 
     /**
-     * Draw a stroke with quadratic-bezier smoothing.
-     * [path] is a reusable Path to avoid allocation; it will be reset.
+     * Populate [path] with the stroke's geometry (quadratic-bezier smoothing
+     * for freehand; lineTo for geometric). Does not draw — split from drawing
+     * so callers can cache the populated Path across redraws of the same
+     * stroke. [path] is reset before use.
      */
-    fun drawStroke(canvas: Canvas, stroke: InkStroke, path: Path, paint: Paint) {
+    fun populateStrokePath(stroke: InkStroke, path: Path) {
         if (stroke.points.size < 2) return
         path.reset()
         val pts = stroke.points
@@ -70,14 +72,16 @@ object CanvasTheme {
             }
             path.lineTo(pts.last().x, pts.last().y)
         }
-        canvas.drawPath(path, paint)
+    }
 
-        // Draw arrowheads
+    /** Draw the arrowheads for a stroke (caller has already drawn the body path). */
+    fun drawStrokeArrowheads(canvas: Canvas, stroke: InkStroke, paint: Paint) {
+        if (stroke.points.size < 2) return
+        val pts = stroke.points
         val first = pts.first()
         val last = pts.last()
         val size = DEFAULT_STROKE_WIDTH * 4f
         val st = stroke.strokeType
-
         if (st.hasArrowAtTip) {
             val (dx, dy) = tipDirection(stroke)
             drawArrowhead(canvas, paint, last.x, last.y, dx, dy, size)
@@ -86,6 +90,17 @@ object CanvasTheme {
             val (dx, dy) = tailDirection(stroke)
             drawArrowhead(canvas, paint, first.x, first.y, dx, dy, size)
         }
+    }
+
+    /**
+     * Draw a stroke with quadratic-bezier smoothing.
+     * [path] is a reusable Path to avoid allocation; it will be reset.
+     */
+    fun drawStroke(canvas: Canvas, stroke: InkStroke, path: Path, paint: Paint) {
+        if (stroke.points.size < 2) return
+        populateStrokePath(stroke, path)
+        canvas.drawPath(path, paint)
+        drawStrokeArrowheads(canvas, stroke, paint)
     }
 
     /**
