@@ -55,6 +55,23 @@ interface InkController {
     fun invalidateOverlay() = Unit
 
     /**
+     * Request a clean grayscale refresh over [dirty] (view-local pixels) to
+     * clear partial-refresh residue left behind by erasing / scratching out
+     * strokes. On EPD the deleted region otherwise shows ghost traces of
+     * the erased ink until a full refresh happens. Default: no-op (Canvas-
+     * fallback repaints fully anyway).
+     */
+    fun refreshRegion(dirty: Rect) = Unit
+
+    /**
+     * Wipe the daemon-held overlay pixels inside [dirty] (view-local).
+     * Called after a stroke's been committed to the host SurfaceView so
+     * the next stroke doesn't composite over the previous one's ghost.
+     * Default: no-op.
+     */
+    fun clearRegion(dirty: Rect) = Unit
+
+    /**
      * Detach — release the raw-drawing session. After this, [isActive] is
      * false. [attach] must be called again to resume low-latency ink.
      */

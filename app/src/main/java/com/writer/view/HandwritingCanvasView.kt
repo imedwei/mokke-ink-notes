@@ -530,17 +530,33 @@ class HandwritingCanvasView @JvmOverloads constructor(
 
         override fun onStrokeEnd(x: Float, y: Float, pressure: Float, timestampMs: Long) {
             Log.d(TAG, "onStrokeEnd: ${currentStrokePoints.size} points")
+            // Snapshot the stroke's bounding box in view-local coords before
+            // endStroke clears it — used to wipe just the daemon's ION region
+            // that this stroke painted, so the next stroke starts clean.
+            val pad = (CanvasTheme.DEFAULT_STROKE_WIDTH + 4f).toInt()
+            strokeClearRect.set(
+                (strokeMinX - pad).toInt().coerceAtLeast(0),
+                (strokeMinY - scrollOffsetY - pad).toInt().coerceAtLeast(0),
+                (strokeMaxX + pad).toInt().coerceAtMost(width),
+                (strokeMaxY - scrollOffsetY + pad).toInt().coerceAtMost(height),
+            )
             endStroke(StrokePoint(x, y + scrollOffsetY, pressure, timestampMs))
             if (inkController.consumesMotionEvents) {
                 if (!appendLastStrokeToBitmap()) drawToSurface() else composeSurface()
-                // Release the daemon's cached overlay pixels so snap
-                // replacement, auto-classify diagram borders, recognition
-                // previews, and any other post-UP canvas updates become
-                // visible without waiting for a scroll.
-                inkController.invalidateOverlay()
+                // Defer the daemon-canvas clear to the next vsync — by then
+                // the SurfaceView buffer posted above has been composited so
+                // the clear doesn't produce a blank flash between the two.
+                if (!strokeClearRect.isEmpty) {
+                    val rectSnapshot = Rect(strokeClearRect)
+                    android.view.Choreographer.getInstance().postFrameCallback {
+                        inkController.clearRegion(rectSnapshot)
+                    }
+                }
             }
         }
     }
+
+    private val strokeClearRect = Rect()
 
     // --- SurfaceHolder.Callback ---
 
@@ -1320,9 +1336,23 @@ class HandwritingCanvasView @JvmOverloads constructor(
         onScratchOut?.invoke(scratchPoints, left, top, right, bottom)
         resumeRawDrawing()
 
+        // Clean EPD residue over the erased region. On Bigme's daemon path
+        // this triggers a GC16 refresh of just that rect; on Onyx/Canvas
+        // the default no-op is fine — their full scene redraws already clean.
+        val pad = ScreenMetrics.dp(4f).toInt()
+        scratchRefreshRect.set(
+            (left - pad).toInt().coerceAtLeast(0),
+            (top - scrollOffsetY - pad).toInt().coerceAtLeast(0),
+            (right + pad).toInt().coerceAtMost(width),
+            (bottom - scrollOffsetY + pad).toInt().coerceAtMost(height),
+        )
+        if (!scratchRefreshRect.isEmpty) inkController.refreshRegion(scratchRefreshRect)
+
         Log.i(TAG, "Post-stroke scratch-out: region=[$left,$top,$right,$bottom]")
         return true
     }
+
+    private val scratchRefreshRect = Rect()
 
     // ── Dwell helpers ─────────────────────────────────────────────────────────
 
@@ -1894,9 +1924,31 @@ class HandwritingCanvasView @JvmOverloads constructor(
 
     /** Remove strokes by ID from the canvas and redraw. */
     fun removeStrokes(strokeIds: Set<String>) {
+        // Compute bounding box of strokes-to-remove BEFORE removing so we
+        // can request an EPD refresh over the vacated region.
+        var refreshL = Float.MAX_VALUE; var refreshT = Float.MAX_VALUE
+        var refreshR = Float.MIN_VALUE; var refreshB = Float.MIN_VALUE
+        var any = false
+        for (s in completedStrokes) {
+            if (s.strokeId in strokeIds) {
+                refreshL = minOf(refreshL, s.minX); refreshT = minOf(refreshT, s.minY)
+                refreshR = maxOf(refreshR, s.maxX); refreshB = maxOf(refreshB, s.maxY)
+                any = true
+            }
+        }
         completedStrokes.removeAll { it.strokeId in strokeIds }
         for (id in strokeIds) strokePathCache.remove(id)
         drawToSurface()
+        if (any) {
+            val pad = ScreenMetrics.dp(4f).toInt()
+            scratchRefreshRect.set(
+                (refreshL - pad).toInt().coerceAtLeast(0),
+                (refreshT - scrollOffsetY - pad).toInt().coerceAtLeast(0),
+                (refreshR + pad).toInt().coerceAtMost(width),
+                (refreshB - scrollOffsetY + pad).toInt().coerceAtMost(height),
+            )
+            if (!scratchRefreshRect.isEmpty) inkController.refreshRegion(scratchRefreshRect)
+        }
     }
 
     /** Replace strokes by ID with new versions (e.g. shifted Y coordinates). */

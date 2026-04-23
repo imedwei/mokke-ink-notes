@@ -242,6 +242,44 @@ class BigmeInkController : InkController {
         }
     }
 
+    override fun refreshRegion(dirty: Rect) {
+        val c = client ?: return
+        val cls = clientClass ?: return
+        if (dirty.isEmpty) return
+        // The daemon's ION-backed bitmap accumulates every painted stroke
+        // forever (it doesn't auto-clear on erase). Actively wiping the
+        // region is what actually removes the ghost; a fast MODE_HANDWRITE
+        // commit is enough to push the cleared pixels to the EPD without
+        // the GC16 full-refresh flash.
+        clearDaemonCanvas(cls, c, dirty)
+    }
+
+    override fun clearRegion(dirty: Rect) {
+        val c = client ?: return
+        val cls = clientClass ?: return
+        if (dirty.isEmpty) return
+        clearDaemonCanvas(cls, c, dirty)
+    }
+
+    private fun clearDaemonCanvas(cls: Class<*>, c: Any, dirty: Rect) {
+        try {
+            val canvas = cls.getMethod("getCanvas").invoke(c) as? android.graphics.Canvas
+            if (canvas != null) {
+                canvas.save()
+                canvas.clipRect(dirty)
+                canvas.drawColor(android.graphics.Color.WHITE)
+                canvas.restore()
+            }
+            // Intentionally no inValidate(): the daemon's displayed EPD pixels
+            // stay as the user left them (stroke visible via our SurfaceView
+            // composition). We only blank the ION BUFFER so the daemon's next
+            // paint operation starts from a clean canvas — no ghost
+            // accumulation, no refresh flash.
+        } catch (t: Throwable) {
+            Log.w(TAG, "clearDaemonCanvas failed: ${t.message}")
+        }
+    }
+
     override fun detach() {
         if (!isActive) return
         val c = client
@@ -297,6 +335,10 @@ class BigmeInkController : InkController {
         // EPD commits batch up instead of fighting each other. One-rect-per-
         // MOVE produced "train track" refresh artifacts on long strokes.
         private val accumDirty = android.graphics.Rect(Int.MAX_VALUE, Int.MAX_VALUE, Int.MIN_VALUE, Int.MIN_VALUE)
+        // Union of the whole stroke's dirty area — used for the cleanup
+        // refresh on UP so ghost residue over the full stroke path clears
+        // without forcing a global GC16 that'd flash the whole page.
+        private val strokeBbox = android.graphics.Rect(Int.MAX_VALUE, Int.MAX_VALUE, Int.MIN_VALUE, Int.MIN_VALUE)
         private var lastCommitMs = 0L
         private val COMMIT_INTERVAL_MS = 16L  // one per vsync
 
@@ -331,17 +373,18 @@ class BigmeInkController : InkController {
                                 ACTION_DOWN -> {
                                     lastX = x; lastY = y
                                     accumDirty.set(Int.MAX_VALUE, Int.MAX_VALUE, Int.MIN_VALUE, Int.MIN_VALUE)
+                                    strokeBbox.set(Int.MAX_VALUE, Int.MAX_VALUE, Int.MIN_VALUE, Int.MIN_VALUE)
                                     lastCommitMs = ts
                                 }
                                 ACTION_MOVE -> {
                                     canvas.drawLine(lastX, lastY, x, y, paint)
                                     val pad = paint.strokeWidth.toInt() + 2
-                                    accumDirty.union(
-                                        minOf(lastX, x).toInt() - pad,
-                                        minOf(lastY, y).toInt() - pad,
-                                        maxOf(lastX, x).toInt() + pad,
-                                        maxOf(lastY, y).toInt() + pad,
-                                    )
+                                    val segL = minOf(lastX, x).toInt() - pad
+                                    val segT = minOf(lastY, y).toInt() - pad
+                                    val segR = maxOf(lastX, x).toInt() + pad
+                                    val segB = maxOf(lastY, y).toInt() + pad
+                                    accumDirty.union(segL, segT, segR, segB)
+                                    strokeBbox.union(segL, segT, segR, segB)
                                     if (ts - lastCommitMs >= COMMIT_INTERVAL_MS) {
                                         cls.getMethod("inValidate", android.graphics.Rect::class.java, Int::class.javaPrimitiveType)
                                             .invoke(client, accumDirty, MODE_HANDWRITE)
@@ -351,16 +394,16 @@ class BigmeInkController : InkController {
                                     lastX = x; lastY = y
                                 }
                                 ACTION_UP, ACTION_LEAVE -> {
-                                    // Flush accumulated dirty region at
-                                    // MODE_HANDWRITE — stays in the fast
-                                    // partial-refresh mode throughout. Some
-                                    // ghosting in previously-erased regions
-                                    // is accepted as the trade for latency.
+                                    // Flush pending partial-refresh segment.
+                                    // No cleanup refresh here — ghosting is
+                                    // addressed on erase/scratch-out instead,
+                                    // which is when residue matters.
                                     if (accumDirty.left != Int.MAX_VALUE) {
                                         cls.getMethod("inValidate", android.graphics.Rect::class.java, Int::class.javaPrimitiveType)
                                             .invoke(client, accumDirty, MODE_HANDWRITE)
                                         accumDirty.set(Int.MAX_VALUE, Int.MAX_VALUE, Int.MIN_VALUE, Int.MIN_VALUE)
                                     }
+                                    strokeBbox.set(Int.MAX_VALUE, Int.MAX_VALUE, Int.MIN_VALUE, Int.MIN_VALUE)
                                     lastX = x; lastY = y
                                 }
                             }
@@ -402,6 +445,7 @@ class BigmeInkController : InkController {
         const val ACTION_LEAVE = 4
         const val MODE_HANDWRITE = 1029
         const val MODE_GC16 = 4
+        const val MODE_GU16 = 132
 
         /** Guard for the daemon path. Set `true` to force the Canvas fallback
          *  (p50≈26 ms / p95≈42 ms event→paint via bitmap cache + Choreographer
