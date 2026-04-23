@@ -1,5 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- Probe theme for BigmeProbeActivity. Modeled tight on xNote's
+         `xDefault.Notitle`: extends a plain Android NoTitleBar base (NOT
+         AppCompat, NOT MaterialComponents), uses @android:color/white for
+         windowBackground so AAPT emits a plain ColorDrawable. -->
+    <style name="Theme.Writer.BigmeProbe" parent="@android:style/Theme.NoTitleBar">
+        <item name="android:windowBackground">@android:color/white</item>
+        <item name="android:windowDisablePreview">true</item>
+        <item name="android:windowActionBar">false</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowIsTranslucent">false</item>
+        <item name="android:windowShowWallpaper">false</item>
+    </style>
+
     <style name="Theme.Writer" parent="Theme.MaterialComponents.Light.NoActionBar">
         <item name="colorPrimary">@color/black</item>
         <item name="colorOnPrimary">@color/white</item>
@@ -8,6 +21,11 @@
         <item name="android:windowLightStatusBar">true</item>
     </style>
 
+    <!-- Bigme-only: barebones AppCompat theme without MaterialComponents.
+         Bigme's HWC tags HANDWRITTEN_FLAG on the surface only when the window
+         is opaque (fmt=OPAQUE). MaterialComponents forces fmt=TRANSLUCENT
+         regardless of child-theme overrides. Applied via setTheme() in
+         WritingActivity.onCreate() only when Build.MANUFACTURER == "Bigme". -->
     <style name="Theme.Writer.Dialog" parent="Theme.MaterialComponents.Light.Dialog">
         <item name="android:windowBackground">@android:color/transparent</item>
         <item name="android:windowIsFloating">true</item>

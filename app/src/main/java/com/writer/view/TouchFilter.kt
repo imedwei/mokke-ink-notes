@@ -14,7 +14,10 @@ package com.writer.view
  * 5. Stationary contact timeout — finger hasn't moved past slop (canvas only)
  */
 class TouchFilter(
-    private val palmSizeThresholdDp: Float = 40f,
+    // 120dp accommodates devices (e.g. Bigme Hibreak Plus) whose touchscreen
+    // drivers report inflated touchMinor values (~60-80dp for a normal fingertip).
+    // Real palm contacts are still far above this — typically > 200dp.
+    private val palmSizeThresholdDp: Float = 120f,
     private val penCooldownMs: Long = 500L,
     private val stationarySlopDp: Float = 8f,
     private val stationaryTimeoutMs: Long = 200L,
