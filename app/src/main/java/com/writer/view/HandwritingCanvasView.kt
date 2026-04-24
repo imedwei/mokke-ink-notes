@@ -1389,16 +1389,43 @@ class HandwritingCanvasView @JvmOverloads constructor(
      *  place the overlay still shows pre-mutation pixels on top of a freshly
      *  composed SurfaceView.
      *
-     *  The normal drawToSurface coalesces rebuild+compose through
-     *  Choreographer; syncing from the un-rebuilt bitmap produces stale
-     *  overlay content. We run the sequence synchronously instead: cancel
-     *  any pending coalesced rebuild → rebuild bitmap with the post-mutation
-     *  state → compose the SurfaceView → defer a forced overlay refresh one
-     *  frame so SurfaceFlinger/HWC have seen the SurfaceView commit first.
+     *  Coalesced: a single Choreographer callback performs the rebuild +
+     *  compose + forced refresh. Multiple callers within one vsync merge
+     *  their regions and produce exactly one rebuild. Returns immediately
+     *  from the caller's thread; the actual work runs at the next frame.
      *
      *  [region] is the view-local bbox of the affected pixels (null = whole
-     *  view). Repeat calls within one vsync coalesce to a single refresh. */
+     *  view — "widest" wins when merged with non-null). */
+    private var commitMutationScheduled = false
+    private var commitMutationRegion: Rect? = null
+    private var commitMutationFullPending = false
+    private val commitMutationCallback = android.view.Choreographer.FrameCallback {
+        commitMutationScheduled = false
+        val region = if (commitMutationFullPending) null else commitMutationRegion
+        commitMutationRegion = null
+        commitMutationFullPending = false
+        doCommitMutation(region)
+    }
+
     private fun commitMutationImmediate(region: Rect? = null) {
+        if (!surfaceReady) return
+        // Merge region: a null (full rebuild) is the widest and overrides
+        // any accumulated bbox. Non-null regions union into the pending rect.
+        if (region == null) {
+            commitMutationFullPending = true
+            commitMutationRegion = null
+        } else if (!commitMutationFullPending) {
+            commitMutationRegion = commitMutationRegion?.let {
+                Rect(it).apply { union(region) }
+            } ?: Rect(region)
+        }
+        if (!commitMutationScheduled) {
+            commitMutationScheduled = true
+            choreographer.postFrameCallback(commitMutationCallback)
+        }
+    }
+
+    private fun doCommitMutation(region: Rect?) {
         if (!surfaceReady) return
         PerfCounters.time(PerfMetric.INK_COMMIT_MUTATION) {
             if (rebuildComposeScheduled) {
