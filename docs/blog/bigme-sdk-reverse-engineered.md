@@ -609,6 +609,229 @@ Call `BigmeInk.enableHandwriting(context, surfaceView)` when your canvas surface
 
 On the Hibreak Plus running Mokke with this change, stroke visibility latency dropped from *visibly-laggy* to essentially what it is on Onyx hardware. Same app, one reflection call.
 
+## Going deeper: the daemon, the ION buffer, and sync timing
+
+The `XrzEinkManager.setRefreshModeForSurfaceView` recipe above is real. It helps. It's also a ceiling. It tells the HAL which waveform to use when it composes your surface — it does *not* get your ink pixels to the EPD any faster than your own draw loop can run. On a slow app thread, a cluttered SurfaceFlinger, or a `Canvas` fallback that locks the holder per-pointer-event, you still lose.
+
+xNote doesn't stop at `XrzEinkManager`. Another dex dive into `/system/framework/framework.jar` — specifically `classes5.dex` of all places, the boot classloader stashes goodies in odd corners — surfaced the layer underneath:
+
+```
+Class descriptor  : 'Lcom/xrz/HandwrittenClient;'
+  Interface #0 : 'Landroid/view/SurfaceHolder$Callback;'
+  Direct methods -
+    constructor(Context)
+    bindView(View)
+    connect(int, int)                        # width, height
+    registerInputListener(InputListener)
+    setInputEnabled(boolean)
+    setOverlayEnabled(boolean)
+    setBlendEnabled(boolean)
+    setUseRawInputEvent(boolean)
+    inValidate(Rect, int)                    # mode
+    getCanvas()                              # Canvas
+    getContent()                             # Bitmap
+    updateLayout() / updateRotation()
+    unBindView() / disconnect()
+
+  InputListener (inner interface):
+    int onInputTouch(action, x, y, pressure, tool[, time])
+```
+
+This is the real entry point. `HandwrittenClient` binds over binder to `IHandwrittenService` (the native daemon at `/system/bin/handwrittenservice`, version 1.4.0 on this firmware), opens an ION-backed shared-memory buffer sized to the client's view, and exposes two things:
+
+1. A `Canvas` that draws *directly into the shared buffer* — zero copy from the app's perspective.
+2. An `inValidate(Rect, mode)` call that tells the daemon to push that region to the EPD with a given waveform.
+
+Meanwhile, the daemon intercepts `/dev/input/event*` at the kernel, runs the incoming pen stream through its internal `convertXY` coordinate transform, and dispatches to the app's registered `InputListener` on a binder thread. So the app gets *both* the raw pen events *and* direct write access to the overlay layer the EPD is compositing, in the same process.
+
+The architecture that falls out of this:
+
+```svg
+<svg viewBox="0 0 900 640" xmlns="http://www.w3.org/2000/svg" style="font-family:ui-sans-serif,system-ui;font-size:12.5px;max-width:100%;height:auto" role="img" aria-label="HandwrittenClient architecture diagram">
+  <defs>
+    <marker id="arrA" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+    </marker>
+  </defs>
+
+  <!-- APP BAND -->
+  <rect x="20" y="20" width="860" height="170" rx="8" fill="#eaf3ff" stroke="#4171b4" stroke-width="1.5"/>
+  <text x="36" y="42" font-weight="700">App process — com.writer.mokke (regular UID)</text>
+
+  <rect x="50" y="58" width="380" height="120" rx="5" fill="#ffffff" stroke="#335f9e"/>
+  <text x="62" y="78" font-weight="600">HandwritingCanvasView (SurfaceView)</text>
+  <rect x="66" y="90" width="350" height="80" rx="4" fill="#d7e5f7" stroke="#335f9e" stroke-dasharray="2,2"/>
+  <text x="78" y="108" font-weight="600">contentBitmap — canonical ARGB_8888</text>
+  <text x="78" y="126">rasterized when completedStrokes change;</text>
+  <text x="78" y="142">composed into the SurfaceView holder each</text>
+  <text x="78" y="158">drawToSurface() — the source of truth.</text>
+
+  <rect x="460" y="58" width="400" height="120" rx="5" fill="#ffffff" stroke="#335f9e"/>
+  <text x="472" y="78" font-weight="600">InputProxy (dynamic java.lang.reflect.Proxy)</text>
+  <text x="472" y="98">• Canvas.drawLine(lastX,lastY,x,y,paint) → ION</text>
+  <text x="472" y="116">• mainHandler.post(sink.onStrokeMove(...))</text>
+  <text x="472" y="134">• inValidate(dirty, MODE_HANDWRITE = 1029)</text>
+  <text x="472" y="160" fill="#a03530" font-weight="600">fires on binder thread; coalesced at 16 ms (vsync)</text>
+
+  <!-- DAEMON BAND -->
+  <rect x="20" y="220" width="860" height="180" rx="8" fill="#fff6de" stroke="#b89a32" stroke-width="1.5"/>
+  <text x="36" y="242" font-weight="700">handwrittenservice (native daemon, UID 1000)</text>
+
+  <rect x="50" y="258" width="230" height="120" rx="5" fill="#fffaec" stroke="#8a7a2f"/>
+  <text x="62" y="278" font-weight="600">/dev/input/event* reader</text>
+  <text x="62" y="298">intercepts pen/stylus events</text>
+  <text x="62" y="316">below the Android input</text>
+  <text x="62" y="334">dispatcher; applies internal</text>
+  <text x="62" y="352">convertXY(panel → view-local).</text>
+
+  <rect x="300" y="258" width="260" height="120" rx="5" fill="#fffaec" stroke="#8a7a2f"/>
+  <text x="312" y="278" font-weight="600">IHandwrittenService (binder)</text>
+  <text x="312" y="298">holds the registered</text>
+  <text x="312" y="316">InputListener proxies;</text>
+  <text x="312" y="334">forwards (action, x, y, pressure,</text>
+  <text x="312" y="352">tool, time) per event.</text>
+
+  <rect x="580" y="258" width="280" height="120" rx="5" fill="#fff1c8" stroke="#8a7a2f"/>
+  <text x="592" y="278" font-weight="600">ION shared-memory buffer</text>
+  <text x="592" y="298">size = connect(view.w, view.h);</text>
+  <text x="592" y="316">daemon exposes a Canvas that</text>
+  <text x="592" y="334">writes into this shmem directly.</text>
+  <text x="592" y="352">Tagged with the HANDWRITTEN HWC flag.</text>
+
+  <!-- COMPOSITOR BAND -->
+  <rect x="20" y="430" width="860" height="190" rx="8" fill="#ededed" stroke="#666" stroke-width="1.5"/>
+  <text x="36" y="452" font-weight="700">EPD compositor → e-ink panel</text>
+
+  <rect x="80" y="470" width="340" height="130" rx="5" fill="#ffffff" stroke="#555"/>
+  <text x="92" y="490" font-weight="600">Bottom layer — SurfaceView</text>
+  <text x="92" y="510">= last drawToSurface() composition.</text>
+  <text x="92" y="530">Contains the canonical contentBitmap,</text>
+  <text x="92" y="550">ruled lines, recognized text blocks,</text>
+  <text x="92" y="570">diagram borders — the whole scene.</text>
+  <text x="92" y="590">Update cadence: slow (app-side).</text>
+
+  <rect x="480" y="470" width="340" height="130" rx="5" fill="#fff5f5" stroke="#555"/>
+  <text x="492" y="490" font-weight="600">Top layer — ION overlay (HW flag)</text>
+  <text x="492" y="510">daemon-painted strokes, live.</text>
+  <text x="492" y="530">Wherever the ION pixel is white,</text>
+  <text x="492" y="550">the SurfaceView shows through;</text>
+  <text x="492" y="570">wherever it has ink, it occludes.</text>
+  <text x="492" y="590">Update cadence: per inValidate(rect).</text>
+
+  <!-- ARROWS -->
+
+  <!-- 1. pen → /dev/input -->
+  <g color="#8a7a2f" stroke="currentColor" fill="none" stroke-width="2">
+    <path d="M 165 220 L 165 258" marker-end="url(#arrA)"/>
+  </g>
+  <text x="175" y="238" fill="#8a7a2f">pen events</text>
+
+  <!-- 2. /dev/input → dispatcher -->
+  <g color="#8a7a2f" stroke="currentColor" fill="none" stroke-width="2">
+    <path d="M 280 318 L 298 318" marker-end="url(#arrA)"/>
+  </g>
+
+  <!-- 3. dispatcher → InputProxy (binder, dashed) -->
+  <g color="#8a7a2f" stroke="currentColor" fill="none" stroke-width="2" stroke-dasharray="6,3">
+    <path d="M 430 258 C 430 225 500 195 660 180" marker-end="url(#arrA)"/>
+  </g>
+  <text x="430" y="215" fill="#8a7a2f">binder callback — onInputTouch(a,x,y,p,t,time)</text>
+
+  <!-- 4. InputProxy → ION canvas (drawLine) -->
+  <g color="#335f9e" stroke="currentColor" fill="none" stroke-width="2">
+    <path d="M 710 180 C 710 215 705 240 710 258" marker-end="url(#arrA)"/>
+  </g>
+  <text x="720" y="220" fill="#335f9e">drawLine → Canvas (ION)</text>
+
+  <!-- 5. InputProxy → contentBitmap (main thread post, via completedStrokes) -->
+  <g color="#335f9e" stroke="currentColor" fill="none" stroke-width="2">
+    <path d="M 470 178 C 455 172 440 170 430 170" marker-end="url(#arrA)"/>
+  </g>
+  <text x="438" y="165" fill="#335f9e" text-anchor="end">sink.onStrokeMove (main thread)</text>
+
+  <!-- 6. Sync flow: contentBitmap → ION canvas -->
+  <g color="#a03530" stroke="currentColor" fill="none" stroke-width="2.5">
+    <path d="M 240 180 C 225 205 540 200 720 260" marker-end="url(#arrA)"/>
+  </g>
+  <text x="470" y="202" fill="#a03530" font-weight="700" text-anchor="middle">syncOverlay(bitmap, region, force) — scroll / delete / snap / diagram</text>
+
+  <!-- 7. ION → EPD (inValidate) -->
+  <g color="#8a7a2f" stroke="currentColor" fill="none" stroke-width="2">
+    <path d="M 720 378 C 720 410 670 435 640 470" marker-end="url(#arrA)"/>
+  </g>
+  <text x="640" y="425" fill="#8a7a2f">inValidate(rect, mode)</text>
+
+  <!-- 8. SurfaceView → compositor -->
+  <g color="#555" stroke="currentColor" fill="none" stroke-width="1.6" stroke-dasharray="4,3">
+    <path d="M 240 188 C 240 300 240 420 240 468" marker-end="url(#arrA)"/>
+  </g>
+  <text x="150" y="390" fill="#555">SurfaceFlinger</text>
+  <text x="150" y="406" fill="#555">composite</text>
+
+</svg>
+```
+
+The blue flow is what moves ink: the daemon's `InputListener` callback fires on a binder thread, the proxy writes directly into the ION buffer via the shared `Canvas`, and after `inValidate` the EPD reflects the new pixels *within the same frame*. The app's bitmap cache is updated later on the main thread, from `completedStrokes`, once the stroke is done.
+
+The yellow flow is input and refresh — all on the daemon side, invisible to Android's normal input dispatcher.
+
+The red flow is the one that took the longest to get right.
+
+### Sync timing: when to re-rasterize
+
+Two buffers displaying the same content in two separate codepaths is an eventual-consistency problem. The daemon's ION accumulates every painted stroke forever — it has no knowledge of the app's scroll state, its snap-to-shape replacements, or its "delete this stroke" commands. So they drift.
+
+My first attempt was to wipe the ION to white over the stroke's bounding box on every `ACTION_UP`. Clean-slate for the next stroke, no residue accumulating. This broke intersecting strokes: if the user draws an `H`, the second vertical crossbar's `ACTION_UP` wipes pixels at the intersection where the first vertical and the horizontal cross, and the horizontal disappears until something else causes a repaint. The daemon's ION is white at the crossing, the SurfaceView has the horizontal stroke under it, but the HWC layer order has the ION on top — so white wins. The `H` looks like `I I`.
+
+So the overlay needs to *accumulate* during live drawing, and re-rasterize only when the host's canonical bitmap has diverged from what the daemon has been painting. The events that cause that divergence, and how to handle each:
+
+- **Scroll.** Every pixel in the ION is at a stale y-offset after the viewport moves. You redraw from the bitmap. The host's `drawToSurface` commit triggers SurfaceFlinger, which recomposites all layers over the EPD — so just blitting the bitmap into the ION buffer is enough; SurfaceFlinger handles the panel refresh.
+
+- **Delete, snap, diagram create/resize.** The bitmap no longer matches what the overlay has been painting. A bitmap blit alone isn't enough here: the overlay's *displayed* pixels (what's currently on the EPD) are still the pre-mutation ink, and a SurfaceView-only commit doesn't cause the daemon's HWC to recomposite its overlay layer. You have to explicitly poke the daemon with `inValidate(region, mode)` — MODE_GU16 (16-level ghost-tolerant grey update) is the sweet spot: no flash, cleanly transitions both directions (unlike MODE_HANDWRITE, which is tuned for adding ink and leaves stale waveform state when clearing).
+
+That's the same problem structure Onyx devices have, just solved with different vendor APIs — Onyx exposes `setRawDrawingEnabled(false)` / `setRawDrawingEnabled(true)` to cycle the raw-drawing layer and force the EPD to recomposite; Bigme exposes `inValidate(region, MODE_GU16)`. The host doesn't care which: it expresses the mutation in device-neutral terms and lets the controller translate. In `InkController.kt`:
+
+```kotlin
+interface InkController {
+    fun syncOverlay(bitmap: Bitmap, region: Rect? = null, force: Boolean = false) = Unit
+    // ...
+}
+```
+
+Where `force` is "the SurfaceView commit alone won't make this visible; kick the overlay layer." False for scroll (SurfaceFlinger handles it), true for delete/snap/diagram (daemon needs the explicit inValidate).
+
+The Bigme implementation — blit the bitmap into the ION, and if forced, push it to the EPD with a partial-refresh waveform:
+
+```kotlin
+override fun syncOverlay(bitmap: Bitmap, region: Rect?, force: Boolean) {
+    val canvas = cls.getMethod("getCanvas").invoke(client) as? Canvas ?: return
+    // SRC mode replaces every ION pixel in one blit, no composition with
+    // the daemon's accumulated ink.
+    val paint = Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC) }
+    canvas.drawBitmap(bitmap, 0f, 0f, paint)
+    if (!force) return
+    val rect = region ?: Rect(0, 0, view.width, view.height)
+    cls.getMethod("inValidate", Rect::class.java, Int::class.javaPrimitiveType)
+        .invoke(client, rect, MODE_GU16)
+}
+```
+
+The Onyx implementation lives in a different file but speaks the same language:
+
+```kotlin
+override fun syncOverlay(bitmap: Bitmap, region: Rect?, force: Boolean) {
+    if (!force || !isActive) return
+    touchHelper.setRawDrawingEnabled(false)
+    touchHelper.setRawDrawingEnabled(true)
+}
+```
+
+The host calls `inkController.syncOverlay(...)` at attach time (seed), scroll UP (soft sync), and the force-true path at every stroke-list mutation. One moving part, two device backends, same semantics.
+
+First-principles version of the rule: any time the app's canonical bitmap diverges from what the overlay has been painting *in a way a new stroke cannot mask*, re-rasterize. If the divergence can be hidden by SurfaceFlinger's normal compose (scroll), just update the shadow buffer. If it can't (delete, snap, diagram change) you have to tell the daemon explicitly.
+
+The other timing lesson: `drawToSurface` is Choreographer-coalesced on most host implementations, which means calling it and then immediately syncing the overlay reads a *stale* bitmap — the Choreographer callback that rebuilds the bitmap hasn't fired yet. The symptom is that mutations appear to "not update until the next scroll" (because the next scroll's rebuild finally paints the correct content). Force a synchronous rebuild before the sync, or defer the sync one frame so the rebuild completes first.
+
 ## The technique, generalized
 
 This whole investigation was a pattern you can apply to any undocumented Android vendor SDK. The seven phases, in order:
