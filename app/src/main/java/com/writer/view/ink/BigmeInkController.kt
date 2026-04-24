@@ -330,11 +330,39 @@ class BigmeInkController : InkController {
         // the split point for separating "daemon delivery + user pen speed"
         // from "our processing" in the first-draw-latency metric.
         private var firstMoveArrivalNs = 0L
+        // Throttle EPD pre-warm on ACTION_NEAR to at most one tiny inValidate
+        // every 500ms so we don't spam the daemon with dozens of wake-ups
+        // per second while the pen is hovering.
+        private var lastPreWarmNs = 0L
+        private val preWarmRect = android.graphics.Rect(0, 0, 1, 1)
+        private val PRE_WARM_INTERVAL_NS = 500_000_000L
+        // Periodic diagnostic: log daemon timestamp alongside our nanoTime
+        // and related clocks so we can identify the clock format.
+        private var timestampLogCount = 0
         private val COMMIT_INTERVAL_MS = 16L  // one per vsync
 
         override fun invoke(proxy: Any?, method: Method, args: Array<out Any?>?): Any? {
             if (method.name == "onInputTouch" && args != null && args.size >= 5) {
                 val invokeStart = System.nanoTime()
+                // Daemon dispatch latency: args[5] is CLOCK_REALTIME nanos
+                // (wall-clock nanos since Unix epoch) set by the daemon when
+                // it reads the /dev/input event. Subtract from wall-clock now
+                // to get the kernel → daemon → binder → JVM dispatch delay.
+                if (args.size >= 6) {
+                    val tsArg = args[5]
+                    val daemonNs = when (tsArg) {
+                        is Long -> tsArg
+                        is Int -> tsArg.toLong()
+                        else -> 0L
+                    }
+                    if (daemonNs != 0L) {
+                        val nowWallNs = System.currentTimeMillis() * 1_000_000L
+                        com.writer.ui.writing.PerfCounters.recordDirect(
+                            com.writer.ui.writing.PerfMetric.INK_DAEMON_DISPATCH_LATENCY,
+                            nowWallNs - daemonNs,
+                        )
+                    }
+                }
                 val action = args[0] as Int
                 val x = (args[1] as Int).toFloat()
                 val y = (args[2] as Int).toFloat()
@@ -361,6 +389,21 @@ class BigmeInkController : InkController {
                         }
                         if (canvas != null) {
                             when (action) {
+                                ACTION_NEAR -> {
+                                    // Pen hovering, not touching — wake the
+                                    // EPD waveform so the first inValidate
+                                    // after DOWN doesn't pay the panel wake-
+                                    // up cost. Throttle: daemon fires NEAR
+                                    // continuously during hover.
+                                    val now = System.nanoTime()
+                                    if (now - lastPreWarmNs >= PRE_WARM_INTERVAL_NS) {
+                                        lastPreWarmNs = now
+                                        try {
+                                            cls.getMethod("inValidate", android.graphics.Rect::class.java, Int::class.javaPrimitiveType)
+                                                .invoke(client, preWarmRect, MODE_HANDWRITE)
+                                        } catch (_: Throwable) { /* tolerate */ }
+                                    }
+                                }
                                 ACTION_DOWN -> {
                                     lastX = x; lastY = y
                                     accumDirty.set(Int.MAX_VALUE, Int.MAX_VALUE, Int.MIN_VALUE, Int.MIN_VALUE)
@@ -468,7 +511,7 @@ class BigmeInkController : InkController {
         private const val INPUT_LISTENER = "com.xrz.HandwrittenClient\$InputListener"
 
         // com.xrz.HandwrittenClient action constants (from reflection dump).
-        private const val ACTION_NEAR = 0
+        const val ACTION_NEAR = 0
         const val ACTION_DOWN = 1
         const val ACTION_MOVE = 2
         const val ACTION_UP = 3
