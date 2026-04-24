@@ -1,5 +1,6 @@
 package com.writer.view.ink
 
+import android.graphics.Bitmap
 import android.graphics.Rect
 import android.view.SurfaceView
 
@@ -47,29 +48,36 @@ interface InkController {
     fun setEnabled(enabled: Boolean)
 
     /**
-     * Invalidate any daemon-held overlay pixels so the next host compose
-     * is visible on the EPD. Needed after a stroke is REPLACED client-side
-     * (snap, auto-classify) — the daemon's overlay still holds the original
-     * raw pixels until something forces it to release. Default: no-op.
-     */
-    fun invalidateOverlay() = Unit
-
-    /**
-     * Request a clean grayscale refresh over [dirty] (view-local pixels) to
-     * clear partial-refresh residue left behind by erasing / scratching out
-     * strokes. On EPD the deleted region otherwise shows ghost traces of
-     * the erased ink until a full refresh happens. Default: no-op (Canvas-
-     * fallback repaints fully anyway).
-     */
-    fun refreshRegion(dirty: Rect) = Unit
-
-    /**
-     * Wipe the daemon-held overlay pixels inside [dirty] (view-local).
-     * Called after a stroke's been committed to the host SurfaceView so
-     * the next stroke doesn't composite over the previous one's ghost.
+     * Catch the EPD up to the host's [bitmap] over [region] (or the whole
+     * view if region is null). Host calls this at mutation sites — scroll,
+     * scratch-out, snap replacement, diagram create/resize, document load.
+     *
+     * [force] distinguishes two cadences of refresh:
+     *  - `false` (default) — "please keep the overlay's shadow buffer in
+     *    sync; the host's own SurfaceView commit will drive the EPD
+     *    refresh." Appropriate for scroll: the SurfaceFlinger compose
+     *    following drawToSurface recomposites all layers, naturally
+     *    reflecting the new bitmap.
+     *  - `true` — "the host's SurfaceView commit alone won't make this
+     *    visible; force a refresh." Appropriate for delete/snap/diagram
+     *    where the overlay still shows pre-mutation ink on top of the
+     *    freshly-composed SurfaceView and the host-side compose doesn't
+     *    cycle the EPD over the overlay layer.
+     *
+     * Each controller implements as fits its hardware: the Onyx overlay
+     * cycles setRawDrawingEnabled(false)/(true); the Bigme overlay blits
+     * the bitmap into its ION buffer and inValidates with a partial-
+     * refresh waveform; Canvas/Noop are no-ops (SurfaceView is already
+     * the source of truth).
+     *
+     * IMPORTANT: [bitmap] must already reflect the post-mutation state.
+     * Force a synchronous rebuild before calling — the normal drawToSurface
+     * coalesces the rebuild through Choreographer, and syncing from an
+     * un-rebuilt bitmap produces stale EPD content.
+     *
      * Default: no-op.
      */
-    fun clearRegion(dirty: Rect) = Unit
+    fun syncOverlay(bitmap: Bitmap, region: Rect? = null, force: Boolean = false) = Unit
 
     /**
      * Detach — release the raw-drawing session. After this, [isActive] is

@@ -83,6 +83,22 @@ class OnyxInkController : InkController {
         }
     }
 
+    override fun syncOverlay(bitmap: android.graphics.Bitmap, region: Rect?, force: Boolean) {
+        // Onyx owns its raw-drawing buffer via TouchHelper — no need to
+        // blit the host bitmap into it. When [force] is set, cycle the
+        // raw-drawing layer so the SurfaceFlinger compose that just
+        // happened is picked up by the EPD and the overlay's cached ink
+        // (pre-mutation) is flushed. Equivalent-in-effect to Bigme's
+        // inValidate(region, MODE_GU16).
+        if (!force || !isActive) return
+        try {
+            touchHelper?.setRawDrawingEnabled(false)
+            touchHelper?.setRawDrawingEnabled(true)
+        } catch (e: Exception) {
+            Log.w(TAG, "syncOverlay failed: ${e.message}")
+        }
+    }
+
     override fun detach() {
         if (!isActive) return
         try {

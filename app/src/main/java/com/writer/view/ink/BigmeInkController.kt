@@ -227,56 +227,36 @@ class BigmeInkController : InkController {
         }
     }
 
-    override fun invalidateOverlay() {
+    override fun syncOverlay(bitmap: android.graphics.Bitmap, region: Rect?, force: Boolean) {
         val c = client ?: return
         val cls = clientClass ?: return
-        // Cycle setOverlayEnabled to release the daemon's cached pixels so
-        // the next host composeSurface is actually visible. Only called on
-        // the snap/auto-classify paths — routine strokes don't need this.
+        val view = attachedView ?: return
         try {
-            val m = cls.getMethod("setOverlayEnabled", Boolean::class.javaPrimitiveType)
-            m.invoke(c, false)
-            m.invoke(c, true)
-        } catch (t: Throwable) {
-            Log.w(TAG, "invalidateOverlay failed: ${t.message}")
-        }
-    }
-
-    override fun refreshRegion(dirty: Rect) {
-        val c = client ?: return
-        val cls = clientClass ?: return
-        if (dirty.isEmpty) return
-        // The daemon's ION-backed bitmap accumulates every painted stroke
-        // forever (it doesn't auto-clear on erase). Actively wiping the
-        // region is what actually removes the ghost; a fast MODE_HANDWRITE
-        // commit is enough to push the cleared pixels to the EPD without
-        // the GC16 full-refresh flash.
-        clearDaemonCanvas(cls, c, dirty)
-    }
-
-    override fun clearRegion(dirty: Rect) {
-        val c = client ?: return
-        val cls = clientClass ?: return
-        if (dirty.isEmpty) return
-        clearDaemonCanvas(cls, c, dirty)
-    }
-
-    private fun clearDaemonCanvas(cls: Class<*>, c: Any, dirty: Rect) {
-        try {
-            val canvas = cls.getMethod("getCanvas").invoke(c) as? android.graphics.Canvas
-            if (canvas != null) {
-                canvas.save()
-                canvas.clipRect(dirty)
-                canvas.drawColor(android.graphics.Color.WHITE)
-                canvas.restore()
+            // Blit the host bitmap onto the daemon's ION canvas. The ION
+            // buffer is sized to (view.width, view.height) at connect time;
+            // the host's contentBitmap is sized to the same view dims, so
+            // no translate is needed. SRC mode resets every pixel in one
+            // pass so the daemon's accumulated stroke ink is replaced by
+            // the host's canonical state.
+            val canvas = cls.getMethod("getCanvas").invoke(c) as? android.graphics.Canvas ?: return
+            val paint = android.graphics.Paint().apply {
+                xfermode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.SRC)
             }
-            // Intentionally no inValidate(): the daemon's displayed EPD pixels
-            // stay as the user left them (stroke visible via our SurfaceView
-            // composition). We only blank the ION BUFFER so the daemon's next
-            // paint operation starts from a clean canvas — no ghost
-            // accumulation, no refresh flash.
+            canvas.drawBitmap(bitmap, 0f, 0f, paint)
+            if (!force) return
+            // Force-refresh: push the ION buffer to the EPD with a 16-level
+            // ghost-tolerant grey-update waveform. No flash (unlike GC16),
+            // transitions both directions cleanly (unlike MODE_HANDWRITE).
+            // Limit to [region] when provided so the refresh is scoped to
+            // the affected pixels — cheaper and less disruptive than a
+            // full-view refresh.
+            cls.getMethod("setOverlayEnabled", Boolean::class.javaPrimitiveType).invoke(c, true)
+            val rect = region ?: Rect(0, 0, view.width, view.height)
+            cls.getMethod("inValidate", Rect::class.java, Int::class.javaPrimitiveType)
+                .invoke(c, rect, MODE_GU16)
+            Log.i(TAG, "syncOverlay: GU16 refresh $rect")
         } catch (t: Throwable) {
-            Log.w(TAG, "clearDaemonCanvas failed: ${t.message}")
+            Log.w(TAG, "syncOverlay failed: ${t.message}")
         }
     }
 

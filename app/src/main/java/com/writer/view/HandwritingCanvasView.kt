@@ -530,33 +530,30 @@ class HandwritingCanvasView @JvmOverloads constructor(
 
         override fun onStrokeEnd(x: Float, y: Float, pressure: Float, timestampMs: Long) {
             Log.d(TAG, "onStrokeEnd: ${currentStrokePoints.size} points")
-            // Snapshot the stroke's bounding box in view-local coords before
-            // endStroke clears it — used to wipe just the daemon's ION region
-            // that this stroke painted, so the next stroke starts clean.
-            val pad = (CanvasTheme.DEFAULT_STROKE_WIDTH + 4f).toInt()
-            strokeClearRect.set(
-                (strokeMinX - pad).toInt().coerceAtLeast(0),
-                (strokeMinY - scrollOffsetY - pad).toInt().coerceAtLeast(0),
-                (strokeMaxX + pad).toInt().coerceAtMost(width),
-                (strokeMaxY - scrollOffsetY + pad).toInt().coerceAtMost(height),
-            )
+            // Snapshot diagram state — equality compares id/start/height of
+            // each area, so any add/remove/resize of a diagram is detected.
+            val diagramAreasBefore = diagramAreas
             endStroke(StrokePoint(x, y + scrollOffsetY, pressure, timestampMs))
+            val diagramAreasChanged = diagramAreas != diagramAreasBefore
             if (inkController.consumesMotionEvents) {
-                if (!appendLastStrokeToBitmap()) drawToSurface() else composeSurface()
-                // Defer the daemon-canvas clear to the next vsync — by then
-                // the SurfaceView buffer posted above has been composited so
-                // the clear doesn't produce a blank flash between the two.
-                if (!strokeClearRect.isEmpty) {
-                    val rectSnapshot = Rect(strokeClearRect)
-                    android.view.Choreographer.getInstance().postFrameCallback {
-                        inkController.clearRegion(rectSnapshot)
-                    }
+                val lastIsGeometric = completedStrokes.lastOrNull()?.isGeometric == true
+                if (lastIsGeometric || diagramAreasChanged) {
+                    // Snap replacement and diagram create/resize change the
+                    // static content (snapped shape replaces raw stroke;
+                    // diagram border drawn at new bounds). appendLastStroke
+                    // ToBitmap would miss those, and the overlay still
+                    // holds the raw ink on top of the SurfaceView. Route
+                    // through commitMutationImmediate so the rebuild +
+                    // forced refresh pair makes both visible.
+                    commitMutationImmediate()
+                } else if (!appendLastStrokeToBitmap()) {
+                    drawToSurface()
+                } else {
+                    composeSurface()
                 }
             }
         }
     }
-
-    private val strokeClearRect = Rect()
 
     // --- SurfaceHolder.Callback ---
 
@@ -615,7 +612,12 @@ class HandwritingCanvasView @JvmOverloads constructor(
         if (deferOnyxInit) return // will be initialized on demand
         val limit = Rect()
         getLocalVisibleRect(limit)
-        inkController.attach(this, limit, overlayStrokeCallback)
+        if (inkController.attach(this, limit, overlayStrokeCallback)) {
+            // Seed the overlay's shadow buffer with the current document
+            // bitmap so the first stroke over existing content doesn't see
+            // a blank overlay occluding the SurfaceView at the intersection.
+            refreshOverlay(force = false)
+        }
     }
 
     // --- Hover handling (for Onyx SDK session swap between canvases) ---
@@ -861,6 +863,13 @@ class HandwritingCanvasView @JvmOverloads constructor(
                 }
                 drawToSurface()
                 if (!tutorialMode) resumeRawDrawing()
+                // Scroll invalidates all overlay coordinates — the daemon's
+                // painted strokes are at the pre-scroll y-offset. Sync the
+                // overlay's shadow buffer to the new bitmap so post-scroll
+                // strokes composite against the correct background. No
+                // force=true needed: the SurfaceView's drawToSurface commit
+                // drives SurfaceFlinger, which recomposites all layers.
+                refreshOverlay(force = false)
                 onManualScroll?.invoke()
                 return true
             }
@@ -1335,24 +1344,61 @@ class HandwritingCanvasView @JvmOverloads constructor(
         pauseRawDrawing()
         onScratchOut?.invoke(scratchPoints, left, top, right, bottom)
         resumeRawDrawing()
-
-        // Clean EPD residue over the erased region. On Bigme's daemon path
-        // this triggers a GC16 refresh of just that rect; on Onyx/Canvas
-        // the default no-op is fine — their full scene redraws already clean.
-        val pad = ScreenMetrics.dp(4f).toInt()
-        scratchRefreshRect.set(
-            (left - pad).toInt().coerceAtLeast(0),
-            (top - scrollOffsetY - pad).toInt().coerceAtLeast(0),
-            (right + pad).toInt().coerceAtMost(width),
-            (bottom - scrollOffsetY + pad).toInt().coerceAtMost(height),
-        )
-        if (!scratchRefreshRect.isEmpty) inkController.refreshRegion(scratchRefreshRect)
-
+        // The coordinator's onScratchOut routes through removeStrokes, which
+        // already runs commitMutationImmediate on its own. Don't commit
+        // again here — the forced-refresh dedupe would still coalesce, but
+        // a second rebuild is wasted work.
         Log.i(TAG, "Post-stroke scratch-out: region=[$left,$top,$right,$bottom]")
         return true
     }
 
-    private val scratchRefreshRect = Rect()
+    /** Ask the ink controller to catch the EPD up to contentBitmap. [force]=true
+     *  for mutations that the SurfaceView commit alone won't reveal (snap,
+     *  diagram create/resize, scratch-out); [force]=false for scroll. */
+    private fun refreshOverlay(region: Rect? = null, force: Boolean = false) {
+        val bmp = contentBitmap ?: return
+        inkController.syncOverlay(bmp, region, force)
+    }
+
+    private var forcedRefreshScheduled = false
+    private val forcedRefreshCallback = android.view.Choreographer.FrameCallback {
+        forcedRefreshScheduled = false
+        refreshOverlay(region = pendingRefreshRegion, force = true)
+        pendingRefreshRegion = null
+    }
+    private var pendingRefreshRegion: Rect? = null
+
+    /** Commit a stroke-list mutation and force the EPD to catch up. Use on
+     *  delete / scratch-out / snap / diagram create-or-resize paths — any
+     *  place the overlay still shows pre-mutation pixels on top of a freshly
+     *  composed SurfaceView.
+     *
+     *  The normal drawToSurface coalesces rebuild+compose through
+     *  Choreographer; syncing from the un-rebuilt bitmap produces stale
+     *  overlay content. We run the sequence synchronously instead: cancel
+     *  any pending coalesced rebuild → rebuild bitmap with the post-mutation
+     *  state → compose the SurfaceView → defer a forced overlay refresh one
+     *  frame so SurfaceFlinger/HWC have seen the SurfaceView commit first.
+     *
+     *  [region] is the view-local bbox of the affected pixels (null = whole
+     *  view). Repeat calls within one vsync coalesce to a single refresh. */
+    private fun commitMutationImmediate(region: Rect? = null) {
+        if (!surfaceReady) return
+        if (rebuildComposeScheduled) {
+            choreographer.removeFrameCallback(rebuildComposeCallback)
+            rebuildComposeScheduled = false
+        }
+        rebuildContentBitmap()
+        refreshOverlay(region = region, force = false)
+        composeSurface()
+        pendingRefreshRegion = pendingRefreshRegion?.let { existing ->
+            region?.let { Rect(existing).apply { union(it) } } ?: existing
+        } ?: region
+        if (!forcedRefreshScheduled) {
+            forcedRefreshScheduled = true
+            choreographer.postFrameCallback(forcedRefreshCallback)
+        }
+    }
 
     // ── Dwell helpers ─────────────────────────────────────────────────────────
 
@@ -1924,31 +1970,28 @@ class HandwritingCanvasView @JvmOverloads constructor(
 
     /** Remove strokes by ID from the canvas and redraw. */
     fun removeStrokes(strokeIds: Set<String>) {
-        // Compute bounding box of strokes-to-remove BEFORE removing so we
-        // can request an EPD refresh over the vacated region.
-        var refreshL = Float.MAX_VALUE; var refreshT = Float.MAX_VALUE
-        var refreshR = Float.MIN_VALUE; var refreshB = Float.MIN_VALUE
+        // Union the bboxes of strokes-to-remove before removal so we can
+        // scope the forced refresh to just the vacated region.
+        var rL = Float.MAX_VALUE; var rT = Float.MAX_VALUE
+        var rR = Float.MIN_VALUE; var rB = Float.MIN_VALUE
         var any = false
         for (s in completedStrokes) {
             if (s.strokeId in strokeIds) {
-                refreshL = minOf(refreshL, s.minX); refreshT = minOf(refreshT, s.minY)
-                refreshR = maxOf(refreshR, s.maxX); refreshB = maxOf(refreshB, s.maxY)
+                rL = minOf(rL, s.minX); rT = minOf(rT, s.minY)
+                rR = maxOf(rR, s.maxX); rB = maxOf(rB, s.maxY)
                 any = true
             }
         }
         completedStrokes.removeAll { it.strokeId in strokeIds }
         for (id in strokeIds) strokePathCache.remove(id)
-        drawToSurface()
-        if (any) {
-            val pad = ScreenMetrics.dp(4f).toInt()
-            scratchRefreshRect.set(
-                (refreshL - pad).toInt().coerceAtLeast(0),
-                (refreshT - scrollOffsetY - pad).toInt().coerceAtLeast(0),
-                (refreshR + pad).toInt().coerceAtMost(width),
-                (refreshB - scrollOffsetY + pad).toInt().coerceAtMost(height),
-            )
-            if (!scratchRefreshRect.isEmpty) inkController.refreshRegion(scratchRefreshRect)
-        }
+        if (!any) { drawToSurface(); return }
+        val pad = ScreenMetrics.dp(4f).toInt()
+        commitMutationImmediate(Rect(
+            (rL - pad).toInt().coerceAtLeast(0),
+            (rT - scrollOffsetY - pad).toInt().coerceAtLeast(0),
+            (rR + pad).toInt().coerceAtMost(width),
+            (rB - scrollOffsetY + pad).toInt().coerceAtMost(height),
+        ))
     }
 
     /** Replace strokes by ID with new versions (e.g. shifted Y coordinates). */
