@@ -85,15 +85,19 @@ class HandwritingCanvasView @JvmOverloads constructor(
     // a StaticLayout requires measuring + line-breaking the full text; doing
     // this for every text block on every scene rebuild was a multi-tens-of-ms
     // cost. LinkedHashMap gives access-order LRU eviction.
-    private val textBlockLayoutCache: LinkedHashMap<Pair<String, Int>, android.text.StaticLayout> =
-        object : LinkedHashMap<Pair<String, Int>, android.text.StaticLayout>(16, 0.75f, true) {
-            override fun removeEldestEntry(
-                eldest: Map.Entry<Pair<String, Int>, android.text.StaticLayout>
-            ): Boolean = size > TEXT_BLOCK_LAYOUT_CACHE_MAX
-        }
+    private val textBlockLayoutCache: MutableMap<Pair<String, Int>, android.text.StaticLayout> =
+        java.util.Collections.synchronizedMap(
+            object : LinkedHashMap<Pair<String, Int>, android.text.StaticLayout>(16, 0.75f, true) {
+                override fun removeEldestEntry(
+                    eldest: Map.Entry<Pair<String, Int>, android.text.StaticLayout>
+                ): Boolean = size > TEXT_BLOCK_LAYOUT_CACHE_MAX
+            }
+        )
 
     private fun getOrBuildBlockLayout(text: String, width: Int): android.text.StaticLayout {
         val key = text to width
+        // synchronizedMap wrapper serializes each call — safe from the main
+        // thread AND the off-main rebuild worker.
         return textBlockLayoutCache[key] ?: android.text.StaticLayout.Builder
             .obtain(text, 0, text.length, textBlockPaint, width)
             .setAlignment(android.text.Layout.Alignment.ALIGN_NORMAL)
@@ -105,7 +109,12 @@ class HandwritingCanvasView @JvmOverloads constructor(
     // significant for long freehand strokes when the full scene rebuilds
     // many times (snap processing, recognition updates). Path is immutable
     // once populated for a stroke, so a strokeId-keyed cache is safe.
-    private val strokePathCache = HashMap<String, Path>()
+    // ConcurrentHashMap because the off-main rebuild executor (see
+    // [asyncRebuildExecutor]) reads cached Paths from a worker thread while
+    // the main thread evicts / adds. Paths are treated as immutable once
+    // populated, so concurrent READS of an existing Path are safe — we only
+    // need thread-safe map access.
+    private val strokePathCache = java.util.concurrent.ConcurrentHashMap<String, Path>()
 
     private fun cachedStrokePath(stroke: com.writer.model.InkStroke): Path {
         strokePathCache[stroke.strokeId]?.let { return it }
@@ -519,8 +528,18 @@ class HandwritingCanvasView @JvmOverloads constructor(
         handler.postDelayed(idleRunnable, IDLE_TIMEOUT_MS)
     }
 
+    // True between onStrokeBegin and onStrokeEnd on the daemon-path. The
+    // daemon is live-painting into the ION buffer during this window, and
+    // any syncOverlay(force=false) — which blits contentBitmap into ION
+    // with SRC mode — would wipe those in-progress pixels. Async-rebuild
+    // swaps defer the ION sync until this flips back to false.
+    private var daemonStrokeInProgress: Boolean = false
+    private var deferredRefreshPending: Boolean = false
+    private var deferredRefreshRegion: Rect? = null
+
     private val overlayStrokeCallback = object : StrokeCallback {
         override fun onStrokeBegin(x: Float, y: Float, pressure: Float, timestampMs: Long) {
+            daemonStrokeInProgress = true
             beginStroke(StrokePoint(x, y + scrollOffsetY, pressure, timestampMs))
         }
 
@@ -529,6 +548,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
         }
 
         override fun onStrokeEnd(x: Float, y: Float, pressure: Float, timestampMs: Long) {
+            daemonStrokeInProgress = false
             Log.d(TAG, "onStrokeEnd: ${currentStrokePoints.size} points")
             // Snapshot diagram state — equality compares id/start/height of
             // each area, so any add/remove/resize of a diagram is detected.
@@ -568,6 +588,9 @@ class HandwritingCanvasView @JvmOverloads constructor(
                     composeSurface()
                 }
             }
+            // Run any refresh that was deferred because this stroke was in
+            // progress when an async rebuild swapped in its staging bitmap.
+            firePendingDeferredRefresh()
         }
     }
 
@@ -613,6 +636,15 @@ class HandwritingCanvasView @JvmOverloads constructor(
         inkController.detach()
         contentBitmap?.recycle()
         contentBitmap = null
+        // Don't recycle stagingBitmap here — the async executor may still be
+        // writing to it, and a recycle + write races into native-side crash.
+        // GC will free it when the executor is shut down in onDetachedFromWindow.
+        stagingBitmap = null
+    }
+
+    override fun onDetachedFromWindow() {
+        asyncRebuildExecutor.shutdown()  // let in-flight render complete
+        super.onDetachedFromWindow()
     }
 
     /** When true, skip auto-init of Onyx SDK on surfaceCreated. The session
@@ -1425,25 +1457,142 @@ class HandwritingCanvasView @JvmOverloads constructor(
         }
     }
 
+    // Async full-rebuild executor. Full rebuilds (region=null) can spike into
+    // the hundreds of ms on long documents — blocking the main thread was the
+    // last significant source of writing-time variability. Region rebuilds
+    // stay synchronous on the main thread (they're cheap enough).
+    private val asyncRebuildExecutor: java.util.concurrent.ExecutorService =
+        java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+            Thread(r, "ink-rebuild").apply {
+                priority = Thread.NORM_PRIORITY - 1
+                isDaemon = true
+            }
+        }
+    // Monotonic counter incremented by any main-thread mutation that affects
+    // the rendered bitmap. Worker snapshots the value at submit time and
+    // checks it again at swap time — if it's changed, the staging bitmap is
+    // stale and we kick another rebuild.
+    private var bitmapMutationGen = 0L
+    private var asyncRebuildInFlight = false
+    private var asyncRebuildPendingFull = false
+    private var stagingBitmap: Bitmap? = null
+
+    private fun bumpMutationGen() { bitmapMutationGen++ }
+
+    private fun kickAsyncRebuildIfNeeded() {
+        if (asyncRebuildInFlight) return
+        if (!asyncRebuildPendingFull) return
+        asyncRebuildPendingFull = false
+        val w = width; val h = height
+        if (w <= 0 || h <= 0) return
+        val strokesSnap = completedStrokes.toList()
+        val startGen = bitmapMutationGen
+        asyncRebuildInFlight = true
+        // Reuse the staging bitmap across rebuilds when possible — matches
+        // current view dims or allocate fresh.
+        val existingStaging = stagingBitmap
+        val target = if (existingStaging != null && existingStaging.width == w && existingStaging.height == h) {
+            existingStaging
+        } else {
+            existingStaging?.recycle()
+            Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).also { stagingBitmap = it }
+        }
+        asyncRebuildExecutor.submit {
+            val renderStart = System.nanoTime()
+            try {
+                renderStaticContent(Canvas(target), docClip = null, strokesOverride = strokesSnap)
+            } catch (t: Throwable) {
+                Log.w(TAG, "async rebuild failed: ${t.message}", t)
+            }
+            val renderNs = System.nanoTime() - renderStart
+            handler.post {
+                PerfCounters.recordDirect(PerfMetric.INK_RENDER_STATIC, renderNs)
+                asyncRebuildInFlight = false
+                if (bitmapMutationGen != startGen) {
+                    // Staging is stale. Request another rebuild and don't
+                    // swap — the user's latest state would be lost.
+                    asyncRebuildPendingFull = true
+                    kickAsyncRebuildIfNeeded()
+                    return@post
+                }
+                if (!surfaceReady) return@post
+                // Swap: the freshly-rendered staging becomes contentBitmap.
+                val prev = contentBitmap
+                contentBitmap = target
+                stagingBitmap = prev
+                // composeSurface is always safe — SurfaceView sits below the
+                // ION overlay, so updating it doesn't touch the daemon's
+                // in-progress stroke pixels.
+                composeSurface()
+                // refreshOverlay(force=false) blits contentBitmap into the
+                // daemon's ION canvas, which wipes in-progress stroke pixels.
+                // If a stroke is live, defer the sync to its onStrokeEnd.
+                scheduleOverlayRefreshOrDefer(region = null)
+                // Kick another if more work accumulated during this rebuild.
+                if (asyncRebuildPendingFull) kickAsyncRebuildIfNeeded()
+            }
+        }
+    }
+
+    /** Either sync+force-refresh the overlay now, or defer to the next
+     *  stroke-end if the daemon is mid-stroke (syncing would wipe in-progress
+     *  pixels). [region] is the post-mutation refresh scope (null = whole view). */
+    private fun scheduleOverlayRefreshOrDefer(region: Rect?) {
+        if (daemonStrokeInProgress) {
+            // Coalesce pending deferred region — null (whole view) wins.
+            if (region == null) {
+                deferredRefreshRegion = null
+            } else if (deferredRefreshPending && deferredRefreshRegion != null) {
+                deferredRefreshRegion!!.union(region)
+            } else if (!deferredRefreshPending) {
+                deferredRefreshRegion = Rect(region)
+            }
+            deferredRefreshPending = true
+            return
+        }
+        refreshOverlay(region = region, force = false)
+        pendingRefreshRegion = pendingRefreshRegion?.let { existing ->
+            region?.let { Rect(existing).apply { union(it) } } ?: existing
+        } ?: region
+        if (!forcedRefreshScheduled) {
+            forcedRefreshScheduled = true
+            choreographer.postFrameCallback(forcedRefreshCallback)
+        }
+    }
+
+    /** Called from onStrokeEnd once the daemon stroke is released — fires any
+     *  overlay sync that was deferred because it would have wiped in-progress
+     *  pixels. */
+    private fun firePendingDeferredRefresh() {
+        if (!deferredRefreshPending) return
+        val region = deferredRefreshRegion
+        deferredRefreshPending = false
+        deferredRefreshRegion = null
+        scheduleOverlayRefreshOrDefer(region)
+    }
+
     private fun doCommitMutation(region: Rect?) {
         if (!surfaceReady) return
+        bumpMutationGen()
+        if (region == null) {
+            // Full rebuild → offload to the worker so the main thread stays
+            // responsive during the 100-400ms it can take on big documents.
+            asyncRebuildPendingFull = true
+            kickAsyncRebuildIfNeeded()
+            return
+        }
         PerfCounters.time(PerfMetric.INK_COMMIT_MUTATION) {
             if (rebuildComposeScheduled) {
                 choreographer.removeFrameCallback(rebuildComposeCallback)
                 rebuildComposeScheduled = false
             }
             PerfCounters.time(PerfMetric.INK_RENDER_STATIC) {
-                if (region != null) rebuildContentBitmapRegion(region) else rebuildContentBitmap()
+                rebuildContentBitmapRegion(region)
             }
-            refreshOverlay(region = region, force = false)
+            // composeSurface is always safe; the ION sync might not be, so
+            // route via scheduleOverlayRefreshOrDefer.
             composeSurface()
-            pendingRefreshRegion = pendingRefreshRegion?.let { existing ->
-                region?.let { Rect(existing).apply { union(it) } } ?: existing
-            } ?: region
-            if (!forcedRefreshScheduled) {
-                forcedRefreshScheduled = true
-                choreographer.postFrameCallback(forcedRefreshCallback)
-            }
+            scheduleOverlayRefreshOrDefer(region = region)
         }
     }
 
@@ -1563,6 +1712,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
         // to evict. Trim them at each full rebuild — cheap O(N) scan.
         if (strokePathCache.size > completedStrokes.size + 16) trimStrokePathCache()
         renderStaticContent(Canvas(bmp))
+        bumpMutationGen()
     }
 
     /** Incremental rebuild: repaint only [screenRegion] (view-local pixels) of
@@ -1596,6 +1746,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
         c.clipRect(clipRect)
         renderStaticContent(c, docClip)
         c.restore()
+        bumpMutationGen()
     }
 
     /** Paint just the most recently completed stroke into the existing cached
@@ -1609,6 +1760,9 @@ class HandwritingCanvasView @JvmOverloads constructor(
         c.translate(0f, -scrollOffsetY)
         drawStroke(c, stroke)
         c.restore()
+        // An in-flight async rebuild's staging bitmap doesn't have this
+        // stroke — bump the gen so its swap is rejected and it retries.
+        bumpMutationGen()
         return true
     }
 
@@ -1678,8 +1832,17 @@ class HandwritingCanvasView @JvmOverloads constructor(
      * scratch-out, snap, etc. Non-stroke content (ruled lines, diagram
      * borders, text blocks) is drawn unconditionally and relies on the
      * canvas's own clipRect to avoid painting outside the region.
+     *
+     * [strokesOverride] allows the off-main rebuild executor to render from
+     * a main-thread-captured snapshot of [completedStrokes]. When null, we
+     * snapshot here — safe on the main thread; unsafe from a worker.
      */
-    private fun renderStaticContent(canvas: Canvas, docClip: Rect? = null) {
+    private fun renderStaticContent(
+        canvas: Canvas,
+        docClip: Rect? = null,
+        strokesOverride: List<com.writer.model.InkStroke>? = null,
+    ) {
+        val strokes = strokesOverride ?: completedStrokes.toList()
         // Clear background (respects canvas clipRect when set by caller).
         canvas.drawColor(Color.WHITE)
 
@@ -1745,7 +1908,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
             TOP_MARGIN + shiftFromLine * LINE_SPACING
         } else Float.MAX_VALUE
 
-        for (stroke in completedStrokes) {
+        for (stroke in strokes) {
             val strokeCenterY = (stroke.minY + stroke.maxY) / 2f
             val shift = if (spaceInsertMode && spaceInsertDragActive && strokeCenterY >= anchorY) previewShiftPx else 0f
             // docClip bbox-cull: skip strokes that don't overlap the region
@@ -1909,7 +2072,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
                         var bMinX = Float.MAX_VALUE; var bMaxX = Float.MIN_VALUE
                         var bMinY = Float.MAX_VALUE; var bMaxY = Float.MIN_VALUE
                         var hasContent = false
-                        for (stroke in completedStrokes) {
+                        for (stroke in strokes) {
                             val centerY = (stroke.minY + stroke.maxY) / 2f
                             if (centerY >= barrierTopY && centerY < barrierBottomY) {
                                 bMinX = minOf(bMinX, stroke.minX)

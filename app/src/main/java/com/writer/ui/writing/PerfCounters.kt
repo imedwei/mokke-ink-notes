@@ -20,6 +20,9 @@ enum class PerfMetric(val label: String) {
     INK_DAEMON_DRAW_LINE("ink.daemon.draw_line"),       // Canvas.drawLine into ION buffer
     INK_DAEMON_INVALIDATE("ink.daemon.invalidate"),     // inValidate(rect, mode) round-trip
     INK_DAEMON_INVOKE_TOTAL("ink.daemon.invoke_total"), // full InputProxy.invoke hot path
+    INK_DAEMON_DOWN_TO_PAINT("ink.daemon.down_to_paint"),// ACTION_DOWN → first inValidate (end-to-end)
+    INK_DAEMON_DOWN_TO_FIRST_MOVE("ink.daemon.down_to_first_move"), // ACTION_DOWN → first MOVE arrival (daemon delivery + user pen speed)
+    INK_DAEMON_FIRST_MOVE_TO_PAINT("ink.daemon.first_move_to_paint"), // first MOVE arrival → first inValidate (our processing only)
     INK_COMMIT_MUTATION("ink.commit_mutation"),         // rebuild + sync + compose for snap/delete
 }
 

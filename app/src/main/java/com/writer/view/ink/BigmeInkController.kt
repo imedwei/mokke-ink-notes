@@ -320,6 +320,16 @@ class BigmeInkController : InkController {
         // without forcing a global GC16 that'd flash the whole page.
         private val strokeBbox = android.graphics.Rect(Int.MAX_VALUE, Int.MAX_VALUE, Int.MIN_VALUE, Int.MIN_VALUE)
         private var lastCommitMs = 0L
+        // Force-commit the first MOVE of each stroke so the user sees ink
+        // immediately on pen-down, rather than waiting up to COMMIT_INTERVAL_MS
+        // for the interval gate to expire.
+        private var firstMoveOfStroke = false
+        // Nanos at ACTION_DOWN for measuring DOWN-to-first-paint latency.
+        private var downStartNs = 0L
+        // Nanos when the first ACTION_MOVE after DOWN arrives in our invoke —
+        // the split point for separating "daemon delivery + user pen speed"
+        // from "our processing" in the first-draw-latency metric.
+        private var firstMoveArrivalNs = 0L
         private val COMMIT_INTERVAL_MS = 16L  // one per vsync
 
         override fun invoke(proxy: Any?, method: Method, args: Array<out Any?>?): Any? {
@@ -356,8 +366,11 @@ class BigmeInkController : InkController {
                                     accumDirty.set(Int.MAX_VALUE, Int.MAX_VALUE, Int.MIN_VALUE, Int.MIN_VALUE)
                                     strokeBbox.set(Int.MAX_VALUE, Int.MAX_VALUE, Int.MIN_VALUE, Int.MIN_VALUE)
                                     lastCommitMs = ts
+                                    firstMoveOfStroke = true
+                                    downStartNs = System.nanoTime()
                                 }
                                 ACTION_MOVE -> {
+                                    if (firstMoveOfStroke) firstMoveArrivalNs = System.nanoTime()
                                     val drawStart = System.nanoTime()
                                     canvas.drawLine(lastX, lastY, x, y, paint)
                                     com.writer.ui.writing.PerfCounters.recordDirect(
@@ -371,14 +384,31 @@ class BigmeInkController : InkController {
                                     val segB = maxOf(lastY, y).toInt() + pad
                                     accumDirty.union(segL, segT, segR, segB)
                                     strokeBbox.union(segL, segT, segR, segB)
-                                    if (ts - lastCommitMs >= COMMIT_INTERVAL_MS) {
+                                    if (firstMoveOfStroke || ts - lastCommitMs >= COMMIT_INTERVAL_MS) {
+                                        val wasFirst = firstMoveOfStroke
+                                        firstMoveOfStroke = false
                                         val invStart = System.nanoTime()
                                         cls.getMethod("inValidate", android.graphics.Rect::class.java, Int::class.javaPrimitiveType)
                                             .invoke(client, accumDirty, MODE_HANDWRITE)
+                                        val invEnd = System.nanoTime()
                                         com.writer.ui.writing.PerfCounters.recordDirect(
                                             com.writer.ui.writing.PerfMetric.INK_DAEMON_INVALIDATE,
-                                            System.nanoTime() - invStart,
+                                            invEnd - invStart,
                                         )
+                                        if (wasFirst) {
+                                            com.writer.ui.writing.PerfCounters.recordDirect(
+                                                com.writer.ui.writing.PerfMetric.INK_DAEMON_DOWN_TO_PAINT,
+                                                invEnd - downStartNs,
+                                            )
+                                            com.writer.ui.writing.PerfCounters.recordDirect(
+                                                com.writer.ui.writing.PerfMetric.INK_DAEMON_DOWN_TO_FIRST_MOVE,
+                                                firstMoveArrivalNs - downStartNs,
+                                            )
+                                            com.writer.ui.writing.PerfCounters.recordDirect(
+                                                com.writer.ui.writing.PerfMetric.INK_DAEMON_FIRST_MOVE_TO_PAINT,
+                                                invEnd - firstMoveArrivalNs,
+                                            )
+                                        }
                                         accumDirty.set(Int.MAX_VALUE, Int.MAX_VALUE, Int.MIN_VALUE, Int.MIN_VALUE)
                                         lastCommitMs = ts
                                     }
