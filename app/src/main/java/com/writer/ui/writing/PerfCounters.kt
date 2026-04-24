@@ -14,6 +14,13 @@ enum class PerfMetric(val label: String) {
     INK_RENDER_STATIC("ink.render_static"),       // rebuildContentBitmap wall time
     INK_COMPOSE_OVERLAY("ink.compose_overlay"),   // drawOverlayOnlyToSurface wall time
     INK_MOVE_LATENCY("ink.move_latency"),         // MotionEvent.eventTime → overlay committed
+    // Bigme daemon-path metrics — recorded by BigmeInkController.InputProxy
+    // (per-MOVE/UP events on the binder thread) and HandwritingCanvasView
+    // (mutation commits on the main thread).
+    INK_DAEMON_DRAW_LINE("ink.daemon.draw_line"),       // Canvas.drawLine into ION buffer
+    INK_DAEMON_INVALIDATE("ink.daemon.invalidate"),     // inValidate(rect, mode) round-trip
+    INK_DAEMON_INVOKE_TOTAL("ink.daemon.invoke_total"), // full InputProxy.invoke hot path
+    INK_COMMIT_MUTATION("ink.commit_mutation"),         // rebuild + sync + compose for snap/delete
 }
 
 /**

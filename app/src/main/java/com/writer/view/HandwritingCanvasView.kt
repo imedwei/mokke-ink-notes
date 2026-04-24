@@ -545,7 +545,23 @@ class HandwritingCanvasView @JvmOverloads constructor(
                     // holds the raw ink on top of the SurfaceView. Route
                     // through commitMutationImmediate so the rebuild +
                     // forced refresh pair makes both visible.
-                    commitMutationImmediate()
+                    //
+                    // Snap: scope to just the last stroke's bbox for the
+                    // incremental rebuild. Diagram bounds change: full
+                    // rebuild (null region) because the border can extend
+                    // arbitrarily beyond any single stroke.
+                    val region = if (lastIsGeometric && !diagramAreasChanged) {
+                        completedStrokes.lastOrNull()?.let { last ->
+                            val pad = (CanvasTheme.DEFAULT_STROKE_WIDTH + 8f).toInt()
+                            Rect(
+                                (last.minX - pad).toInt().coerceAtLeast(0),
+                                (last.minY - scrollOffsetY - pad).toInt().coerceAtLeast(0),
+                                (last.maxX + pad).toInt().coerceAtMost(width),
+                                (last.maxY - scrollOffsetY + pad).toInt().coerceAtMost(height),
+                            )
+                        }
+                    } else null
+                    commitMutationImmediate(region)
                 } else if (!appendLastStrokeToBitmap()) {
                     drawToSurface()
                 } else {
@@ -1384,19 +1400,23 @@ class HandwritingCanvasView @JvmOverloads constructor(
      *  view). Repeat calls within one vsync coalesce to a single refresh. */
     private fun commitMutationImmediate(region: Rect? = null) {
         if (!surfaceReady) return
-        if (rebuildComposeScheduled) {
-            choreographer.removeFrameCallback(rebuildComposeCallback)
-            rebuildComposeScheduled = false
-        }
-        rebuildContentBitmap()
-        refreshOverlay(region = region, force = false)
-        composeSurface()
-        pendingRefreshRegion = pendingRefreshRegion?.let { existing ->
-            region?.let { Rect(existing).apply { union(it) } } ?: existing
-        } ?: region
-        if (!forcedRefreshScheduled) {
-            forcedRefreshScheduled = true
-            choreographer.postFrameCallback(forcedRefreshCallback)
+        PerfCounters.time(PerfMetric.INK_COMMIT_MUTATION) {
+            if (rebuildComposeScheduled) {
+                choreographer.removeFrameCallback(rebuildComposeCallback)
+                rebuildComposeScheduled = false
+            }
+            PerfCounters.time(PerfMetric.INK_RENDER_STATIC) {
+                if (region != null) rebuildContentBitmapRegion(region) else rebuildContentBitmap()
+            }
+            refreshOverlay(region = region, force = false)
+            composeSurface()
+            pendingRefreshRegion = pendingRefreshRegion?.let { existing ->
+                region?.let { Rect(existing).apply { union(it) } } ?: existing
+            } ?: region
+            if (!forcedRefreshScheduled) {
+                forcedRefreshScheduled = true
+                choreographer.postFrameCallback(forcedRefreshCallback)
+            }
         }
     }
 
@@ -1518,6 +1538,39 @@ class HandwritingCanvasView @JvmOverloads constructor(
         renderStaticContent(Canvas(bmp))
     }
 
+    /** Incremental rebuild: repaint only [screenRegion] (view-local pixels) of
+     *  the cached bitmap. Combined with the stroke-bbox cull in
+     *  renderStaticContent this is O(strokes overlapping region) instead of
+     *  O(all strokes) — the big win for scratch-out/snap/diagram-resize
+     *  commits, which previously showed p95 = 263ms on rebuildContentBitmap. */
+    private fun rebuildContentBitmapRegion(screenRegion: Rect) {
+        val bmp = contentBitmap ?: run { rebuildContentBitmap(); return }
+        if (bmp.width <= 0 || bmp.height <= 0) return
+        val clipRect = Rect(
+            screenRegion.left.coerceAtLeast(0),
+            screenRegion.top.coerceAtLeast(0),
+            screenRegion.right.coerceAtMost(bmp.width),
+            screenRegion.bottom.coerceAtMost(bmp.height),
+        )
+        if (clipRect.isEmpty) return
+        // Translate clip rect from screen-space into document-space so the
+        // stroke-bbox filter in renderStaticContent can cull strokes against
+        // stored (document-space) bounds.
+        val scroll = scrollOffsetY.toInt()
+        val docClip = Rect(
+            clipRect.left,
+            clipRect.top + scroll,
+            clipRect.right,
+            clipRect.bottom + scroll,
+        )
+        if (strokePathCache.size > completedStrokes.size + 16) trimStrokePathCache()
+        val c = Canvas(bmp)
+        c.save()
+        c.clipRect(clipRect)
+        renderStaticContent(c, docClip)
+        c.restore()
+    }
+
     /** Paint just the most recently completed stroke into the existing cached
      *  bitmap — avoids a full O(N) rebuild on ACTION_UP. Returns false if the
      *  cache doesn't exist yet (caller should fall back to a full rebuild). */
@@ -1591,8 +1644,16 @@ class HandwritingCanvasView @JvmOverloads constructor(
         canvas.restore()
     }
 
-    private fun renderStaticContent(canvas: Canvas) {
-        // Clear background
+    /**
+     * Paint the scene onto [canvas]. When [docClip] is non-null, skip strokes
+     * whose bbox lies entirely outside the clip (document-space rect) — an
+     * O(affected-strokes) fast path for incremental bitmap updates after
+     * scratch-out, snap, etc. Non-stroke content (ruled lines, diagram
+     * borders, text blocks) is drawn unconditionally and relies on the
+     * canvas's own clipRect to avoid painting outside the region.
+     */
+    private fun renderStaticContent(canvas: Canvas, docClip: Rect? = null) {
+        // Clear background (respects canvas clipRect when set by caller).
         canvas.drawColor(Color.WHITE)
 
         val canvasRight = width.toFloat()
@@ -1660,6 +1721,15 @@ class HandwritingCanvasView @JvmOverloads constructor(
         for (stroke in completedStrokes) {
             val strokeCenterY = (stroke.minY + stroke.maxY) / 2f
             val shift = if (spaceInsertMode && spaceInsertDragActive && strokeCenterY >= anchorY) previewShiftPx else 0f
+            // docClip bbox-cull: skip strokes that don't overlap the region
+            // being repainted. Biggest contributor to the incremental-rebuild
+            // speedup — drawStroke builds a Path and calls Canvas.drawPath,
+            // both of which are non-trivial even when the pixels end up
+            // clipped out.
+            if (docClip != null) {
+                if (stroke.maxY + shift < docClip.top || stroke.minY + shift > docClip.bottom) continue
+                if (stroke.maxX < docClip.left || stroke.minX > docClip.right) continue
+            }
             if (stroke.maxY + shift >= viewTop && stroke.minY + shift <= viewBottom) {
                 if (shift != 0f) {
                     canvas.save()

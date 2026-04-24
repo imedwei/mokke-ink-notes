@@ -324,6 +324,7 @@ class BigmeInkController : InkController {
 
         override fun invoke(proxy: Any?, method: Method, args: Array<out Any?>?): Any? {
             if (method.name == "onInputTouch" && args != null && args.size >= 5) {
+                val invokeStart = System.nanoTime()
                 val action = args[0] as Int
                 val x = (args[1] as Int).toFloat()
                 val y = (args[2] as Int).toFloat()
@@ -357,7 +358,12 @@ class BigmeInkController : InkController {
                                     lastCommitMs = ts
                                 }
                                 ACTION_MOVE -> {
+                                    val drawStart = System.nanoTime()
                                     canvas.drawLine(lastX, lastY, x, y, paint)
+                                    com.writer.ui.writing.PerfCounters.recordDirect(
+                                        com.writer.ui.writing.PerfMetric.INK_DAEMON_DRAW_LINE,
+                                        System.nanoTime() - drawStart,
+                                    )
                                     val pad = paint.strokeWidth.toInt() + 2
                                     val segL = minOf(lastX, x).toInt() - pad
                                     val segT = minOf(lastY, y).toInt() - pad
@@ -366,8 +372,13 @@ class BigmeInkController : InkController {
                                     accumDirty.union(segL, segT, segR, segB)
                                     strokeBbox.union(segL, segT, segR, segB)
                                     if (ts - lastCommitMs >= COMMIT_INTERVAL_MS) {
+                                        val invStart = System.nanoTime()
                                         cls.getMethod("inValidate", android.graphics.Rect::class.java, Int::class.javaPrimitiveType)
                                             .invoke(client, accumDirty, MODE_HANDWRITE)
+                                        com.writer.ui.writing.PerfCounters.recordDirect(
+                                            com.writer.ui.writing.PerfMetric.INK_DAEMON_INVALIDATE,
+                                            System.nanoTime() - invStart,
+                                        )
                                         accumDirty.set(Int.MAX_VALUE, Int.MAX_VALUE, Int.MIN_VALUE, Int.MIN_VALUE)
                                         lastCommitMs = ts
                                     }
@@ -379,8 +390,13 @@ class BigmeInkController : InkController {
                                     // addressed on erase/scratch-out instead,
                                     // which is when residue matters.
                                     if (accumDirty.left != Int.MAX_VALUE) {
+                                        val invStart = System.nanoTime()
                                         cls.getMethod("inValidate", android.graphics.Rect::class.java, Int::class.javaPrimitiveType)
                                             .invoke(client, accumDirty, MODE_HANDWRITE)
+                                        com.writer.ui.writing.PerfCounters.recordDirect(
+                                            com.writer.ui.writing.PerfMetric.INK_DAEMON_INVALIDATE,
+                                            System.nanoTime() - invStart,
+                                        )
                                         accumDirty.set(Int.MAX_VALUE, Int.MAX_VALUE, Int.MIN_VALUE, Int.MIN_VALUE)
                                     }
                                     strokeBbox.set(Int.MAX_VALUE, Int.MAX_VALUE, Int.MIN_VALUE, Int.MIN_VALUE)
@@ -401,6 +417,10 @@ class BigmeInkController : InkController {
                         ACTION_UP, ACTION_LEAVE -> sink.onStrokeEnd(x, y, pressure, ts)
                     }
                 }
+                com.writer.ui.writing.PerfCounters.recordDirect(
+                    com.writer.ui.writing.PerfMetric.INK_DAEMON_INVOKE_TOTAL,
+                    System.nanoTime() - invokeStart,
+                )
                 return 0
             }
             return when (method.name) {
