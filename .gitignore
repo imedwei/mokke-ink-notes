@@ -29,6 +29,7 @@ local.properties
 .claude/settings.local.json
 .claude/reviews/
 .claude/plans/
+.claude/bug-reports/
 
 # Codanna local config
 .codannaignore
