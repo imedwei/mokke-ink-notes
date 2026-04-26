@@ -468,7 +468,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
      *  The activity should transfer the session before pen-down. */
     var onRequestOnyxSession: ((Float, Float) -> Unit)? = null
 
-    private val inkController: InkController = InkControllerFactory.create()
+    private var inkController: InkController = InkControllerFactory.create()
     /** True iff an attached hardware ink overlay is currently rendering strokes. */
     private val useOnyxSdk: Boolean get() = inkController.isActive
     private var surfaceReady = false
@@ -1143,6 +1143,13 @@ class HandwritingCanvasView @JvmOverloads constructor(
      * Inject a complete stroke for testing. Calls the same [beginStroke],
      * [addStrokePoint], [endStroke] methods used by the SDK callbacks and
      * the fallback touch path — no duplicated logic. Must be called on the UI thread.
+     *
+     * After [endStroke], this also runs the bitmap-commit leg of the ACTION_UP
+     * handler (appendLastStrokeToBitmap / commitMutationImmediate for snap or
+     * diagram changes) so the contentBitmap reflects the new stroke. Without
+     * this, unit tests that read back contentBitmap would see only the pre-
+     * stroke background — on a real device the daemon or MotionEvent path
+     * performs this step.
      */
     fun injectStrokeForTest(points: List<StrokePoint>) {
         if (points.size < 2) return
@@ -1151,6 +1158,12 @@ class HandwritingCanvasView @JvmOverloads constructor(
             addStrokePoint(points[i])
         }
         endStroke(points.last())
+        val lastIsGeometric = completedStrokes.lastOrNull()?.isGeometric == true
+        if (lastIsGeometric) {
+            commitMutationImmediate()
+        } else {
+            appendLastStrokeToBitmap()
+        }
     }
 
     // --- Diagram area helpers ---
@@ -2330,4 +2343,59 @@ class HandwritingCanvasView @JvmOverloads constructor(
         if (isPenActive()) return true
         return System.currentTimeMillis() - lastPenUpTime < windowMs
     }
+
+    // ── Test seams ────────────────────────────────────────────────────────────
+    // These exist to let unit tests exercise the overlay-sync call graph
+    // (refreshOverlay / syncOverlay / forced-refresh / scroll re-sync) without
+    // a real Surface, Choreographer frame, or xrz daemon.
+
+    /** Swap the [InkController] and attach it. Call before [prepareForTest]. */
+    @androidx.annotation.VisibleForTesting
+    internal fun setInkControllerForTest(controller: InkController) {
+        inkController = controller
+        controller.attach(this, Rect(0, 0, width, height), overlayStrokeCallback)
+    }
+
+    /** Mark the surface ready, size the view, and build the cached bitmap —
+     *  normally done on surfaceCreated. Seeds the overlay's shadow buffer to
+     *  match tryInitOnyx's post-attach refreshOverlay call. */
+    @androidx.annotation.VisibleForTesting
+    internal fun prepareForTest(width: Int, height: Int) {
+        layout(0, 0, width, height)
+        surfaceReady = true
+        rebuildContentBitmap()
+        refreshOverlay(force = false)
+    }
+
+    /** Drive the commit-mutation + forced-refresh Choreographer callbacks
+     *  synchronously so tests don't need to pump a real Choreographer. */
+    @androidx.annotation.VisibleForTesting
+    internal fun flushFrameCallbacksForTest() {
+        if (commitMutationScheduled) {
+            choreographer.removeFrameCallback(commitMutationCallback)
+            commitMutationCallback.doFrame(0L)
+        }
+        if (rebuildComposeScheduled) {
+            choreographer.removeFrameCallback(rebuildComposeCallback)
+            rebuildComposeCallback.doFrame(0L)
+        }
+        if (forcedRefreshScheduled) {
+            choreographer.removeFrameCallback(forcedRefreshCallback)
+            forcedRefreshCallback.doFrame(0L)
+        }
+    }
+
+    /** Simulate a finger-scroll finish: scroll to [offset], rebuild, then sync
+     *  the overlay. Mirrors the ACTION_UP branch in [handleFingerTouch]. */
+    @androidx.annotation.VisibleForTesting
+    internal fun scrollToForTest(offset: Float) {
+        scrollOffsetY = offset
+        rebuildContentBitmap()
+        refreshOverlay(force = false)
+    }
+
+    /** Read-only accessor for tests that want to compare the ION buffer's
+     *  contents to the host's canonical bitmap. */
+    @androidx.annotation.VisibleForTesting
+    internal fun contentBitmapForTest(): Bitmap? = contentBitmap
 }
