@@ -2,13 +2,17 @@
 
 ## Environment
 
-- **JAVA_HOME**: `JAVA_HOME="/c/Program Files/Android/Android Studio/jbr"` — must be set before running Gradle commands
+- **JAVA_HOME (Git Bash / MINGW)**: `JAVA_HOME="/c/Program Files/Android/Android Studio/jbr"` — must be set before running Gradle commands
+- **JAVA_HOME (WSL)**: leave unset — the system JDK 17 at `/usr/bin/java` builds fine. Do not prepend the Windows JBR path: the `/c/...` form is Git-Bash-only, and the `/mnt/c/...` form fails Gradle's JAVA_HOME validator because `bin/` holds Windows `.exe`/`.dll` binaries.
 - **ADB path**: `/c/Users/Durham/AppData/Local/Android/Sdk/platform-tools/adb.exe` — not on PATH, use full path
 
 ### Build
 
 ```bash
+# Git Bash / MINGW:
 JAVA_HOME="/c/Program Files/Android/Android Studio/jbr" ./gradlew assembleDebug
+# WSL:
+./gradlew assembleDebug
 ```
 
 ### Install to tablet
