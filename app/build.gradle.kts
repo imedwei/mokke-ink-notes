@@ -1,3 +1,6 @@
+import java.nio.file.Files
+import java.nio.file.Paths
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -58,6 +61,23 @@ android {
                 it.jvmArgs(
                     "--add-opens", "java.base/jdk.internal.access=ALL-UNNAMED",
                 )
+                // Sandboxed-CI workaround: Robolectric (MavenDependencyResolver)
+                // writes its download lock to $user.home/.robolectric-download-lock
+                // and resolves cached SDK jars from $user.home/.m2/repository
+                // (maven-style layout). If $HOME is read-only, redirect user.home
+                // to a gradle-cache subdir with a .m2 → $HOME/.m2 symlink so the
+                // already-downloaded SDK jars are reused.
+                val realHome = System.getProperty("user.home")
+                val roboHome = file("$realHome/.gradle/robolectric-home")
+                roboHome.mkdirs()
+                val m2Link = file("${roboHome.absolutePath}/.m2")
+                if (!m2Link.exists()) {
+                    Files.createSymbolicLink(
+                        m2Link.toPath(),
+                        Paths.get("$realHome/.m2")
+                    )
+                }
+                it.systemProperty("user.home", roboHome.absolutePath)
                 // Pass golden file generation properties to test JVM
                 val goldenVersion = project.findProperty("goldenVersion") as? String
                 val goldenOutputDir = project.file("src/test/resources/golden").absolutePath
