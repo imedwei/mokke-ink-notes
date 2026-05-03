@@ -7,6 +7,8 @@ revisions:
   - 2026-05-03: initial draft
   - 2026-05-03: redesign Step 0 as production tagged-post telemetry
     (was: build a one-off Handler post recorder)
+  - 2026-05-03: drop the Kotlin sample from Step 0; describe the
+    mechanism in prose only
 ---
 
 # Pen-lift optimisation: reducing the next-stroke latency tax
@@ -68,42 +70,30 @@ a bug report saying "saving feels slow on my Note Air 5C".
 Reuse the existing `PerfCounters.recordByLabel` infrastructure (already
 zero-allocation hot-path, already shows up in bug reports via
 `unifiedSnapshot()`, already aggregated by the `PerfDump` logcat line).
-Add one small helper:
 
-```kotlin
-// app/src/main/java/com/writer/ui/writing/TaggedPost.kt
-object TaggedPost {
-    /**
-     * Post [runnable] on [handler], tagged with [tag] for telemetry.
-     * Records two PerfCounters per call (label-keyed):
-     *   "queue.<tag>.wait" — nanos between post and run (queue depth proxy)
-     *   "queue.<tag>.run"  — nanos the runnable's body took
-     * The tag string MUST be a compile-time constant so the label set is
-     * bounded; no per-stroke or per-document interpolation.
-     */
-    inline fun post(handler: Handler, tag: String, crossinline runnable: () -> Unit) {
-        val postedAt = System.nanoTime()
-        handler.post {
-            val ranAt = System.nanoTime()
-            PerfCounters.recordByLabel("queue.$tag.wait", ranAt - postedAt)
-            try {
-                runnable()
-            } finally {
-                PerfCounters.recordByLabel("queue.$tag.run", System.nanoTime() - ranAt)
-            }
-        }
-    }
+Add one small `TaggedPost` helper that wraps `Handler.post*` and emits
+two label-keyed PerfCounters per call:
 
-    inline fun postDelayed(handler: Handler, tag: String, delayMs: Long, crossinline runnable: () -> Unit) {
-        // …same shape, with delay subtracted from the "wait" measurement
-    }
-}
-```
+- `queue.<tag>.wait` — nanos between when the runnable was posted and
+  when it actually started running. A queue-depth proxy: high values
+  mean the runnable is stuck behind heavier work.
+- `queue.<tag>.run`  — nanos the runnable's body took to execute.
 
-Each call site picks a stable, hand-chosen tag like `save.schedule`,
-`undo.refresh`, `recognition.trigger`, `sync_indicator.fade`. Tags are
-hierarchical via dot-notation so the bug-report viewer can group
-related counters at a glance.
+The helper accepts the target `Handler`, a stable tag, and the
+runnable. It is implemented as an inline wrapper so the closure cost
+is just the runnable allocation that already exists, plus the two
+`recordByLabel` calls (≈ 50 ns each, same overhead as the existing
+`PerfCounters.time`).
+
+The tag MUST be a compile-time constant so the label set is bounded;
+no per-stroke or per-document interpolation. Each call site picks a
+stable hand-chosen tag like `save.schedule`, `undo.refresh`,
+`recognition.trigger`, `sync_indicator.fade`. Dot-notation makes the
+bug-report viewer group related counters at a glance.
+
+A `postDelayed` variant exists with the same shape; its `wait`
+measurement subtracts the requested delay so the metric still reflects
+queue contention, not the intentional delay.
 
 ### Why this is production-grade
 
@@ -230,17 +220,15 @@ W1–W5 land.
 
 ### M1. Two-phase commit for `onStrokeCompleted`
 
-Split the observer interface into `criticalSync` (must finish before
-visible commit) and `deferredAsync` (save, recognition, indexing).
-The deferred slice fires on a background thread; the sync slice has
-a < 5 ms wall-clock budget.
+Split the observer interface into a "critical sync" half (must
+finish before visible commit) and a "deferred async" half (save,
+recognition, indexing). The deferred half fires on a background
+thread; the sync half holds itself to a < 5 ms wall-clock budget.
 
-```kotlin
-interface StrokeCompletedObserver {
-    fun onCriticalSync(stroke: InkStroke)        // ≤ 5 ms total budget
-    fun onDeferredAsync(stroke: InkStroke)       // background thread
-}
-```
+In practice this means giving the existing observer interface two
+methods — one for critical synchronous work, one for deferred work
+that the host invokes from a background dispatcher — and migrating
+each existing subscriber to whichever half it belongs in.
 
 **Open Q:** which existing observers truly need to be sync? Probably
 just "add to in-memory document" and "add to event log"; everything
