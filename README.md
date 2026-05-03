@@ -88,6 +88,41 @@ Documents are stored as `.inkup` binary protobuf files with compact column-orien
 ./gradlew connectedDebugAndroidTest
 ```
 
+## Vendored dependencies
+
+[`inksdk`](https://github.com/imedwei/inksdk) is vendored under `third_party/inksdk` as a `git subtree --squash` import. The currently-pinned upstream commit is recorded in [`third_party/inksdk/UPSTREAM.md`](third_party/inksdk/UPSTREAM.md).
+
+### Update to latest upstream
+
+```bash
+./scripts/update-inksdk.sh           # pull from main
+./scripts/update-inksdk.sh some-tag  # pull a specific branch or tag
+```
+
+The script auto-detects whether to run `git subtree add` (first import) or `git subtree pull`, refuses to run on a dirty working tree, and refreshes `UPSTREAM.md` with the resolved SHA in a single follow-up commit.
+
+### See what's new upstream before pulling
+
+Add inksdk as a git remote (one-time, per clone):
+
+```bash
+git remote add inksdk https://github.com/imedwei/inksdk
+git fetch inksdk
+```
+
+Then to see commits on upstream's `main` that aren't in our pin yet:
+
+```bash
+git fetch inksdk
+git log --oneline $(awk '/^\| Commit/ {gsub(/`/,"",$4); print $4}' third_party/inksdk/UPSTREAM.md)..inksdk/main
+```
+
+Or, to see the diff that an update would bring into the working tree:
+
+```bash
+git diff $(awk '/^\| Commit/ {gsub(/`/,"",$4); print $4}' third_party/inksdk/UPSTREAM.md) inksdk/main -- .
+```
+
 ## Architecture
 
 See [docs/VISION.md](docs/VISION.md) for the product vision, interaction philosophy, and design principles.
