@@ -3,6 +3,8 @@ package com.writer.view.ink
 import android.graphics.Bitmap
 import android.graphics.Rect
 import android.view.SurfaceView
+import com.inksdk.ink.InkController
+import com.inksdk.ink.StrokeCallback
 
 /**
  * Test double for [InkController] that records every [syncOverlay] call with a
@@ -11,9 +13,9 @@ import android.view.SurfaceView
  * that it matches the host's [com.writer.view.HandwritingCanvasView] content
  * bitmap after any mutation.
  *
- * Unlike [BigmeInkController], which writes into an ION-backed Canvas via
- * reflection, this controller just deep-copies the bitmap so assertions are
- * stable and side-effect-free.
+ * Unlike [com.inksdk.ink.BigmeInkController], which writes into an ION-backed
+ * Canvas via reflection, this controller just deep-copies the bitmap so
+ * assertions are stable and side-effect-free.
  */
 class FakeInkController(
     override val isActive: Boolean = true,

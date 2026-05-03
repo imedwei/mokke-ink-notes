@@ -6,6 +6,7 @@ import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.Rect
 import android.widget.FrameLayout
+import com.inksdk.ink.InkController
 import com.writer.model.InkStroke
 import com.writer.model.StrokePoint
 import com.writer.model.maxX
@@ -39,8 +40,8 @@ import org.robolectric.annotation.GraphicsMode
  *     refresh sync so the EPD catches up — without it the daemon's live overlay
  *     still shows the pre-mutation ink on top of the fresh SurfaceView.
  *
- * These tests use [FakeInkController] rather than [BigmeInkController]. The
- * Bigme daemon is only reachable via reflection on xrz firmware; the fake
+ * These tests use [FakeInkController] rather than [com.inksdk.ink.BigmeInkController].
+ * The Bigme daemon is only reachable via reflection on xrz firmware; the fake
  * behaves as "active, consumes input, records every syncOverlay" which is the
  * only shape the host View exercises.
  */

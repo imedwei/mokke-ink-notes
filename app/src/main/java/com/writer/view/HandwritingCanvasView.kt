@@ -20,9 +20,9 @@ import com.writer.ui.writing.AnnotationStroke
 import com.writer.ui.writing.PerfCounters
 import com.writer.ui.writing.PerfMetric
 import com.writer.ui.writing.TextAnnotation
-import com.writer.view.ink.InkController
-import com.writer.view.ink.InkControllerFactory
-import com.writer.view.ink.StrokeCallback
+import com.inksdk.ink.InkController
+import com.inksdk.ink.InkControllerFactory
+import com.inksdk.ink.StrokeCallback
 import android.text.TextPaint
 import com.writer.model.DiagramArea
 import com.writer.model.TextBlock
@@ -42,9 +42,9 @@ import kotlin.math.sin
 
 /**
  * Primary ink input surface. Delegates low-latency pen rendering to an
- * [InkController] (currently Onyx Boox only — see the [com.writer.view.ink]
- * package). When no hardware ink pipeline is available, falls back to
- * standard Android MotionEvent + Canvas rendering.
+ * [InkController] from the vendored inksdk (`com.inksdk.ink`). When no
+ * hardware ink pipeline is available, falls back to standard Android
+ * MotionEvent + Canvas rendering.
  */
 class HandwritingCanvasView @JvmOverloads constructor(
     context: Context,
