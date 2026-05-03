@@ -22,9 +22,10 @@ android {
         versionName = "0.1.0"
         testInstrumentationRunner = "com.writer.WriterTestRunner"
         testInstrumentationRunnerArguments["notAnnotation"] = "com.writer.recognition.DevTool"
-        // Separate test APK package so connected tests don't replace the dev app
-        testApplicationId = "com.writer.test"
-
+        // Test instrumentation runner package. Must differ from the app-under-
+        // test's applicationId; the connectedTest build type installs the app
+        // at com.writer.test, so the runner takes a .runner suffix.
+        testApplicationId = "com.writer.test.runner"
     }
 
     buildTypes {
@@ -42,7 +43,20 @@ android {
                 "proguard-rules.pro"
             )
         }
+        // Build type used by connected instrumented tests. Same shape as debug
+        // but installs at com.writer.test so it never conflicts with a dev app
+        // (com.writer.dev) signed by a different keystore. Selected as the
+        // testBuildType below — `./gradlew connectedConnectedTestAndroidTest`
+        // is the entry point.
+        create("connectedTest") {
+            initWith(getByName("debug"))
+            applicationIdSuffix = ".test"
+            resValue("string", "app_name", "$appName Test")
+            matchingFallbacks += listOf("debug")
+        }
     }
+
+    testBuildType = "connectedTest"
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -275,9 +289,9 @@ tasks.withType<Test> {
 tasks.register("allTests") {
     description = "Runs all tests: unit tests and instrumented tests on connected device"
     group = "verification"
-    dependsOn("testDebugUnitTest", "connectedDebugAndroidTest")
+    dependsOn("testDebugUnitTest", "connectedConnectedTestAndroidTest")
 }
 // Run unit tests first — fail fast before slower device tests
-tasks.matching { it.name == "connectedDebugAndroidTest" }.configureEach {
+tasks.matching { it.name == "connectedConnectedTestAndroidTest" }.configureEach {
     mustRunAfter("testDebugUnitTest")
 }

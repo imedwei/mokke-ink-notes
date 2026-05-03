@@ -85,7 +85,7 @@ Documents are stored as `.inkup` binary protobuf files with compact column-orien
 ./gradlew testDebugUnitTest
 
 # Connected device tests (requires Boox tablet)
-./gradlew connectedDebugAndroidTest
+./gradlew connectedConnectedTestAndroidTest
 ```
 
 ## Vendored dependencies
