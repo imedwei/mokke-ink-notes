@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 691" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13">
+  <title>Pen-lift flame graph (p50 vs p95)</title>
+  <text x="600.0" y="32" text-anchor="middle" font-size="18" font-weight="700" font-family="system-ui, Helvetica, sans-serif">Pen-lift flame graph — p50 vs p95</text>
+  <text x="600.0" y="54" text-anchor="middle" font-size="12" fill="#666" font-family="system-ui, Helvetica, sans-serif">20 runs on Palma 2 Pro · same horizontal scale on both flames · widths proportional to ms · "overhead" = end-time not covered by sub-metrics.</text>
+  <line x1="180.00" y1="77" x2="180.00" y2="426" stroke="#c0392b" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <text x="186.00" y="91" fill="#c0392b" font-size="11" font-weight="700">budget = 50 ms</text>
+  <text x="60" y="87" font-size="13" font-weight="700" fill="#333" font-family="system-ui, Helvetica, sans-serif">p50 (typical run)</text>
+  <rect x="60.00" y="95" width="244.80" height="30" fill="#c0392b" fill-opacity="0.85" stroke="white" stroke-width="1"/>
+  <text x="182.40" y="114.00" text-anchor="middle" font-size="11" fill="white" font-weight="700">total 102 ms</text>
+  <rect x="60.00" y="127" width="165.60" height="30" fill="#1e6dc6" fill-opacity="0.85" stroke="white" stroke-width="1"/>
+  <text x="142.80" y="146.00" text-anchor="middle" font-size="11" fill="white" font-weight="700">injectStroke 69 ms</text>
+  <rect x="60.00" y="159" width="165.60" height="30" fill="#1e6dc6" fill-opacity="0.85" stroke="white" stroke-width="1"/>
+  <text x="142.80" y="178.00" text-anchor="middle" font-size="11" fill="white" font-weight="700">end 69 ms</text>
+  <rect x="60.00" y="191" width="74.40" height="30" fill="#3498db" fill-opacity="0.85" stroke="white" stroke-width="1"/>
+  <text x="97.20" y="210.00" text-anchor="middle" font-size="11" fill="white" font-weight="700">31</text>
+  <rect x="134.40" y="191" width="76.80" height="30" fill="#3498db" fill-opacity="0.85" stroke="white" stroke-width="1"/>
+  <text x="172.80" y="210.00" text-anchor="middle" font-size="11" fill="white" font-weight="700">observers</text>
+  <rect x="211.20" y="191" width="14.40" height="30" fill="#ccc" stroke="white" stroke-width="1"/>
+  <text x="218.40" y="210.00" text-anchor="middle" font-size="11" fill="#555" font-weight="700">6</text>
+  <rect x="225.60" y="127" width="79.20" height="30" fill="#e67e22" fill-opacity="0.85" stroke="white" stroke-width="1"/>
+  <text x="265.20" y="146.00" text-anchor="middle" font-size="11" fill="white" font-weight="700">drain 33 ms</text>
+  <text x="60" y="285" font-size="13" font-weight="700" fill="#333" font-family="system-ui, Helvetica, sans-serif">p95 (worst 1 in 20)</text>
+  <rect x="60.00" y="293" width="1039.20" height="30" fill="#c0392b" fill-opacity="0.85" stroke="white" stroke-width="1"/>
+  <text x="579.60" y="312.00" text-anchor="middle" font-size="11" fill="white" font-weight="700">total 433 ms</text>
+  <rect x="60.00" y="325" width="352.80" height="30" fill="#1e6dc6" fill-opacity="0.85" stroke="white" stroke-width="1"/>
+  <text x="236.40" y="344.00" text-anchor="middle" font-size="11" fill="white" font-weight="700">injectStroke 147 ms</text>
+  <rect x="60.00" y="357" width="2.40" height="30" fill="#1e6dc6" fill-opacity="0.85" stroke="white" stroke-width="1"/>
+  <rect x="62.40" y="357" width="348.00" height="30" fill="#1e6dc6" fill-opacity="0.85" stroke="white" stroke-width="1"/>
+  <text x="236.40" y="376.00" text-anchor="middle" font-size="11" fill="white" font-weight="700">end 145 ms</text>
+  <rect x="62.40" y="389" width="228.00" height="30" fill="#3498db" fill-opacity="0.85" stroke="white" stroke-width="1"/>
+  <text x="176.40" y="408.00" text-anchor="middle" font-size="11" fill="white" font-weight="700">scratch_check 95 ms</text>
+  <rect x="290.40" y="389" width="2.40" height="30" fill="#3498db" fill-opacity="0.85" stroke="white" stroke-width="1"/>
+  <rect x="292.80" y="389" width="7.20" height="30" fill="#3498db" fill-opacity="0.85" stroke="white" stroke-width="1"/>
+  <rect x="300.00" y="389" width="112.80" height="30" fill="#3498db" fill-opacity="0.85" stroke="white" stroke-width="1"/>
+  <text x="356.40" y="408.00" text-anchor="middle" font-size="11" fill="white" font-weight="700">observers 47 ms</text>
+  <rect x="410.40" y="357" width="2.40" height="30" fill="#1e6dc6" fill-opacity="0.85" stroke="white" stroke-width="1"/>
+  <rect x="412.80" y="325" width="703.20" height="30" fill="#e67e22" fill-opacity="0.85" stroke="white" stroke-width="1"/>
+  <text x="764.40" y="344.00" text-anchor="middle" font-size="11" fill="white" font-weight="700">drain 293 ms</text>
+  <line x1="60" y1="451" x2="1140.00" y2="451" stroke="#aaa" stroke-width="1"/>
+  <line x1="60.00" y1="448" x2="60.00" y2="454" stroke="#666" stroke-width="1"/>
+  <text x="60.00" y="467" text-anchor="middle" fill="#666" font-size="10">0</text>
+  <line x1="180.00" y1="448" x2="180.00" y2="454" stroke="#666" stroke-width="1"/>
+  <text x="180.00" y="467" text-anchor="middle" fill="#666" font-size="10">50</text>
+  <line x1="300.00" y1="448" x2="300.00" y2="454" stroke="#666" stroke-width="1"/>
+  <text x="300.00" y="467" text-anchor="middle" fill="#666" font-size="10">100</text>
+  <line x1="420.00" y1="448" x2="420.00" y2="454" stroke="#666" stroke-width="1"/>
+  <text x="420.00" y="467" text-anchor="middle" fill="#666" font-size="10">150</text>
+  <line x1="540.00" y1="448" x2="540.00" y2="454" stroke="#666" stroke-width="1"/>
+  <text x="540.00" y="467" text-anchor="middle" fill="#666" font-size="10">200</text>
+  <line x1="660.00" y1="448" x2="660.00" y2="454" stroke="#666" stroke-width="1"/>
+  <text x="660.00" y="467" text-anchor="middle" fill="#666" font-size="10">250</text>
+  <line x1="780.00" y1="448" x2="780.00" y2="454" stroke="#666" stroke-width="1"/>
+  <text x="780.00" y="467" text-anchor="middle" fill="#666" font-size="10">300</text>
+  <line x1="900.00" y1="448" x2="900.00" y2="454" stroke="#666" stroke-width="1"/>
+  <text x="900.00" y="467" text-anchor="middle" fill="#666" font-size="10">350</text>
+  <line x1="1020.00" y1="448" x2="1020.00" y2="454" stroke="#666" stroke-width="1"/>
+  <text x="1020.00" y="467" text-anchor="middle" fill="#666" font-size="10">400</text>
+  <line x1="1140.00" y1="448" x2="1140.00" y2="454" stroke="#666" stroke-width="1"/>
+  <text x="1140.00" y="467" text-anchor="middle" fill="#666" font-size="10">450</text>
+  <text x="1148.00" y="455.00" fill="#666" font-size="10">ms</text>
+  <rect x="40" y="486" width="1120" height="115" fill="#fff5f1" stroke="#f4caaa"/>
+  <text x="55" y="508" font-size="13" font-weight="700" fill="#c0392b">What the flame shows</text>
+  <text x="55" y="530" font-size="12" fill="#333"><tspan font-weight="700">p50 → p95 amplification</tspan> at the root: 102 → 433 ms (4.2× wider in the worst 1-in-20 run).</text>
+  <text x="55" y="548" font-size="12" fill="#333"><tspan font-weight="700">scratch_check</tspan> (31 → 95 ms, 3.1×) and <tspan font-weight="700">drain</tspan> (33 → 293 ms, 8.9×) are where the box doubles or triples between rows. Other stages stay in the single digits.</text>
+  <text x="55" y="566" font-size="12" fill="#333"><tspan font-weight="700">Stages absent from the flame</tspan> (begin · add_points · shape_snap · classify · append_bitmap) measured under 1 ms p50 and were skipped — they cost essentially nothing.</text>
+  <text x="55" y="584" font-size="11" fill="#666" font-style="italic">Children inside a parent are sized to fit the parent box. At p95, percentiles aren't additive across stages, so the visual layout is normalized.</text>
+</svg>
