@@ -20,6 +20,18 @@ enum class PerfMetric(val label: String) {
     INK_COMPOSE_OVERLAY("ink.compose_overlay"),   // drawOverlayOnlyToSurface wall time
     INK_MOVE_LATENCY("ink.move_latency"),         // MotionEvent.eventTime → overlay committed
     INK_COMMIT_MUTATION("ink.commit_mutation"),   // rebuild + sync + compose for snap/delete
+    // Pen-lift breakdown — wraps the host-side pipeline that runs synchronously
+    // when a stroke ends. Recorded by HandwritingCanvasView.injectStrokeForTest
+    // and finishTextStroke. Used by StrokePipelinePerfTest to break down the
+    // 50-ms pen-lift budget across stages and locate variability.
+    INK_PEN_LIFT_BEGIN("ink.pen_lift.begin"),               // beginStroke (callbacks, dwell-job start)
+    INK_PEN_LIFT_ADD_POINTS("ink.pen_lift.add_points"),     // full addStrokePoint loop
+    INK_PEN_LIFT_END("ink.pen_lift.end"),                   // endStroke incl. finishStroke
+    INK_PEN_LIFT_SCRATCH_CHECK("ink.pen_lift.scratch_check"),
+    INK_PEN_LIFT_SHAPE_SNAP("ink.pen_lift.shape_snap"),
+    INK_PEN_LIFT_CLASSIFY("ink.pen_lift.classify"),
+    INK_PEN_LIFT_OBSERVERS("ink.pen_lift.observers"),       // onStrokeCompleted observer chain
+    INK_PEN_LIFT_APPEND_BITMAP("ink.pen_lift.append_bitmap"),
 }
 
 /**

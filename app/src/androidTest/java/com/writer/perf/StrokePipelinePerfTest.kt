@@ -1,10 +1,13 @@
 package com.writer.perf
 
 import android.os.SystemClock
+import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.rule.ActivityTestRule
 import com.writer.model.StrokePoint
+import com.writer.ui.writing.PerfCounters
+import com.writer.ui.writing.PerfMetric
 import com.writer.ui.writing.StrokeEventLog
 import com.writer.ui.writing.WritingActivity
 import com.writer.view.HandwritingCanvasView
@@ -81,8 +84,13 @@ class StrokePipelinePerfTest {
 
     @Test
     fun singleStrokePenLiftUnderBudget() {
+        // Reset so the breakdown reflects only this stroke. The test runs
+        // once per gradle invocation; fresh counters give us count=1 per
+        // stage, which the driver script aggregates across runs.
+        PenLiftBreakdown.reset()
         val points = makeStrokePoints(50f, 200f, 300f, 200f)
         val elapsed = injectAndMeasure(points)
+        PenLiftBreakdown.dump(elapsed)
 
         assertTrue(
             "Pen-lift latency was ${elapsed}ms, budget is ${PEN_LIFT_BUDGET_MS}ms",
@@ -133,5 +141,45 @@ class StrokePipelinePerfTest {
                 latencyMs < EVENT_LOG_BUDGET_MS
             )
         }
+    }
+}
+
+/**
+ * Helper for [singleStrokePenLiftUnderBudget] that captures the per-stage
+ * breakdown of `injectStrokeForTest` into a single logcat line. The driver
+ * script in `scripts/aggregate-pen-lift.sh` greps for `PenLiftBreakdown`
+ * lines across N test runs, then aggregates and produces the SVG.
+ */
+private object PenLiftBreakdown {
+    private val STAGES = listOf(
+        PerfMetric.INK_PEN_LIFT_BEGIN,
+        PerfMetric.INK_PEN_LIFT_ADD_POINTS,
+        PerfMetric.INK_PEN_LIFT_END,
+        PerfMetric.INK_PEN_LIFT_SCRATCH_CHECK,
+        PerfMetric.INK_PEN_LIFT_SHAPE_SNAP,
+        PerfMetric.INK_PEN_LIFT_CLASSIFY,
+        PerfMetric.INK_PEN_LIFT_OBSERVERS,
+        PerfMetric.INK_PEN_LIFT_APPEND_BITMAP,
+    )
+
+    fun reset() = PerfCounters.reset()
+
+    fun dump(totalMs: Long) {
+        val parts = STAGES.joinToString(" ") { m ->
+            val s = PerfCounters.get(m)
+            "${m.label}=${s.lastMs}"
+        }
+        // BEGIN, ADD_POINTS, END run synchronously inside injectStrokeForTest;
+        // the difference between total and their sum is "drain" — the time
+        // waitForIdleSync spends draining message-queue work that the
+        // observers / handlers posted during the synchronous phase.
+        val sync = STAGES
+            .filter { it == PerfMetric.INK_PEN_LIFT_BEGIN ||
+                      it == PerfMetric.INK_PEN_LIFT_ADD_POINTS ||
+                      it == PerfMetric.INK_PEN_LIFT_END ||
+                      it == PerfMetric.INK_PEN_LIFT_APPEND_BITMAP }
+            .sumOf { PerfCounters.get(it).lastMs }
+        val drain = (totalMs - sync).coerceAtLeast(0L)
+        Log.i("PenLiftBreakdown", "total=${totalMs} drain=${drain} $parts")
     }
 }

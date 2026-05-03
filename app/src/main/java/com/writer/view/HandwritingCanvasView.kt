@@ -1044,10 +1044,15 @@ class HandwritingCanvasView @JvmOverloads constructor(
 
     /** Post-stroke pipeline for strokes OUTSIDE any diagram area. */
     private fun finishTextStroke() {
-        if (checkPostStrokeScratchOut()) return
+        val scratched = com.writer.ui.writing.PerfCounters.time(
+            com.writer.ui.writing.PerfMetric.INK_PEN_LIFT_SCRATCH_CHECK
+        ) { checkPostStrokeScratchOut() }
+        if (scratched) return
 
         // Shape-intent: dwell at end → shape detection → auto-create diagram
-        val snapData = checkShapeSnap()
+        val snapData = com.writer.ui.writing.PerfCounters.time(
+            com.writer.ui.writing.PerfMetric.INK_PEN_LIFT_SHAPE_SNAP
+        ) { checkShapeSnap() }
         if (snapData != null) {
             val rawPoints = currentStrokePoints.toList()
             val rawStroke = emitStroke(rawPoints, null)
@@ -1072,11 +1077,15 @@ class HandwritingCanvasView @JvmOverloads constructor(
         // create a diagram area around it. No dwell required — the system
         // infers intent from the stroke shape.
         val stroke = InkStroke(points = currentStrokePoints.toList())
-        val drawingScore = DiagramStrokeClassifier.classifyStroke(
-            stroke, LINE_SPACING, includeConnector = false
-        )
+        val drawingScore = com.writer.ui.writing.PerfCounters.time(
+            com.writer.ui.writing.PerfMetric.INK_PEN_LIFT_CLASSIFY
+        ) {
+            DiagramStrokeClassifier.classifyStroke(stroke, LINE_SPACING, includeConnector = false)
+        }
         completedStrokes.add(stroke)
-        onStrokeCompleted?.invoke(stroke)
+        com.writer.ui.writing.PerfCounters.time(
+            com.writer.ui.writing.PerfMetric.INK_PEN_LIFT_OBSERVERS
+        ) { onStrokeCompleted?.invoke(stroke) }
         if (drawingScore >= 0.5f) {
             onDiagramShapeDetected?.invoke(stroke)
             resetStrokeState()
@@ -1153,16 +1162,24 @@ class HandwritingCanvasView @JvmOverloads constructor(
      */
     fun injectStrokeForTest(points: List<StrokePoint>) {
         if (points.size < 2) return
-        beginStroke(points.first())
-        for (i in 1 until points.size - 1) {
-            addStrokePoint(points[i])
+        com.writer.ui.writing.PerfCounters.time(com.writer.ui.writing.PerfMetric.INK_PEN_LIFT_BEGIN) {
+            beginStroke(points.first())
         }
-        endStroke(points.last())
+        com.writer.ui.writing.PerfCounters.time(com.writer.ui.writing.PerfMetric.INK_PEN_LIFT_ADD_POINTS) {
+            for (i in 1 until points.size - 1) {
+                addStrokePoint(points[i])
+            }
+        }
+        com.writer.ui.writing.PerfCounters.time(com.writer.ui.writing.PerfMetric.INK_PEN_LIFT_END) {
+            endStroke(points.last())
+        }
         val lastIsGeometric = completedStrokes.lastOrNull()?.isGeometric == true
-        if (lastIsGeometric) {
-            commitMutationImmediate()
-        } else {
-            appendLastStrokeToBitmap()
+        com.writer.ui.writing.PerfCounters.time(com.writer.ui.writing.PerfMetric.INK_PEN_LIFT_APPEND_BITMAP) {
+            if (lastIsGeometric) {
+                commitMutationImmediate()
+            } else {
+                appendLastStrokeToBitmap()
+            }
         }
     }
 
