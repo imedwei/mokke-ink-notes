@@ -145,7 +145,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
     // Oldest MOTIONEvent eventTime pending since the last compose. Drained on
     // each frame to record true end-to-end latency (event → pixel on screen).
     private var pendingOverlayEventTime = 0L
-    private val overlayFrameCallback = android.view.Choreographer.FrameCallback {
+    private val overlayFrameCallback = com.writer.ui.writing.TaggedPost.frameCallback("compose_overlay") {
         overlayFrameScheduled = false
         if (surfaceReady && contentBitmap != null) {
             PerfCounters.time(PerfMetric.INK_COMPOSE_OVERLAY) { composeSurface() }
@@ -162,12 +162,12 @@ class HandwritingCanvasView @JvmOverloads constructor(
         if (pendingOverlayEventTime == 0L) pendingOverlayEventTime = eventTimeMs
         if (overlayFrameScheduled) return
         overlayFrameScheduled = true
-        choreographer.postFrameCallback(overlayFrameCallback)
+        com.writer.ui.writing.TaggedPost.postFrameCallback(choreographer, overlayFrameCallback)
     }
 
     private fun cancelPendingOverlayFrame() {
         if (overlayFrameScheduled) {
-            choreographer.removeFrameCallback(overlayFrameCallback)
+            com.writer.ui.writing.TaggedPost.removeFrameCallback(choreographer, overlayFrameCallback)
             overlayFrameScheduled = false
         }
         pendingOverlayEventTime = 0L
@@ -178,9 +178,9 @@ class HandwritingCanvasView @JvmOverloads constructor(
     // HAL, so firing one per MotionEvent makes scroll stall-prone. Coalesce
     // to at most one rebuild per vsync via Choreographer.
     private var rebuildComposeScheduled = false
-    private val rebuildComposeCallback = android.view.Choreographer.FrameCallback {
+    private val rebuildComposeCallback = com.writer.ui.writing.TaggedPost.frameCallback("rebuild_compose") {
         rebuildComposeScheduled = false
-        if (!surfaceReady) return@FrameCallback
+        if (!surfaceReady) return@frameCallback
         cancelPendingOverlayFrame()
         PerfCounters.time(PerfMetric.INK_RENDER_STATIC) { rebuildContentBitmap() }
         composeSurface()
@@ -630,7 +630,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
         handler.removeCallbacks(idleRunnable)
         cancelPendingOverlayFrame()
         if (rebuildComposeScheduled) {
-            choreographer.removeFrameCallback(rebuildComposeCallback)
+            com.writer.ui.writing.TaggedPost.removeFrameCallback(choreographer, rebuildComposeCallback)
             rebuildComposeScheduled = false
         }
         inkController.detach()
@@ -1439,7 +1439,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
     }
 
     private var forcedRefreshScheduled = false
-    private val forcedRefreshCallback = android.view.Choreographer.FrameCallback {
+    private val forcedRefreshCallback = com.writer.ui.writing.TaggedPost.frameCallback("forced_refresh") {
         forcedRefreshScheduled = false
         refreshOverlay(region = pendingRefreshRegion, force = true)
         pendingRefreshRegion = null
@@ -1461,7 +1461,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
     private var commitMutationScheduled = false
     private var commitMutationRegion: Rect? = null
     private var commitMutationFullPending = false
-    private val commitMutationCallback = android.view.Choreographer.FrameCallback {
+    private val commitMutationCallback = com.writer.ui.writing.TaggedPost.frameCallback("commit_mutation") {
         commitMutationScheduled = false
         val region = if (commitMutationFullPending) null else commitMutationRegion
         commitMutationRegion = null
@@ -1483,7 +1483,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
         }
         if (!commitMutationScheduled) {
             commitMutationScheduled = true
-            choreographer.postFrameCallback(commitMutationCallback)
+            com.writer.ui.writing.TaggedPost.postFrameCallback(choreographer, commitMutationCallback)
         }
     }
 
@@ -1586,7 +1586,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
         } ?: region
         if (!forcedRefreshScheduled) {
             forcedRefreshScheduled = true
-            choreographer.postFrameCallback(forcedRefreshCallback)
+            com.writer.ui.writing.TaggedPost.postFrameCallback(choreographer, forcedRefreshCallback)
         }
     }
 
@@ -1613,7 +1613,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
         }
         PerfCounters.time(PerfMetric.INK_COMMIT_MUTATION) {
             if (rebuildComposeScheduled) {
-                choreographer.removeFrameCallback(rebuildComposeCallback)
+                com.writer.ui.writing.TaggedPost.removeFrameCallback(choreographer, rebuildComposeCallback)
                 rebuildComposeScheduled = false
             }
             PerfCounters.time(PerfMetric.INK_RENDER_STATIC) {
@@ -1708,7 +1708,7 @@ class HandwritingCanvasView @JvmOverloads constructor(
         // mutations in one burst collapse into a single scene rebuild.
         if (rebuildComposeScheduled) return
         rebuildComposeScheduled = true
-        choreographer.postFrameCallback(rebuildComposeCallback)
+        com.writer.ui.writing.TaggedPost.postFrameCallback(choreographer, rebuildComposeCallback)
     }
 
     /** Fast path for ACTION_MOVE: reuse the cached static scene and only paint
@@ -2389,15 +2389,15 @@ class HandwritingCanvasView @JvmOverloads constructor(
     @androidx.annotation.VisibleForTesting
     internal fun flushFrameCallbacksForTest() {
         if (commitMutationScheduled) {
-            choreographer.removeFrameCallback(commitMutationCallback)
+            com.writer.ui.writing.TaggedPost.removeFrameCallback(choreographer, commitMutationCallback)
             commitMutationCallback.doFrame(0L)
         }
         if (rebuildComposeScheduled) {
-            choreographer.removeFrameCallback(rebuildComposeCallback)
+            com.writer.ui.writing.TaggedPost.removeFrameCallback(choreographer, rebuildComposeCallback)
             rebuildComposeCallback.doFrame(0L)
         }
         if (forcedRefreshScheduled) {
-            choreographer.removeFrameCallback(forcedRefreshCallback)
+            com.writer.ui.writing.TaggedPost.removeFrameCallback(choreographer, forcedRefreshCallback)
             forcedRefreshCallback.doFrame(0L)
         }
     }
