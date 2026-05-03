@@ -180,6 +180,16 @@ private object PenLiftBreakdown {
                       it == PerfMetric.INK_PEN_LIFT_APPEND_BITMAP }
             .sumOf { PerfCounters.get(it).lastMs }
         val drain = (totalMs - sync).coerceAtLeast(0L)
-        Log.i("PenLiftBreakdown", "total=${totalMs} drain=${drain} $parts")
+        // Append every queue.<tag>.{wait,run} label-keyed counter so this
+        // single line carries both the named pen-lift breakdown and the
+        // tagged-post diagnostic (Step 0 of pen-lift-optimization.md).
+        // Counts are summed across the test run since each TaggedFrameCallback
+        // can fire multiple times during waitForIdleSync drain.
+        val queueParts = PerfCounters.unifiedSnapshot()
+            .filter { it.label.startsWith("queue.") }
+            .joinToString(" ") { row ->
+                "${row.label}=${row.lastMs}/${row.count}"
+            }
+        Log.i("PenLiftBreakdown", "total=${totalMs} drain=${drain} $parts ${queueParts}")
     }
 }
