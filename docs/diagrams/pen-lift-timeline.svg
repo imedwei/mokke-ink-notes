@@ -1,125 +1,207 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 970" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13">
-  <title>Pen-lift pipeline — host stages and metric coverage</title>
-  <text x="600.0" y="30" text-anchor="middle" font-size="18" font-weight="700" font-family="system-ui, Helvetica, sans-serif">Pen-lift pipeline → ink committed, with metric coverage</text>
-  <text x="600.0" y="52" text-anchor="middle" font-size="12" fill="#666" font-family="system-ui, Helvetica, sans-serif">Time flows left → right. Stage spacing is structural, not proportional. Greyed region is unmetered (computed as total − sync).</text>
-  <rect x="40" y="78" width="400" height="50" rx="6" ry="6" fill="#eaf3fc" stroke="#1e6dc6" stroke-width="1.5"/>
-  <text x="240.0" y="98" text-anchor="middle" font-size="12" font-weight="700" fill="#1e6dc6">Live-ink phase (during stroke)</text>
-  <text x="240.0" y="116" text-anchor="middle" font-size="10" fill="#444">inksdk metrics fire here:  pen.kernel_to_paint · event.handler · paint.draw_segment</text>
-  <rect x="460" y="78" width="400" height="50" rx="6" ry="6" fill="#fef0ec" stroke="#c0392b" stroke-width="1.5"/>
-  <text x="660.0" y="98" text-anchor="middle" font-size="12" font-weight="700" fill="#c0392b">Pen-lift phase  ← this diagram</text>
-  <text x="660.0" y="116" text-anchor="middle" font-size="10" fill="#444">host post-stroke pipeline → ink committed → next interaction ready</text>
-  <rect x="880" y="78" width="280" height="50" rx="6" ry="6" fill="#f6f7f8" stroke="#999" stroke-width="1.5"/>
-  <text x="1020.0" y="98" text-anchor="middle" font-size="12" font-weight="700" fill="#999">Idle</text>
-  <text x="1020.0" y="116" text-anchor="middle" font-size="10" fill="#444">ready for next pen-down</text>
-  <path d="M 440 103.0 l 18 0 m -6 -5 l 6 5 -6 5" stroke="#666" stroke-width="1.5" fill="none"/>
-  <path d="M 860 103.0 l 18 0 m -6 -5 l 6 5 -6 5" stroke="#666" stroke-width="1.5" fill="none"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1500 940" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13">
+  <title>Integrated stroke-lifecycle timeline — inksdk live-ink metrics + mokke pen-lift metrics</title>
+  <text x="750.0" y="32" text-anchor="middle" font-size="18" font-weight="700" font-family="system-ui, Helvetica, sans-serif">Stroke lifecycle: live-ink metrics → pen up → pen-lift metrics</text>
+  <text x="750.0" y="54" text-anchor="middle" font-size="12" fill="#666" font-family="system-ui, Helvetica, sans-serif">Time flows left → right. Stage spacing is structural, not proportional. Greyed regions are unmeasurable from the JVM.</text>
+  <rect x="40" y="78" width="600" height="50" rx="6" ry="6" fill="#eaf3fc" stroke="#1e6dc6" stroke-width="1.5"/>
+  <text x="340.0" y="98" text-anchor="middle" font-size="12" font-weight="700" fill="#1e6dc6">Live-ink phase (during stroke)</text>
+  <text x="340.0" y="116" text-anchor="middle" font-size="10" fill="#444">inksdk metrics: pen.* · event.* · paint.*</text>
+  <rect x="660" y="78" width="600" height="50" rx="6" ry="6" fill="#fef0ec" stroke="#c0392b" stroke-width="1.5"/>
+  <text x="960.0" y="98" text-anchor="middle" font-size="12" font-weight="700" fill="#c0392b">Pen-lift phase (after pen up)</text>
+  <text x="960.0" y="116" text-anchor="middle" font-size="10" fill="#444">mokke metrics: ink.pen_lift.* · drain</text>
+  <rect x="1280" y="78" width="180" height="50" rx="6" ry="6" fill="#f6f7f8" stroke="#999" stroke-width="1.5"/>
+  <text x="1370.0" y="98" text-anchor="middle" font-size="12" font-weight="700" fill="#999">Idle</text>
+  <text x="1370.0" y="116" text-anchor="middle" font-size="10" fill="#444">ready for next pen-down</text>
+  <path d="M 640 103 l 18 0 m -6 -5 l 6 5 -6 5" stroke="#666" stroke-width="1.5" fill="none"/>
+  <path d="M 1260 103 l 18 0 m -6 -5 l 6 5 -6 5" stroke="#666" stroke-width="1.5" fill="none"/>
   <g font-size="11" text-anchor="middle">
-    <text x="60" y="175">A. injectStroke</text>
-    <text x="60" y="189" fill="#666">called</text>
-    <text x="180" y="175">B. endStroke</text>
-    <text x="180" y="189" fill="#666">entered</text>
-    <text x="300" y="175">C. finishTextStroke</text>
-    <text x="300" y="189" fill="#666">entered</text>
-    <text x="440" y="175">D. scratch_check</text>
-    <text x="440" y="189" fill="#666">returned</text>
-    <text x="560" y="175">E. shape_snap</text>
-    <text x="560" y="189" fill="#666">returned</text>
-    <text x="680" y="175">F. classify</text>
-    <text x="680" y="189" fill="#666">returned</text>
-    <text x="800" y="175">G. observers</text>
-    <text x="800" y="189" fill="#666">returned</text>
-    <text x="900" y="175">H. endStroke</text>
-    <text x="900" y="189" fill="#666">returned</text>
-    <text x="1020" y="175">I. append_bitmap</text>
-    <text x="1020" y="189" fill="#666">returned</text>
-    <text x="1140" y="175">J. waitForIdleSync</text>
-    <text x="1140" y="189" fill="#666">returned</text>
+    <text x="80" y="175" fill="#888">L0. pen tip</text>
+    <text x="80" y="189" fill="#888">touches glass</text>
+    <text x="200" y="175">L1. kernel writes</text>
+    <text x="200" y="189" fill="#666">/dev/input</text>
+    <text x="320" y="175">L2. JVM receives</text>
+    <text x="320" y="189" fill="#666">DOWN</text>
+    <text x="440" y="175">L3. JVM receives</text>
+    <text x="440" y="189" fill="#666">first MOVE</text>
+    <text x="560" y="175">L4. drawLine</text>
+    <text x="560" y="189" fill="#666">into ION</text>
+    <text x="680" y="175">L5. inValidate</text>
+    <text x="680" y="189" fill="#666">returns</text>
+    <text x="820" y="175">A. injectStroke</text>
+    <text x="820" y="189" fill="#666">called (pen up)</text>
+    <text x="920" y="175">B. endStroke</text>
+    <text x="920" y="189" fill="#666">entered</text>
+    <text x="1000" y="175">C. finishTextStroke</text>
+    <text x="1000" y="189" fill="#666">entered</text>
+    <text x="1090" y="175">D. scratch_check</text>
+    <text x="1090" y="189" fill="#666">returned</text>
+    <text x="1170" y="175">E. shape_snap</text>
+    <text x="1170" y="189" fill="#666">returned</text>
+    <text x="1240" y="175">F. classify</text>
+    <text x="1240" y="189" fill="#666">returned</text>
+    <text x="1310" y="175">G. observers</text>
+    <text x="1310" y="189" fill="#666">returned</text>
+    <text x="1380" y="175">H. endStroke</text>
+    <text x="1380" y="189" fill="#666">returned</text>
+    <text x="1430" y="175">I. append_bitmap</text>
+    <text x="1430" y="189" fill="#666">returned</text>
+    <text x="1480" y="175">J. waitForIdleSync</text>
+    <text x="1480" y="189" fill="#666">returned</text>
   </g>
   <g stroke="#333" stroke-width="1.5">
-    <line x1="60" y1="215" x2="60" y2="237"/>
-    <line x1="180" y1="215" x2="180" y2="237"/>
-    <line x1="300" y1="215" x2="300" y2="237"/>
+    <line x1="80" y1="215" x2="80" y2="237"/>
+    <line x1="200" y1="215" x2="200" y2="237"/>
+    <line x1="320" y1="215" x2="320" y2="237"/>
     <line x1="440" y1="215" x2="440" y2="237"/>
     <line x1="560" y1="215" x2="560" y2="237"/>
     <line x1="680" y1="215" x2="680" y2="237"/>
-    <line x1="800" y1="215" x2="800" y2="237"/>
-    <line x1="900" y1="215" x2="900" y2="237"/>
-    <line x1="1020" y1="215" x2="1020" y2="237"/>
-    <line x1="1140" y1="215" x2="1140" y2="237"/>
+    <line x1="820" y1="215" x2="820" y2="237"/>
+    <line x1="920" y1="215" x2="920" y2="237"/>
+    <line x1="1000" y1="215" x2="1000" y2="237"/>
+    <line x1="1090" y1="215" x2="1090" y2="237"/>
+    <line x1="1170" y1="215" x2="1170" y2="237"/>
+    <line x1="1240" y1="215" x2="1240" y2="237"/>
+    <line x1="1310" y1="215" x2="1310" y2="237"/>
+    <line x1="1380" y1="215" x2="1380" y2="237"/>
+    <line x1="1430" y1="215" x2="1430" y2="237"/>
+    <line x1="1480" y1="215" x2="1480" y2="237"/>
   </g>
-  <line x1="20" y1="226" x2="1180" y2="226" stroke="#333" stroke-width="1"/>
-  <g stroke="#c0392b" stroke-width="1.5" fill="none">
-    <line x1="60" y1="275" x2="1140" y2="275"/>
-    <line x1="60" y1="268" x2="60" y2="282"/>
-    <line x1="1140" y1="268" x2="1140" y2="282"/>
+  <line x1="20" y1="226" x2="1480" y2="226" stroke="#333" stroke-width="2"/>
+  <rect x="20" y="219" width="180" height="14" fill="#000" fill-opacity="0.06"/>
+  <rect x="700" y="219" width="100" height="14" fill="#7d3c98" fill-opacity="0.10"/>
+  <text x="750.0" y="216" text-anchor="middle" font-size="10" fill="#7d3c98" font-weight="700">…more MOVEs… → pen up</text>
+  <g stroke="#c0392b" stroke-width="3" fill="none">
+    <line x1="200" y1="285" x2="680" y2="285"/>
+    <line x1="200" y1="278" x2="200" y2="292"/>
+    <line x1="680" y1="278" x2="680" y2="292"/>
   </g>
-  <text x="600.0" y="293" text-anchor="middle" fill="#c0392b" font-size="12" font-weight="700">PEN_LIFT_BUDGET_MS — test asserts total &lt; 50 ms</text>
-  <text x="600.0" y="307" text-anchor="middle" fill="#666" font-size="10">(SystemClock t0 → waitForIdleSync returns)</text>
+  <text x="440.0" y="303" text-anchor="middle" fill="#c0392b" font-size="12" font-weight="700">pen.kernel_to_paint</text>
+  <text x="440.0" y="317" text-anchor="middle" fill="#666" font-size="10">(headline first-paint)</text>
+  <g stroke="#c0392b" stroke-width="3" fill="none">
+    <line x1="820" y1="285" x2="1480" y2="285"/>
+    <line x1="820" y1="278" x2="820" y2="292"/>
+    <line x1="1480" y1="278" x2="1480" y2="292"/>
+  </g>
+  <text x="1150.0" y="303" text-anchor="middle" fill="#c0392b" font-size="12" font-weight="700">PEN_LIFT_BUDGET — total</text>
+  <text x="1150.0" y="317" text-anchor="middle" fill="#666" font-size="10">(test asserts &lt; 50 ms)</text>
   <g stroke="#1e6dc6" stroke-width="1.5" fill="none">
-    <line x1="60" y1="370" x2="110" y2="370"/>
-    <line x1="60" y1="363" x2="60" y2="377"/>
-    <line x1="110" y1="363" x2="110" y2="377"/>
+    <line x1="200" y1="365" x2="320" y2="365"/>
+    <line x1="200" y1="358" x2="200" y2="372"/>
+    <line x1="320" y1="358" x2="320" y2="372"/>
   </g>
-  <text x="85.0" y="342" text-anchor="middle" fill="#1e6dc6" font-size="12" font-weight="400">begin</text>
+  <text x="260.0" y="383" text-anchor="middle" fill="#1e6dc6" font-size="12" font-weight="400">pen.kernel_to_jvm</text>
   <g stroke="#1e6dc6" stroke-width="1.5" fill="none">
-    <line x1="115" y1="370" x2="180" y2="370"/>
-    <line x1="115" y1="363" x2="115" y2="377"/>
-    <line x1="180" y1="363" x2="180" y2="377"/>
+    <line x1="320" y1="365" x2="680" y2="365"/>
+    <line x1="320" y1="358" x2="320" y2="372"/>
+    <line x1="680" y1="358" x2="680" y2="372"/>
   </g>
-  <text x="147.5" y="342" text-anchor="middle" fill="#1e6dc6" font-size="12" font-weight="400">add_points</text>
+  <text x="500.0" y="383" text-anchor="middle" fill="#1e6dc6" font-size="12" font-weight="400">pen.jvm_to_paint</text>
   <g stroke="#1e6dc6" stroke-width="1.5" fill="none">
-    <line x1="180" y1="370" x2="900" y2="370"/>
-    <line x1="180" y1="363" x2="180" y2="377"/>
-    <line x1="900" y1="363" x2="900" y2="377"/>
+    <line x1="820" y1="365" x2="850" y2="365"/>
+    <line x1="820" y1="358" x2="820" y2="372"/>
+    <line x1="850" y1="358" x2="850" y2="372"/>
   </g>
-  <text x="540.0" y="388" text-anchor="middle" fill="#1e6dc6" font-size="12" font-weight="700">end</text>
+  <text x="835.0" y="337" text-anchor="middle" fill="#1e6dc6" font-size="12" font-weight="400">begin</text>
   <g stroke="#1e6dc6" stroke-width="1.5" fill="none">
-    <line x1="900" y1="370" x2="1020" y2="370"/>
-    <line x1="900" y1="363" x2="900" y2="377"/>
-    <line x1="1020" y1="363" x2="1020" y2="377"/>
+    <line x1="855" y1="365" x2="920" y2="365"/>
+    <line x1="855" y1="358" x2="855" y2="372"/>
+    <line x1="920" y1="358" x2="920" y2="372"/>
   </g>
-  <text x="960.0" y="388" text-anchor="middle" fill="#1e6dc6" font-size="12" font-weight="400">append_bitmap</text>
+  <text x="887.5" y="337" text-anchor="middle" fill="#1e6dc6" font-size="12" font-weight="400">add_points</text>
+  <g stroke="#1e6dc6" stroke-width="3" fill="none">
+    <line x1="920" y1="365" x2="1380" y2="365"/>
+    <line x1="920" y1="358" x2="920" y2="372"/>
+    <line x1="1380" y1="358" x2="1380" y2="372"/>
+  </g>
+  <text x="1150.0" y="383" text-anchor="middle" fill="#1e6dc6" font-size="12" font-weight="700">end</text>
+  <g stroke="#1e6dc6" stroke-width="1.5" fill="none">
+    <line x1="1380" y1="365" x2="1430" y2="365"/>
+    <line x1="1380" y1="358" x2="1380" y2="372"/>
+    <line x1="1430" y1="358" x2="1430" y2="372"/>
+  </g>
+  <text x="1405.0" y="383" text-anchor="middle" fill="#1e6dc6" font-size="12" font-weight="400">append_bitmap</text>
   <g stroke="#3498db" stroke-width="1.5" fill="none">
-    <line x1="300" y1="465" x2="440" y2="465"/>
-    <line x1="300" y1="458" x2="300" y2="472"/>
-    <line x1="440" y1="458" x2="440" y2="472"/>
+    <line x1="320" y1="450" x2="440" y2="450"/>
+    <line x1="320" y1="443" x2="320" y2="457"/>
+    <line x1="440" y1="443" x2="440" y2="457"/>
   </g>
-  <text x="370.0" y="483" text-anchor="middle" fill="#3498db" font-size="12" font-weight="400">scratch_check</text>
+  <text x="380.0" y="468" text-anchor="middle" fill="#3498db" font-size="12" font-weight="400">pen.jvm_to_first_move</text>
   <g stroke="#3498db" stroke-width="1.5" fill="none">
-    <line x1="440" y1="465" x2="560" y2="465"/>
-    <line x1="440" y1="458" x2="440" y2="472"/>
-    <line x1="560" y1="458" x2="560" y2="472"/>
+    <line x1="440" y1="450" x2="680" y2="450"/>
+    <line x1="440" y1="443" x2="440" y2="457"/>
+    <line x1="680" y1="443" x2="680" y2="457"/>
   </g>
-  <text x="500.0" y="483" text-anchor="middle" fill="#3498db" font-size="12" font-weight="400">shape_snap</text>
+  <text x="560.0" y="468" text-anchor="middle" fill="#3498db" font-size="12" font-weight="400">pen.move_to_paint</text>
   <g stroke="#3498db" stroke-width="1.5" fill="none">
-    <line x1="560" y1="465" x2="680" y2="465"/>
-    <line x1="560" y1="458" x2="560" y2="472"/>
-    <line x1="680" y1="458" x2="680" y2="472"/>
+    <line x1="1000" y1="450" x2="1090" y2="450"/>
+    <line x1="1000" y1="443" x2="1000" y2="457"/>
+    <line x1="1090" y1="443" x2="1090" y2="457"/>
   </g>
-  <text x="620.0" y="483" text-anchor="middle" fill="#3498db" font-size="12" font-weight="400">classify</text>
+  <text x="1045.0" y="468" text-anchor="middle" fill="#3498db" font-size="12" font-weight="400">scratch_check</text>
   <g stroke="#3498db" stroke-width="1.5" fill="none">
-    <line x1="680" y1="465" x2="800" y2="465"/>
-    <line x1="680" y1="458" x2="680" y2="472"/>
-    <line x1="800" y1="458" x2="800" y2="472"/>
+    <line x1="1090" y1="450" x2="1170" y2="450"/>
+    <line x1="1090" y1="443" x2="1090" y2="457"/>
+    <line x1="1170" y1="443" x2="1170" y2="457"/>
   </g>
-  <text x="740.0" y="483" text-anchor="middle" fill="#3498db" font-size="12" font-weight="400">observers</text>
-  <text x="740.0" y="497" text-anchor="middle" fill="#666" font-size="10">(onStrokeCompleted)</text>
-  <rect x="1020" y="540" width="120" height="22" fill="#000" fill-opacity="0.06"/>
+  <text x="1130.0" y="468" text-anchor="middle" fill="#3498db" font-size="12" font-weight="400">shape_snap</text>
+  <g stroke="#3498db" stroke-width="1.5" fill="none">
+    <line x1="1170" y1="450" x2="1240" y2="450"/>
+    <line x1="1170" y1="443" x2="1170" y2="457"/>
+    <line x1="1240" y1="443" x2="1240" y2="457"/>
+  </g>
+  <text x="1205.0" y="468" text-anchor="middle" fill="#3498db" font-size="12" font-weight="400">classify</text>
+  <g stroke="#3498db" stroke-width="1.5" fill="none">
+    <line x1="1240" y1="450" x2="1310" y2="450"/>
+    <line x1="1240" y1="443" x2="1240" y2="457"/>
+    <line x1="1310" y1="443" x2="1310" y2="457"/>
+  </g>
+  <text x="1275.0" y="468" text-anchor="middle" fill="#3498db" font-size="12" font-weight="400">observers</text>
+  <text x="1275.0" y="482" text-anchor="middle" fill="#666" font-size="10">(onStrokeCompleted)</text>
+  <g stroke="#27ae60" stroke-width="1.5" fill="none" stroke-dasharray="6 3">
+    <line x1="200" y1="540" x2="320" y2="540"/>
+    <line x1="200" y1="533" x2="200" y2="547"/>
+    <line x1="320" y1="533" x2="320" y2="547"/>
+  </g>
+  <text x="260.0" y="558" text-anchor="middle" fill="#27ae60" font-size="12" font-weight="400">event.kernel_to_jvm</text>
+  <text x="260.0" y="572" text-anchor="middle" fill="#666" font-size="10">(per event)</text>
+  <g stroke="#27ae60" stroke-width="1.5" fill="none" stroke-dasharray="6 3">
+    <line x1="320" y1="540" x2="360" y2="540"/>
+    <line x1="320" y1="533" x2="320" y2="547"/>
+    <line x1="360" y1="533" x2="360" y2="547"/>
+  </g>
+  <text x="340.0" y="558" text-anchor="middle" fill="#27ae60" font-size="12" font-weight="400">event.handler</text>
+  <text x="340.0" y="572" text-anchor="middle" fill="#666" font-size="10">(per event)</text>
   <g stroke="#e67e22" stroke-width="1.5" fill="none">
-    <line x1="1020" y1="555" x2="1140" y2="555"/>
-    <line x1="1020" y1="548" x2="1020" y2="562"/>
-    <line x1="1140" y1="548" x2="1140" y2="562"/>
+    <line x1="560" y1="540" x2="590" y2="540"/>
+    <line x1="560" y1="533" x2="560" y2="547"/>
+    <line x1="590" y1="533" x2="590" y2="547"/>
   </g>
-  <text x="1080.0" y="573" text-anchor="middle" fill="#e67e22" font-size="12" font-weight="400">drain</text>
-  <text x="1080.0" y="587" text-anchor="middle" fill="#666" font-size="10">(unmetered — observers' posted work draining)</text>
-  <rect x="40" y="625" width="1120" height="100" fill="#eaf3fc" stroke="#1e6dc6"/>
-  <text x="55" y="647" font-size="13" font-weight="700" fill="#1e6dc6">Where do the inksdk metrics fit?</text>
-  <text x="55" y="669" font-size="12" fill="#333">inksdk records during the <tspan font-weight="700">live-ink phase</tspan> (kernel pen-down → moves → kernel pen-up). Its metrics — <tspan font-family="ui-monospace,Menlo,monospace">pen.kernel_to_paint</tspan>, <tspan font-family="ui-monospace,Menlo,monospace">event.handler</tspan>,</text>
-  <text x="55" y="687" font-size="12" fill="#333"><tspan font-family="ui-monospace,Menlo,monospace">paint.draw_segment</tspan>, <tspan font-family="ui-monospace,Menlo,monospace">paint.invalidate_call</tspan> — sit <tspan font-style="italic">to the left of stage A</tspan> in this diagram. They are independent of the pen-lift pipeline.</text>
-  <text x="55" y="707" font-size="11" fill="#444" font-style="italic">The host's pen-lift instrumentation (above) only fires AFTER inksdk delivers <tspan font-family="ui-monospace,Menlo,monospace">onStrokeEnd</tspan>; in this test we synthesise that boundary via <tspan font-family="ui-monospace,Menlo,monospace">injectStrokeForTest</tspan>.</text>
-  <rect x="40" y="745" width="1120" height="95" fill="#f6f7f8" stroke="#ddd"/>
-  <text x="55" y="767" font-size="12" fill="#333"><tspan font-weight="700" fill="#c0392b">Red</tspan> = primary metric (the budget the test enforces).</text>
-  <text x="55" y="785" font-size="12" fill="#333"><tspan font-weight="700" fill="#1e6dc6">Blue</tspan> = the four spans wrapped in <tspan font-family="ui-monospace,Menlo,monospace">PerfCounters.time</tspan> directly inside <tspan font-family="ui-monospace,Menlo,monospace">injectStrokeForTest</tspan>.</text>
-  <text x="55" y="803" font-size="12" fill="#333"><tspan font-weight="700" fill="#3498db">Light blue</tspan> = sub-metrics inside <tspan font-family="ui-monospace,Menlo,monospace">finishTextStroke</tspan>; their sum is bounded by <tspan font-family="ui-monospace,Menlo,monospace">end</tspan>. Bracket labels drop the <tspan font-family="ui-monospace,Menlo,monospace">ink.pen_lift.</tspan> prefix.</text>
-  <text x="55" y="821" font-size="12" fill="#333"><tspan font-weight="700" fill="#e67e22">Orange</tspan> = drain (no PerfMetric — observers post async work that <tspan font-family="ui-monospace,Menlo,monospace">waitForIdleSync</tspan> blocks on; computed as <tspan font-family="ui-monospace,Menlo,monospace">total − sync</tspan>).</text>
+  <text x="575.0" y="558" text-anchor="middle" fill="#e67e22" font-size="12" font-weight="400">paint.draw_segment</text>
+  <g stroke="#e67e22" stroke-width="1.5" fill="none">
+    <line x1="610" y1="540" x2="680" y2="540"/>
+    <line x1="610" y1="533" x2="610" y2="547"/>
+    <line x1="680" y1="533" x2="680" y2="547"/>
+  </g>
+  <text x="645.0" y="558" text-anchor="middle" fill="#e67e22" font-size="12" font-weight="400">paint.invalidate_call</text>
+  <rect x="1430" y="534" width="50" height="12" fill="#000" fill-opacity="0.06"/>
+  <g stroke="#e67e22" stroke-width="1.5" fill="none">
+    <line x1="1430" y1="540" x2="1480" y2="540"/>
+    <line x1="1430" y1="533" x2="1430" y2="547"/>
+    <line x1="1480" y1="533" x2="1480" y2="547"/>
+  </g>
+  <text x="1455.0" y="558" text-anchor="middle" fill="#e67e22" font-size="12" font-weight="400">drain</text>
+  <text x="1455.0" y="572" text-anchor="middle" fill="#666" font-size="10">(unmetered)</text>
+  <rect x="40" y="620" width="1420" height="155" fill="#fff5f1" stroke="#f4caaa"/>
+  <text x="55" y="642" font-size="13" font-weight="700" fill="#c0392b">Reading the integrated timeline</text>
+  <text x="55" y="664" font-size="12" fill="#333">The same time axis carries the <tspan fill="#1e6dc6" font-weight="700">live-ink metrics</tspan> on the left (inksdk, recorded during the stroke) and the <tspan fill="#c0392b" font-weight="700">pen-lift metrics</tspan></text>
+  <text x="55" y="682" font-size="12" fill="#333">on the right (mokke, recorded after pen up). They never overlap: <tspan font-family="ui-monospace,Menlo,monospace">pen.kernel_to_paint</tspan> ends well before <tspan font-family="ui-monospace,Menlo,monospace">PEN_LIFT_BUDGET</tspan> starts.</text>
+  <text x="55" y="704" font-size="12" fill="#333">The violet "…more MOVEs… → pen up" gap stands in for a stroke's actual duration; that span is filled with repeated per-event</text>
+  <text x="55" y="722" font-size="12" fill="#333">metric firings (<tspan font-family="ui-monospace,Menlo,monospace">event.kernel_to_jvm</tspan>, <tspan font-family="ui-monospace,Menlo,monospace">event.handler</tspan>, <tspan font-family="ui-monospace,Menlo,monospace">paint.draw_segment</tspan>, <tspan font-family="ui-monospace,Menlo,monospace">paint.invalidate_call</tspan>) and is independent of pen-lift cost.</text>
+  <text x="55" y="744" font-size="12" fill="#333"><tspan font-weight="700">Decomposition:</tspan> pen.kernel_to_paint = pen.kernel_to_jvm + pen.jvm_to_paint;  pen.jvm_to_paint = pen.jvm_to_first_move + pen.move_to_paint.</text>
+  <text x="55" y="762" font-size="11" fill="#666" font-style="italic">No measurement widths shown — see pen-lift-flame.svg and pen-lift-distribution.svg for measured pen-lift values.</text>
+  <rect x="40" y="800" width="1420" height="115" fill="#f6f7f8" stroke="#ddd"/>
+  <text x="55" y="822" font-size="13" font-weight="700" fill="#333">Legend</text>
+  <text x="55" y="844" font-size="11" fill="#333"><tspan font-weight="700" fill="#c0392b">Red bold</tspan> = headline metric (one per phase). <tspan font-weight="700" fill="#1e6dc6">Blue</tspan> = pen.* (per stroke) and pen-lift sync metrics.</text>
+  <text x="55" y="862" font-size="11" fill="#333"><tspan font-weight="700" fill="#3498db">Light blue</tspan> = nested pen.* sub-metrics and pen-lift sub-metrics inside <tspan font-family="ui-monospace,Menlo,monospace">end</tspan>.</text>
+  <text x="55" y="880" font-size="11" fill="#333"><tspan font-weight="700" fill="#27ae60">Green dashed</tspan> = event.* (fires per binder event). <tspan font-weight="700" fill="#e67e22">Orange</tspan> = paint.* and pen-lift drain.</text>
+  <text x="55" y="898" font-size="11" fill="#666">Greyed segments are unmeasurable from the JVM (kernel land, EPD refresh, observer-posted async work).</text>
 </svg>
