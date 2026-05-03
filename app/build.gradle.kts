@@ -190,6 +190,12 @@ dependencies {
     // Proto schema (shared module — single source of truth)
     implementation(project(":proto"))
 
+    // Vendored inksdk — low-latency stylus controller (Bigme/Onyx/Noop).
+    // Re-exports onyxsdk-pen, onyxsdk-device, and hiddenapibypass as `api`
+    // deps; once we finish migrating call-sites off com.writer.view.ink.*,
+    // the three explicit declarations below become redundant and get dropped.
+    implementation(project(":inksdk"))
+
     // Onyx Pen SDK (Boox stylus input)
     implementation("com.onyx.android.sdk:onyxsdk-pen:1.5.2")
     implementation("com.onyx.android.sdk:onyxsdk-device:1.3.3")
