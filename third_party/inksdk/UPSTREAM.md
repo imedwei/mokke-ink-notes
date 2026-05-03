@@ -7,7 +7,7 @@ Do not hand-edit unless you also record the change here.
 |--------|-------|
 | URL    | https://github.com/imedwei/inksdk |
 | Branch | main |
-| Commit | `ffee59de31ec4f91ac2f47d7492daa2142231582` |
+| Commit | `33c71c9578007db3f2b3ee4767e63472b9802600` |
 | Pulled | 2026-05-03 |
 
 To sync with upstream, run `./scripts/update-inksdk.sh [branch]` from the repo root.
