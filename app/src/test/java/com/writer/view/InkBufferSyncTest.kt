@@ -1,4 +1,4 @@
-package com.writer.view.ink
+package com.writer.view
 
 import android.app.Activity
 import android.app.Application

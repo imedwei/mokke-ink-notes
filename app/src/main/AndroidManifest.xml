@@ -67,13 +67,6 @@
             android:authorities="${applicationId}.debug"
             android:exported="true"
             android:permission="${applicationId}.permission.DEBUG" />
-
-        <!-- Diagnostic activity for Bigme low-latency ink integration. -->
-        <activity
-            android:name=".view.ink.BigmeProbeActivity"
-            android:theme="@style/Theme.Writer.BigmeProbe"
-            android:exported="true"
-            android:screenOrientation="portrait" />
     </application>
 
 </manifest>

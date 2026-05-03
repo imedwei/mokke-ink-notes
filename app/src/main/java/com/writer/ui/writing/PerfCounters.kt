@@ -13,20 +13,13 @@ enum class PerfMetric(val label: String) {
     SAVE_SYNC("save.sync"),
     SAVE_INCREMENTAL("save.incremental"),
     // Ink-latency metrics — recorded by HandwritingCanvasView.
+    // (Daemon-path metrics — pen/event/paint families — are now owned by
+    // inksdk and arrive via the PerfSink installed in WriterApplication;
+    // they appear in unifiedSnapshot under their inksdk labels.)
     INK_RENDER_STATIC("ink.render_static"),       // rebuildContentBitmap wall time
     INK_COMPOSE_OVERLAY("ink.compose_overlay"),   // drawOverlayOnlyToSurface wall time
     INK_MOVE_LATENCY("ink.move_latency"),         // MotionEvent.eventTime → overlay committed
-    // Bigme daemon-path metrics — recorded by BigmeInkController.InputProxy
-    // (per-MOVE/UP events on the binder thread) and HandwritingCanvasView
-    // (mutation commits on the main thread).
-    INK_DAEMON_DRAW_LINE("ink.daemon.draw_line"),       // Canvas.drawLine into ION buffer
-    INK_DAEMON_INVALIDATE("ink.daemon.invalidate"),     // inValidate(rect, mode) round-trip
-    INK_DAEMON_INVOKE_TOTAL("ink.daemon.invoke_total"), // full InputProxy.invoke hot path
-    INK_DAEMON_DOWN_TO_PAINT("ink.daemon.down_to_paint"),// ACTION_DOWN → first inValidate (end-to-end)
-    INK_DAEMON_DOWN_TO_FIRST_MOVE("ink.daemon.down_to_first_move"), // ACTION_DOWN → first MOVE arrival (daemon delivery + user pen speed)
-    INK_DAEMON_FIRST_MOVE_TO_PAINT("ink.daemon.first_move_to_paint"), // first MOVE arrival → first inValidate (our processing only)
-    INK_DAEMON_DISPATCH_LATENCY("ink.daemon.dispatch_latency"), // daemon event timestamp → our InputProxy.invoke entry (if clocks align)
-    INK_COMMIT_MUTATION("ink.commit_mutation"),         // rebuild + sync + compose for snap/delete
+    INK_COMMIT_MUTATION("ink.commit_mutation"),   // rebuild + sync + compose for snap/delete
 }
 
 /**

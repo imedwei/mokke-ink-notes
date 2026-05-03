@@ -192,16 +192,9 @@ dependencies {
 
     // Vendored inksdk — low-latency stylus controller (Bigme/Onyx/Noop).
     // Re-exports onyxsdk-pen, onyxsdk-device, and hiddenapibypass as `api`
-    // deps; once we finish migrating call-sites off com.writer.view.ink.*,
-    // the three explicit declarations below become redundant and get dropped.
+    // deps, so they're available transitively for WriterApplication's
+    // HiddenApiBypass call.
     implementation(project(":inksdk"))
-
-    // Onyx Pen SDK (Boox stylus input)
-    implementation("com.onyx.android.sdk:onyxsdk-pen:1.5.2")
-    implementation("com.onyx.android.sdk:onyxsdk-device:1.3.3")
-
-    // Bypass hidden API restrictions (needed for Onyx SDK on Android 14+)
-    implementation("org.lsposed.hiddenapibypass:hiddenapibypass:4.3")
 
     // Media3 ExoPlayer for audio playback (OGG/Opus seeking via granule positions)
     implementation("androidx.media3:media3-exoplayer:1.6.0")

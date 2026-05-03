@@ -1,4 +1,4 @@
-package com.writer.view.ink
+package com.writer.view
 
 import android.graphics.Bitmap
 import android.graphics.Rect
