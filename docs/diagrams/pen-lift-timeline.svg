@@ -174,7 +174,7 @@
     <line x1="560" y1="638" x2="560" y2="652"/>
     <line x1="590" y1="638" x2="590" y2="652"/>
   </g>
-  <text x="575.0" y="663" text-anchor="middle" fill="#e67e22" font-size="12" font-weight="400">paint.draw_segment</text>
+  <text x="575.0" y="631" text-anchor="middle" fill="#e67e22" font-size="12" font-weight="400">paint.draw_segment</text>
   <g stroke="#e67e22" stroke-width="1.5" fill="none">
     <line x1="610" y1="645" x2="680" y2="645"/>
     <line x1="610" y1="638" x2="610" y2="652"/>
