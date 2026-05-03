@@ -9,7 +9,7 @@ import kotlin.math.abs
  *
  * Core principle: **one undo step = one user intent**.
  *
- * See docs/undo-redo-design.md for the full design rationale.
+ * See docs/design/undo-redo.md for the full design rationale.
  */
 class UndoCoalescer(
     private val undoManager: UndoManager,

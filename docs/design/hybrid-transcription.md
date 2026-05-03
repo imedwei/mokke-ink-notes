@@ -1,3 +1,10 @@
+---
+status: approved
+author: spm@edwei.com
+created: 2026-04-12
+updated: 2026-04-12
+---
+
 # Hybrid Two-Pass Transcription: Per-Endpoint Streaming → Offline Upgrade
 
 ## Context

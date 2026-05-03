@@ -1,3 +1,10 @@
+---
+status: approved
+author: spm@edwei.com
+created: 2026-03-10
+updated: 2026-03-10
+---
+
 # Responsive Layout Design
 
 ## Problem

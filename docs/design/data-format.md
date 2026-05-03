@@ -1,3 +1,10 @@
+---
+status: approved
+author: spm@edwei.com
+created: 2026-04-15
+updated: 2026-04-15
+---
+
 # Document Format and Data Model
 
 ## Overview

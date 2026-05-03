@@ -1,3 +1,10 @@
+---
+status: approved
+author: spm@edwei.com
+created: 2026-03-28
+updated: 2026-03-28
+---
+
 # Compact Stroke Encoding Design
 
 ## Problem

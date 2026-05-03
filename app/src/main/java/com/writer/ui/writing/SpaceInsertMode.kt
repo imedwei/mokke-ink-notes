@@ -13,7 +13,7 @@ import com.writer.view.HandwritingCanvasView
  * Insert: shifts all strokes and diagram areas at or below [anchorLine] down.
  * Remove: shifts content up, but only removes truly empty lines — blocks at content.
  *
- * See docs/undo-redo-design.md for the design rationale.
+ * See docs/design/undo-redo.md for the design rationale.
  */
 object SpaceInsertMode {
 

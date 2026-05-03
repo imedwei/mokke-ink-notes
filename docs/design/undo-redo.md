@@ -1,3 +1,10 @@
+---
+status: approved
+author: spm@edwei.com
+created: 2026-03-23
+updated: 2026-03-23
+---
+
 # Undo/Redo UX Design & Snapshot Policy
 
 ## Context

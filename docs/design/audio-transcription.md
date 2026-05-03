@@ -1,3 +1,10 @@
+---
+status: approved
+author: spm@edwei.com
+created: 2026-04-12
+updated: 2026-04-12
+---
+
 # Audio-to-Text Transcription — Engineering Design
 
 ## Context

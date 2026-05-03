@@ -1,8 +1,13 @@
+---
+status: approved
+author: spm@edwei.com
+created: 2026-03-23
+updated: 2026-03-30
+---
+
 # Mokke - Ink Notes — Engineering Design
 
 > Comprehensive technical guide to the Mokke - Ink Notes handwriting-to-text app for Android e-ink devices.
-
-*Last updated: March 2026*
 
 ---
 

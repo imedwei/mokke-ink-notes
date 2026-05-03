@@ -16,7 +16,7 @@ Mokke bridges this gap. It treats handwritten strokes, diagrams, and embedded me
 
 ### Conceptual architecture
 
-![Mokke conceptual architecture](./architecture.svg)
+![Mokke conceptual architecture](./diagrams/architecture.svg)
 
 ---
 
