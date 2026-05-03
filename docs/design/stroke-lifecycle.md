@@ -8,23 +8,17 @@ updated: 2026-05-03
 # Stroke lifecycle: live-ink → pen up → pen-lift
 
 A single user stroke runs through two distinct phases, each owned by a
-different layer and instrumented with a different metric system:
+different layer and instrumented with a different metric system: a
+vendor-driven **live-ink phase** measured by inksdk's `pen.* / event.* /
+paint.*` metrics, and a host-driven **pen-lift phase** measured by mokke's
+`ink.pen_lift.*` family. The two phases are sequential and never overlap.
 
-```
-[ Live-ink phase (during stroke) ]  →  pen up  →  [ Pen-lift phase (after pen up) ]  →  Idle
-       inksdk metrics                                  mokke metrics
-       pen.* · event.* · paint.*                       ink.pen_lift.*  ·  drain
-```
+![Integrated stroke-lifecycle timeline](../diagrams/pen-lift-timeline.svg)
 
-Together they cover everything the user perceives as "the system reacting
-to my pen". Knowing where each metric fires — and where each one *doesn't*
-— is the difference between optimising the right thing and optimising a
-ghost.
-
-The visual companion to this doc is
-[`docs/diagrams/pen-lift-timeline.svg`](../diagrams/pen-lift-timeline.svg),
-which draws every metric bracket on a single time axis. This doc is the
-prose walkthrough.
+Together the two phases cover everything the user perceives as "the
+system reacting to my pen". Knowing where each metric fires — and where
+each one *doesn't* — is the difference between optimising the right
+thing and optimising a ghost.
 
 ## Why two phases
 
@@ -220,8 +214,18 @@ the same amount of wall-clock time the queue takes to drain.
 
 ## Measured pen-lift values (Palma 2 Pro, 20 runs)
 
-See [`docs/diagrams/pen-lift-distribution.svg`](../diagrams/pen-lift-distribution.svg)
-and [`pen-lift-flame.svg`](../diagrams/pen-lift-flame.svg).
+The pen-lift phase was instrumented and run end-to-end 20 times on a
+Palma 2 Pro via the `singleStrokePenLiftUnderBudget` test in
+[`StrokePipelinePerfTest.kt`](../../app/src/androidTest/java/com/writer/perf/StrokePipelinePerfTest.kt).
+Live-ink is not in this corpus because the test uses
+`injectStrokeForTest`, which bypasses the vendor SDK.
+
+### Distribution per stage
+
+The same brackets as the structural timeline above, with measured
+p50 / p95 annotated under each:
+
+![Pen-lift distribution per stage](../diagrams/pen-lift-distribution.svg)
 
 | Stage | min | p50 | p95 | max |
 |---|---|---|---|---|
@@ -237,23 +241,20 @@ are `scratch_check`, `observers`, and `drain`. `scratch_check` and
 `drain` are also where p50 → p95 amplification lives (5× and 13×
 respectively); other stages stay roughly constant.
 
+### Flame view
+
+The flame stacks the pen-lift call hierarchy with widths proportional
+to ms (p50 on top, p95 below at the same horizontal scale). The violet
+bracket spans the root because every millisecond is user-observable —
+sync work blocks the visible commit, drain blocks the next input event.
+
+![Pen-lift flame graph (p50 vs p95)](../diagrams/pen-lift-flame.svg)
+
 The `injectStroke`-direct stages (`begin`, `add_points`,
 `append_bitmap`) and three of the four sub-stages inside `end`
-(`shape_snap`, `classify`, plus the leftover overhead) are essentially
-free — optimising them yields nothing.
-
-## Diagrams
-
-- **[`pen-lift-timeline.svg`](../diagrams/pen-lift-timeline.svg)** —
-  integrated structural timeline. One time axis, both phases, every
-  metric bracket. Spacing is logical, not measured.
-- **[`pen-lift-distribution.svg`](../diagrams/pen-lift-distribution.svg)** —
-  same structural layout as the timeline, with measured p50 / p95
-  annotated under each pen-lift bracket.
-- **[`pen-lift-flame.svg`](../diagrams/pen-lift-flame.svg)** —
-  flame graph for the pen-lift portion only (live-ink had no
-  measurements in this test corpus). p50 stack on top, p95 stack below
-  at the same horizontal scale; user-observable bracket spans the root.
+(`shape_snap`, `classify`, plus the leftover overhead) are visually
+absent from the flame — they each measure under 1 ms p50 and were
+skipped from rendering. Optimising them yields nothing.
 
 ## Where to look in code
 
