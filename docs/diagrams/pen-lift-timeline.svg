@@ -1,84 +1,112 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 720" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12">
-  <title>Pen-lift budget breakdown — singleStrokePenLiftUnderBudget on Palma 2 Pro</title>
-  <text x="490.0" y="28" text-anchor="middle" font-size="18" font-weight="700" font-family="system-ui, Helvetica, sans-serif">singleStrokePenLiftUnderBudget — pen-lift breakdown</text>
-  <text x="490.0" y="50" text-anchor="middle" font-size="12" fill="#666" font-family="system-ui, Helvetica, sans-serif">Palma 2 Pro · 20 runs · solid bar = p50, light extension = p95, vertical line = max</text>
-  <line x1="230" y1="92" x2="920" y2="92" stroke="#aaa" stroke-width="1"/>
-  <line x1="230.0" y1="89" x2="230.0" y2="95" stroke="#666" stroke-width="1"/>
-  <text x="230.0" y="84" text-anchor="middle" fill="#666" font-size="10">0</text>
-  <line x1="306.6666666666667" y1="89" x2="306.6666666666667" y2="95" stroke="#666" stroke-width="1"/>
-  <text x="306.6666666666667" y="84" text-anchor="middle" fill="#666" font-size="10">50</text>
-  <line x1="383.33333333333337" y1="89" x2="383.33333333333337" y2="95" stroke="#666" stroke-width="1"/>
-  <text x="383.33333333333337" y="84" text-anchor="middle" fill="#666" font-size="10">100</text>
-  <line x1="460.0" y1="89" x2="460.0" y2="95" stroke="#666" stroke-width="1"/>
-  <text x="460.0" y="84" text-anchor="middle" fill="#666" font-size="10">150</text>
-  <line x1="536.6666666666667" y1="89" x2="536.6666666666667" y2="95" stroke="#666" stroke-width="1"/>
-  <text x="536.6666666666667" y="84" text-anchor="middle" fill="#666" font-size="10">200</text>
-  <line x1="613.3333333333334" y1="89" x2="613.3333333333334" y2="95" stroke="#666" stroke-width="1"/>
-  <text x="613.3333333333334" y="84" text-anchor="middle" fill="#666" font-size="10">250</text>
-  <line x1="690.0" y1="89" x2="690.0" y2="95" stroke="#666" stroke-width="1"/>
-  <text x="690.0" y="84" text-anchor="middle" fill="#666" font-size="10">300</text>
-  <line x1="766.6666666666667" y1="89" x2="766.6666666666667" y2="95" stroke="#666" stroke-width="1"/>
-  <text x="766.6666666666667" y="84" text-anchor="middle" fill="#666" font-size="10">350</text>
-  <line x1="843.3333333333334" y1="89" x2="843.3333333333334" y2="95" stroke="#666" stroke-width="1"/>
-  <text x="843.3333333333334" y="84" text-anchor="middle" fill="#666" font-size="10">400</text>
-  <line x1="920.0" y1="89" x2="920.0" y2="95" stroke="#666" stroke-width="1"/>
-  <text x="920.0" y="84" text-anchor="middle" fill="#666" font-size="10">450</text>
-  <text x="928" y="95" fill="#666" font-size="10">ms</text>
-  <line x1="306.6666666666667" y1="102" x2="306.6666666666667" y2="670" stroke="#c0392b" stroke-width="1.5" stroke-dasharray="4 3"/>
-  <text x="311.6666666666667" y="114" fill="#c0392b" font-size="11" font-weight="700">PEN_LIFT_BUDGET_MS = 50</text>
-  <text x="215" y="132" text-anchor="end" fill="#333" font-weight="700" font-size="13">Sequence (p50, ~ to scale)</text>
-  <text x="207" y="162" text-anchor="end" fill="#333" font-size="12">begin</text>
-  <rect x="230" y="149" width="0.0" height="16" fill="#27ae60" fill-opacity="0.25"/>
-  <rect x="230" y="149" width="0.0" height="16" fill="#27ae60" fill-opacity="0.75"/>
-  <line x1="230.0" y1="147" x2="230.0" y2="167" stroke="#27ae60" stroke-width="2"/>
-  <text x="242.0" y="162" fill="#666" font-size="11">min=0  p50=0  p95=0  max=0</text>
-  <text x="207" y="192" text-anchor="end" fill="#333" font-size="12">add_points</text>
-  <rect x="230" y="179" width="1.5333333333333334" height="16" fill="#27ae60" fill-opacity="0.25"/>
-  <rect x="230" y="179" width="0.0" height="16" fill="#27ae60" fill-opacity="0.75"/>
-  <line x1="231.53333333333333" y1="177" x2="231.53333333333333" y2="197" stroke="#27ae60" stroke-width="2"/>
-  <text x="243.53333333333333" y="192" fill="#666" font-size="11">min=0  p50=0  p95=1  max=1</text>
-  <text x="207" y="222" text-anchor="end" fill="#333" font-size="12">end (incl. finishStroke)</text>
-  <rect x="230" y="209" width="222.33333333333334" height="16" fill="#1e6dc6" fill-opacity="0.25"/>
-  <rect x="230" y="209" width="105.80000000000001" height="16" fill="#1e6dc6" fill-opacity="0.75"/>
-  <line x1="452.33333333333337" y1="207" x2="452.33333333333337" y2="227" stroke="#1e6dc6" stroke-width="2"/>
-  <text x="464.33333333333337" y="222" fill="#666" font-size="11">min=42  p50=69  p95=145  max=145</text>
-  <text x="199" y="252" text-anchor="end" fill="#333" font-size="12">  scratch_check</text>
-  <rect x="230" y="239" width="145.66666666666669" height="16" fill="#3498db" fill-opacity="0.25"/>
-  <rect x="230" y="239" width="47.53333333333334" height="16" fill="#3498db" fill-opacity="0.75"/>
-  <line x1="375.6666666666667" y1="237" x2="375.6666666666667" y2="257" stroke="#3498db" stroke-width="2"/>
-  <text x="387.6666666666667" y="252" fill="#666" font-size="11">min=19  p50=31  p95=95  max=95</text>
-  <text x="199" y="282" text-anchor="end" fill="#333" font-size="12">  shape_snap</text>
-  <rect x="230" y="269" width="1.5333333333333334" height="16" fill="#3498db" fill-opacity="0.25"/>
-  <rect x="230" y="269" width="0.0" height="16" fill="#3498db" fill-opacity="0.75"/>
-  <line x1="231.53333333333333" y1="267" x2="231.53333333333333" y2="287" stroke="#3498db" stroke-width="2"/>
-  <text x="243.53333333333333" y="282" fill="#666" font-size="11">min=0  p50=0  p95=1  max=1</text>
-  <text x="199" y="312" text-anchor="end" fill="#333" font-size="12">  classify</text>
-  <rect x="230" y="299" width="4.6000000000000005" height="16" fill="#3498db" fill-opacity="0.25"/>
-  <rect x="230" y="299" width="0.0" height="16" fill="#3498db" fill-opacity="0.75"/>
-  <line x1="234.6" y1="297" x2="234.6" y2="317" stroke="#3498db" stroke-width="2"/>
-  <text x="246.6" y="312" fill="#666" font-size="11">min=0  p50=0  p95=3  max=3</text>
-  <text x="199" y="342" text-anchor="end" fill="#333" font-size="12">  observers</text>
-  <rect x="230" y="329" width="72.06666666666668" height="16" fill="#3498db" fill-opacity="0.25"/>
-  <rect x="230" y="329" width="49.06666666666667" height="16" fill="#3498db" fill-opacity="0.75"/>
-  <line x1="302.06666666666666" y1="327" x2="302.06666666666666" y2="347" stroke="#3498db" stroke-width="2"/>
-  <text x="314.06666666666666" y="342" fill="#666" font-size="11">min=21  p50=32  p95=47  max=47</text>
-  <text x="207" y="372" text-anchor="end" fill="#333" font-size="12">append_bitmap</text>
-  <rect x="230" y="359" width="1.5333333333333334" height="16" fill="#27ae60" fill-opacity="0.25"/>
-  <rect x="230" y="359" width="0.0" height="16" fill="#27ae60" fill-opacity="0.75"/>
-  <line x1="231.53333333333333" y1="357" x2="231.53333333333333" y2="377" stroke="#27ae60" stroke-width="2"/>
-  <text x="243.53333333333333" y="372" fill="#666" font-size="11">min=0  p50=0  p95=1  max=1</text>
-  <text x="207" y="402" text-anchor="end" fill="#333" font-size="12">drain (post-sync queue)</text>
-  <rect x="230" y="389" width="449.2666666666667" height="16" fill="#e67e22" fill-opacity="0.25"/>
-  <rect x="230" y="389" width="50.6" height="16" fill="#e67e22" fill-opacity="0.75"/>
-  <line x1="679.2666666666667" y1="387" x2="679.2666666666667" y2="407" stroke="#e67e22" stroke-width="2"/>
-  <text x="691.2666666666667" y="402" fill="#666" font-size="11">min=22  p50=33  p95=293  max=293</text>
-  <text x="215" y="442" text-anchor="end" fill="#333" font-size="12">total = sync + drain</text>
-  <rect x="230" y="429" width="663.9333333333334" height="16" fill="#c0392b" fill-opacity="0.25"/>
-  <rect x="230" y="429" width="156.4" height="16" fill="#c0392b" fill-opacity="0.75"/>
-  <line x1="893.9333333333334" y1="427" x2="893.9333333333334" y2="447" stroke="#c0392b" stroke-width="2"/>
-  <text x="905.9333333333334" y="442" fill="#666" font-size="11">min=72  p50=102  p95=433  max=433</text>
-  <rect x="40" y="625" width="900" height="80" fill="#f6f7f8" stroke="#ddd"/>
-  <text x="55" y="647" font-size="12" fill="#333"><tspan font-weight="700">Where the time goes:</tspan> dominant cost is <tspan fill="#c0392b" font-weight="700">end</tspan> (synchronous post-stroke pipeline) — driven by <tspan fill="#3498db" font-weight="700">scratch_check</tspan> + <tspan fill="#3498db" font-weight="700">observers</tspan> ≈ 63 ms at p50.</text>
-  <text x="55" y="667" font-size="12" fill="#333"><tspan font-weight="700">Where variance arises:</tspan> <tspan fill="#3498db" font-weight="700">scratch_check</tspan> swings 19–95 ms (5×) and <tspan fill="#e67e22" font-weight="700">drain</tspan> swings 22–293 ms (13×). The other stages contribute ≤ 3 ms.</text>
-  <text x="55" y="687" font-size="11" fill="#666" font-style="italic">Recorded in app/src/main/java/com/writer/view/HandwritingCanvasView.kt and dumped from app/src/androidTest/.../StrokePipelinePerfTest.kt.</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 600" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13">
+  <title>Pen-lift pipeline — host stages and metric coverage</title>
+  <text x="490.0" y="28" text-anchor="middle" font-size="18" font-weight="700" font-family="system-ui, Helvetica, sans-serif">Pen-lift pipeline → ink committed, with metric coverage</text>
+  <text x="490.0" y="50" text-anchor="middle" font-size="12" fill="#666" font-family="system-ui, Helvetica, sans-serif">Time flows left → right. Stage spacing is structural, not proportional. Greyed region is unmetered (computed as total − sync).</text>
+  <g font-size="11" text-anchor="middle">
+    <text x="60" y="102">A. test calls</text>
+    <text x="60" y="116">injectStrokeForTest</text>
+    <text x="160" y="94">B. addStrokePoint</text>
+    <text x="160" y="108">loop done →</text>
+    <text x="160" y="122">endStroke entered</text>
+    <text x="260" y="102">C. finishStroke</text>
+    <text x="260" y="116">→ finishTextStroke</text>
+    <text x="390" y="102">D. scratch_check</text>
+    <text x="390" y="116">returns</text>
+    <text x="470" y="102">E. shape_snap</text>
+    <text x="470" y="116">returns</text>
+    <text x="550" y="102">F. classify</text>
+    <text x="550" y="116">returns</text>
+    <text x="640" y="94">G. observers</text>
+    <text x="640" y="108">(onStrokeCompleted)</text>
+    <text x="640" y="122">return</text>
+    <text x="740" y="102">H. endStroke</text>
+    <text x="740" y="116">returns</text>
+    <text x="830" y="102">I. injectStroke</text>
+    <text x="830" y="116">returns</text>
+    <text x="920" y="102">J. waitForIdleSync</text>
+    <text x="920" y="116">returns</text>
+  </g>
+  <g stroke="#333" stroke-width="1.5">
+    <line x1="60" y1="152" x2="60" y2="172"/>
+    <line x1="160" y1="152" x2="160" y2="172"/>
+    <line x1="260" y1="152" x2="260" y2="172"/>
+    <line x1="390" y1="152" x2="390" y2="172"/>
+    <line x1="470" y1="152" x2="470" y2="172"/>
+    <line x1="550" y1="152" x2="550" y2="172"/>
+    <line x1="640" y1="152" x2="640" y2="172"/>
+    <line x1="740" y1="152" x2="740" y2="172"/>
+    <line x1="830" y1="152" x2="830" y2="172"/>
+    <line x1="920" y1="152" x2="920" y2="172"/>
+  </g>
+  <line x1="20" y1="162" x2="960" y2="162" stroke="#333" stroke-width="1"/>
+  <rect x="20"  y="155" width="40" height="14" fill="#000" fill-opacity="0.06"/>
+  <g stroke="#c0392b" stroke-width="1.5" fill="none">
+    <line x1="60" y1="208" x2="920" y2="208"/>
+    <line x1="60" y1="201" x2="60" y2="215"/>
+    <line x1="920" y1="201" x2="920" y2="215"/>
+  </g>
+  <text x="490.0" y="226" text-anchor="middle" fill="#c0392b" font-size="12" font-weight="700">PEN_LIFT_BUDGET_MS — test asserts total < 50 ms</text>
+  <text x="490.0" y="240" text-anchor="middle" fill="#666" font-size="10">(SystemClock t0 → waitForIdleSync returns)</text>
+  <g stroke="#1e6dc6" stroke-width="1.5" fill="none">
+    <line x1="60" y1="270" x2="85" y2="270"/>
+    <line x1="60" y1="263" x2="60" y2="277"/>
+    <line x1="85" y1="263" x2="85" y2="277"/>
+  </g>
+  <text x="72.5" y="288" text-anchor="middle" fill="#1e6dc6" font-size="12" font-weight="400">ink.pen_lift.begin</text>
+  <g stroke="#1e6dc6" stroke-width="1.5" fill="none">
+    <line x1="90" y1="270" x2="160" y2="270"/>
+    <line x1="90" y1="263" x2="90" y2="277"/>
+    <line x1="160" y1="263" x2="160" y2="277"/>
+  </g>
+  <text x="125.0" y="288" text-anchor="middle" fill="#1e6dc6" font-size="12" font-weight="400">ink.pen_lift.add_points</text>
+  <g stroke="#1e6dc6" stroke-width="1.5" fill="none">
+    <line x1="160" y1="270" x2="740" y2="270"/>
+    <line x1="160" y1="263" x2="160" y2="277"/>
+    <line x1="740" y1="263" x2="740" y2="277"/>
+  </g>
+  <text x="450.0" y="288" text-anchor="middle" fill="#1e6dc6" font-size="12" font-weight="700">ink.pen_lift.end</text>
+  <g stroke="#1e6dc6" stroke-width="1.5" fill="none">
+    <line x1="740" y1="270" x2="830" y2="270"/>
+    <line x1="740" y1="263" x2="740" y2="277"/>
+    <line x1="830" y1="263" x2="830" y2="277"/>
+  </g>
+  <text x="785.0" y="288" text-anchor="middle" fill="#1e6dc6" font-size="12" font-weight="400">ink.pen_lift.append_bitmap</text>
+  <g stroke="#3498db" stroke-width="1.5" fill="none">
+    <line x1="260" y1="340" x2="390" y2="340"/>
+    <line x1="260" y1="333" x2="260" y2="347"/>
+    <line x1="390" y1="333" x2="390" y2="347"/>
+  </g>
+  <text x="325.0" y="358" text-anchor="middle" fill="#3498db" font-size="12" font-weight="400">ink.pen_lift.scratch_check</text>
+  <g stroke="#3498db" stroke-width="1.5" fill="none">
+    <line x1="390" y1="340" x2="470" y2="340"/>
+    <line x1="390" y1="333" x2="390" y2="347"/>
+    <line x1="470" y1="333" x2="470" y2="347"/>
+  </g>
+  <text x="430.0" y="358" text-anchor="middle" fill="#3498db" font-size="12" font-weight="400">ink.pen_lift.shape_snap</text>
+  <g stroke="#3498db" stroke-width="1.5" fill="none">
+    <line x1="470" y1="340" x2="550" y2="340"/>
+    <line x1="470" y1="333" x2="470" y2="347"/>
+    <line x1="550" y1="333" x2="550" y2="347"/>
+  </g>
+  <text x="510.0" y="358" text-anchor="middle" fill="#3498db" font-size="12" font-weight="400">ink.pen_lift.classify</text>
+  <g stroke="#3498db" stroke-width="1.5" fill="none">
+    <line x1="550" y1="340" x2="640" y2="340"/>
+    <line x1="550" y1="333" x2="550" y2="347"/>
+    <line x1="640" y1="333" x2="640" y2="347"/>
+  </g>
+  <text x="595.0" y="358" text-anchor="middle" fill="#3498db" font-size="12" font-weight="400">ink.pen_lift.observers</text>
+  <text x="595.0" y="372" text-anchor="middle" fill="#666" font-size="10">(onStrokeCompleted)</text>
+  <rect x="830" y="395" width="90" height="22" fill="#000" fill-opacity="0.06"/>
+  <g stroke="#e67e22" stroke-width="1.5" fill="none">
+    <line x1="830" y1="410" x2="920" y2="410"/>
+    <line x1="830" y1="403" x2="830" y2="417"/>
+    <line x1="920" y1="403" x2="920" y2="417"/>
+  </g>
+  <text x="875.0" y="428" text-anchor="middle" fill="#e67e22" font-size="12" font-weight="400">drain</text>
+  <text x="875.0" y="442" text-anchor="middle" fill="#666" font-size="10">(unmetered — observers' posted work draining)</text>
+  <rect x="40" y="630" width="900" height="95" fill="#f6f7f8" stroke="#ddd"/>
+  <text x="55" y="652" font-size="12" fill="#333"><tspan font-weight="700" fill="#c0392b">Red</tspan> = primary metric (the budget the test enforces).</text>
+  <text x="55" y="670" font-size="12" fill="#333"><tspan font-weight="700" fill="#1e6dc6">Blue</tspan> = the four spans wrapped in <tspan font-family="ui-monospace,Menlo,monospace">PerfCounters.time</tspan> directly inside <tspan font-family="ui-monospace,Menlo,monospace">injectStrokeForTest</tspan>.</text>
+  <text x="55" y="688" font-size="12" fill="#333"><tspan font-weight="700" fill="#3498db">Light blue</tspan> = sub-metrics inside <tspan font-family="ui-monospace,Menlo,monospace">finishTextStroke</tspan>; their sum is bounded by <tspan font-family="ui-monospace,Menlo,monospace">ink.pen_lift.end</tspan>.</text>
+  <text x="55" y="706" font-size="12" fill="#333"><tspan font-weight="700" fill="#e67e22">Orange</tspan> = drain (no PerfMetric — observers post async work that <tspan font-family="ui-monospace,Menlo,monospace">waitForIdleSync</tspan> blocks on; computed as <tspan font-family="ui-monospace,Menlo,monospace">total − sync</tspan>).</text>
 </svg>
