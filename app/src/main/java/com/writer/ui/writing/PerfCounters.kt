@@ -1,5 +1,7 @@
 package com.writer.ui.writing
 
+import java.util.concurrent.ConcurrentHashMap
+
 /**
  * Named performance metrics. Each maps to a pre-allocated ring buffer
  * in [PerfCounters] indexed by [ordinal] — no HashMap lookup.
@@ -43,6 +45,12 @@ object PerfCounters {
     @PublishedApi
     internal val counters = Array(PerfMetric.entries.size) { RingCounter(WINDOW_SIZE) }
 
+    // Label-keyed storage for measurements pushed in via external sinks
+    // (see WriterApplication.onCreate, where inksdk's PerfSink is wired
+    // into [recordByLabel]). Allocated lazily per first-seen label, so the
+    // map only grows to the cardinality of metrics actually fired.
+    private val externalCounters = ConcurrentHashMap<String, RingCounter>()
+
     /**
      * Time a block and record the elapsed time. Returns the block's result.
      * Hot path: ~50ns overhead (nanoTime + array write).
@@ -60,6 +68,20 @@ object PerfCounters {
         counters[metric.ordinal].record(elapsedNanos)
     }
 
+    /**
+     * Record a timing under a label string. Used by external perf sinks
+     * (see WriterApplication.onCreate where inksdk's PerfSink routes here)
+     * so vendored libraries can deposit measurements without coupling to
+     * mokke's [PerfMetric] enum.
+     *
+     * Thread-safe. Allocates a [RingCounter] lazily on first sight of a
+     * given label; subsequent records reuse it.
+     */
+    fun recordByLabel(label: String, elapsedNanos: Long) {
+        externalCounters.computeIfAbsent(label) { RingCounter(WINDOW_SIZE) }
+            .record(elapsedNanos)
+    }
+
     fun get(metric: PerfMetric): CounterSnapshot = counters[metric.ordinal].snapshot()
 
     fun snapshot(): Map<PerfMetric, CounterSnapshot> =
@@ -67,31 +89,30 @@ object PerfCounters {
 
     fun reset() {
         for (counter in counters) counter.reset()
-        com.inksdk.ink.PerfCounters.reset()
+        externalCounters.clear()
     }
 
     /**
-     * Unified label+stats view across mokke's app-level counters and
-     * inksdk's ink-pipeline counters. Used by [BugReport] and the
-     * `PerfDump` logcat dump so consumers iterate one list and see all
-     * metrics labelled consistently (both systems prefix `ink.*`).
+     * Unified label+stats view across enum-keyed metrics ([PerfMetric]) and
+     * label-keyed metrics deposited via [recordByLabel]. Used by [BugReport]
+     * and the `PerfDump` logcat dump so consumers iterate one list.
      *
      * Counters with `count == 0` are omitted.
      */
     fun unifiedSnapshot(): List<LabeledSnapshot> = buildList {
         for ((metric, snap) in snapshot()) {
-            if (snap.count > 0L) add(LabeledSnapshot.from(metric.label, snap))
+            if (snap.count > 0L) add(LabeledSnapshot(metric.label, snap.count, snap.lastMs, snap.p50Ms, snap.p95Ms, snap.maxMs))
         }
-        for ((metric, snap) in com.inksdk.ink.PerfCounters.snapshot()) {
-            if (snap.count > 0L) add(LabeledSnapshot.from(metric.label, snap))
+        for ((label, counter) in externalCounters) {
+            val snap = counter.snapshot()
+            if (snap.count > 0L) add(LabeledSnapshot(label, snap.count, snap.lastMs, snap.p50Ms, snap.p95Ms, snap.maxMs))
         }
     }
 }
 
 /**
- * Cross-system labeled snapshot row. Bridges [CounterSnapshot] (mokke) and
- * [com.inksdk.ink.CounterSnapshot] (inksdk), which are structurally
- * identical but live in different packages.
+ * Labeled snapshot row used by [PerfCounters.unifiedSnapshot]. Carries the
+ * metric label as a string so callers don't depend on [PerfMetric].
  */
 data class LabeledSnapshot(
     val label: String,
@@ -100,15 +121,7 @@ data class LabeledSnapshot(
     val p50Ms: Long,
     val p95Ms: Long,
     val maxMs: Long,
-) {
-    companion object {
-        fun from(label: String, s: CounterSnapshot): LabeledSnapshot =
-            LabeledSnapshot(label, s.count, s.lastMs, s.p50Ms, s.p95Ms, s.maxMs)
-
-        fun from(label: String, s: com.inksdk.ink.CounterSnapshot): LabeledSnapshot =
-            LabeledSnapshot(label, s.count, s.lastMs, s.p50Ms, s.p95Ms, s.maxMs)
-    }
-}
+)
 
 data class TimingSample(val elapsedMs: Long, val timestampMs: Long)
 

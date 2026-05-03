@@ -110,31 +110,59 @@ class PerfCountersTest {
     }
 
     @Test
-    fun `reset also clears inksdk counters`() {
-        com.inksdk.ink.PerfCounters.recordDirect(com.inksdk.ink.PerfMetric.PEN_KERNEL_TO_PAINT, 5_000_000L)
-        PerfCounters.reset()
+    fun `recordByLabel stores under that label`() {
+        PerfCounters.recordByLabel("ink.pen.kernel_to_paint", 5_000_000L)
+        PerfCounters.recordByLabel("ink.pen.kernel_to_paint", 7_000_000L)
 
-        assertEquals(0, com.inksdk.ink.PerfCounters.get(com.inksdk.ink.PerfMetric.PEN_KERNEL_TO_PAINT).count)
+        val rows = PerfCounters.unifiedSnapshot().filter { it.label == "ink.pen.kernel_to_paint" }
+        assertEquals(1, rows.size)
+        assertEquals(2L, rows[0].count)
     }
 
     @Test
-    fun `unifiedSnapshot includes both mokke and inksdk active metrics`() {
+    fun `unifiedSnapshot includes both enum-keyed and label-keyed metrics`() {
         PerfCounters.time(PerfMetric.PREVIEW_FORK) {}
-        com.inksdk.ink.PerfCounters.recordDirect(com.inksdk.ink.PerfMetric.PEN_KERNEL_TO_PAINT, 5_000_000L)
+        PerfCounters.recordByLabel("ink.event.handler", 5_000_000L)
 
         val labels = PerfCounters.unifiedSnapshot().map { it.label }.toSet()
-        assertTrue("mokke label missing: $labels", labels.contains(PerfMetric.PREVIEW_FORK.label))
-        assertTrue("inksdk label missing: $labels", labels.contains(com.inksdk.ink.PerfMetric.PEN_KERNEL_TO_PAINT.label))
+        assertTrue("enum-keyed missing: $labels", labels.contains(PerfMetric.PREVIEW_FORK.label))
+        assertTrue("label-keyed missing: $labels", labels.contains("ink.event.handler"))
     }
 
     @Test
     fun `unifiedSnapshot omits zero-count metrics`() {
-        // Touch only one metric on each side; everything else stays at zero.
+        // Touch one enum-keyed metric and one label-keyed metric; everything else stays at zero.
         PerfCounters.time(PerfMetric.PREVIEW_FORK) {}
-        com.inksdk.ink.PerfCounters.recordDirect(com.inksdk.ink.PerfMetric.PEN_KERNEL_TO_PAINT, 1_000L)
+        PerfCounters.recordByLabel("ink.event.handler", 1_000L)
 
         val rows = PerfCounters.unifiedSnapshot()
         assertEquals(2, rows.size)
         assertTrue(rows.all { it.count > 0L })
+    }
+
+    @Test
+    fun `reset clears label-keyed metrics too`() {
+        PerfCounters.recordByLabel("ink.pen.kernel_to_paint", 5_000_000L)
+        PerfCounters.reset()
+
+        assertTrue(PerfCounters.unifiedSnapshot().isEmpty())
+    }
+
+    @Test
+    fun `installing inksdk PerfSink routes recordings into mokke`() {
+        // This is the production wiring (set up in WriterApplication.onCreate).
+        // Once installed, every inksdk PerfMetric recording flows through to
+        // mokke's label-keyed storage and appears in unifiedSnapshot.
+        com.inksdk.ink.PerfCounters.sink = com.inksdk.ink.PerfSink { label, nanos ->
+            PerfCounters.recordByLabel(label, nanos)
+        }
+        try {
+            com.inksdk.ink.PerfCounters.recordDirect(com.inksdk.ink.PerfMetric.PEN_KERNEL_TO_PAINT, 5_000_000L)
+
+            val labels = PerfCounters.unifiedSnapshot().map { it.label }.toSet()
+            assertTrue("inksdk metric missing: $labels", labels.contains("ink.pen.kernel_to_paint"))
+        } finally {
+            com.inksdk.ink.PerfCounters.sink = com.inksdk.ink.DefaultSink
+        }
     }
 }
