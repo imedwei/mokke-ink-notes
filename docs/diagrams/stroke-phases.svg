@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 260" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13">
+  <title>Stroke lifecycle — high-level phase overview</title>
+  <text x="500.0" y="32" text-anchor="middle" font-size="18" font-weight="700" font-family="system-ui, Helvetica, sans-serif">Stroke lifecycle — high-level overview</text>
+  <text x="500.0" y="54" text-anchor="middle" font-size="12" fill="#666" font-family="system-ui, Helvetica, sans-serif">Two phases, sequential, owned by different layers. Detail diagrams break each one out below.</text>
+  <rect x="40" y="90" width="340" height="130" rx="8" ry="8" fill="#eaf3fc" stroke="#1e6dc6" stroke-width="2"/>
+  <text x="210.0" y="116" text-anchor="middle" font-size="14" font-weight="700" fill="#1e6dc6">Live-ink phase</text>
+  <text x="210.0" y="134" text-anchor="middle" font-size="11" fill="#444">during the stroke · vendor-driven (inksdk)</text>
+  <text x="210.0" y="160" text-anchor="middle" font-size="11" fill="#333">records: pen.* · event.* · paint.*</text>
+  <text x="210.0" y="176" text-anchor="middle" font-size="11" fill="#333">stages: kernel pen-down → JVM →</text>
+  <text x="210.0" y="192" text-anchor="middle" font-size="11" fill="#333">drawLine → inValidate</text>
+  <rect x="420" y="90" width="360" height="130" rx="8" ry="8" fill="#fef0ec" stroke="#c0392b" stroke-width="2"/>
+  <text x="600.0" y="116" text-anchor="middle" font-size="14" font-weight="700" fill="#c0392b">Pen-lift phase</text>
+  <text x="600.0" y="134" text-anchor="middle" font-size="11" fill="#444">after pen up · host-driven (mokke)</text>
+  <text x="600.0" y="160" text-anchor="middle" font-size="11" fill="#333">records: ink.pen_lift.*  +  drain</text>
+  <text x="600.0" y="176" text-anchor="middle" font-size="11" fill="#333">stages: scratch_check, shape_snap,</text>
+  <text x="600.0" y="192" text-anchor="middle" font-size="11" fill="#333">classify, observers, append_bitmap</text>
+  <rect x="820" y="90" width="140" height="130" rx="8" ry="8" fill="#f6f7f8" stroke="#999" stroke-width="2"/>
+  <text x="890.0" y="116" text-anchor="middle" font-size="14" font-weight="700" fill="#999">Idle</text>
+  <text x="890.0" y="134" text-anchor="middle" font-size="11" fill="#444">ready for next pen-down</text>
+  <text x="890.0" y="160" text-anchor="middle" font-size="11" fill="#333">nothing recording</text>
+  <text x="890.0" y="176" text-anchor="middle" font-size="11" fill="#333">main thread free</text>
+  <path d="M 380 158 l 30 0 m -8 -6 l 8 6 -8 6" stroke="#444" stroke-width="2" fill="none"/>
+  <text x="395" y="148" text-anchor="middle" font-size="10" fill="#7d3c98" font-weight="700">pen up</text>
+  <path d="M 780 158 l 30 0 m -8 -6 l 8 6 -8 6" stroke="#444" stroke-width="2" fill="none"/>
+  <text x="795" y="148" text-anchor="middle" font-size="10" fill="#666">queue empty</text>
+  <text x="500.0" y="245" text-anchor="middle" font-size="11" fill="#666" font-style="italic">The two phases are sequential and never overlap. Live-ink ends as inksdk delivers onStrokeEnd; pen-lift begins inside the host's endStroke.</text>
+</svg>

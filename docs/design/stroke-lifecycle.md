@@ -13,12 +13,13 @@ vendor-driven **live-ink phase** measured by inksdk's `pen.* / event.* /
 paint.*` metrics, and a host-driven **pen-lift phase** measured by mokke's
 `ink.pen_lift.*` family. The two phases are sequential and never overlap.
 
-![Integrated stroke-lifecycle timeline](../diagrams/pen-lift-timeline.svg)
+![Stroke lifecycle high-level overview](../diagrams/stroke-phases.svg)
 
 Together the two phases cover everything the user perceives as "the
 system reacting to my pen". Knowing where each metric fires — and where
 each one *doesn't* — is the difference between optimising the right
-thing and optimising a ghost.
+thing and optimising a ghost. The two sections below break each phase
+out in detail.
 
 ## Why two phases
 
@@ -42,6 +43,8 @@ the moment its `InkController` delivers `onStrokeEnd` to the host; mokke's
 The user touches the pen to the screen. The vendor pipeline reports
 events; inksdk renders ink to the EPD overlay; the user perceives a line
 following the pen with low latency. Throughout, inksdk records.
+
+![Live-ink phase metric timeline](../diagrams/live-ink-timeline.svg)
 
 ### Stages
 
@@ -135,6 +138,8 @@ The host runs the post-stroke pipeline synchronously on the main thread.
 It is **fully user-observable** — every millisecond on the main thread
 between pen-up and queue-empty either delays the visible commit (sync
 work) or delays the next input event (drain).
+
+![Pen-lift phase metric timeline](../diagrams/pen-lift-timeline.svg)
 
 ### Stages
 
