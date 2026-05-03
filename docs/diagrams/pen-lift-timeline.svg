@@ -45,7 +45,7 @@
     <line x1="60" y1="201" x2="60" y2="215"/>
     <line x1="920" y1="201" x2="920" y2="215"/>
   </g>
-  <text x="490.0" y="226" text-anchor="middle" fill="#c0392b" font-size="12" font-weight="700">PEN_LIFT_BUDGET_MS — test asserts total < 50 ms</text>
+  <text x="490.0" y="226" text-anchor="middle" fill="#c0392b" font-size="12" font-weight="700">PEN_LIFT_BUDGET_MS — test asserts total &lt; 50 ms</text>
   <text x="490.0" y="240" text-anchor="middle" fill="#666" font-size="10">(SystemClock t0 → waitForIdleSync returns)</text>
   <g stroke="#1e6dc6" stroke-width="1.5" fill="none">
     <line x1="60" y1="270" x2="85" y2="270"/>
