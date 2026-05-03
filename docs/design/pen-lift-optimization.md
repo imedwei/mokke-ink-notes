@@ -9,6 +9,9 @@ revisions:
     (was: build a one-off Handler post recorder)
   - 2026-05-03: drop the Kotlin sample from Step 0; describe the
     mechanism in prose only
+  - 2026-05-03: ship Step 0 telemetry (TaggedPost helper) and run
+    on Palma 2 Pro; rebuild_compose found to dominate drain at 78 %.
+    Resolves Open Q #1; reorders the implementation priorities.
 ---
 
 # Pen-lift optimisation: reducing the next-stroke latency tax
@@ -141,6 +144,63 @@ Three things, ranked by what we expect:
 
 If reality differs from this guess, the optimisation order in this
 doc changes accordingly.
+
+### Step 0 results (Palma 2 Pro, 4 runs)
+
+The first instrumented `Choreographer.FrameCallback` sites
+(`compose_overlay`, `rebuild_compose`, `forced_refresh`,
+`commit_mutation`) were tagged. AutoSaver's `Handler.postDelayed`
+fires 5 s after pen-up — outside any drain window — and was not
+instrumented in this pass.
+
+Result: a single tag dominates drain.
+
+| Run | total | drain | `queue.rebuild_compose.run` | `queue.rebuild_compose.wait` | drain → rebuild_compose |
+|---|---|---|---|---|---|
+| 1 | 96 | 36 | 28 | 20 | 78 % |
+| 2 | 88 | 22 | 17 | 14 | 77 % |
+| 3 | 78 | 24 | 18 | 14 | 75 % |
+| 4 | 93 | 26 | 21 | 14 | 81 % |
+| **median** | **88** | **25** | **20** | **14** | **78 %** |
+
+`compose_overlay`, `forced_refresh`, and `commit_mutation` fired
+**zero** times across all four runs. The drain is essentially one
+callback: a full bitmap rebuild + surface compose, scheduled on the
+Choreographer at the end of each stroke.
+
+The 14 ms `wait` is the natural Choreographer vsync delay (~16 ms on
+60 Hz). The 20 ms `run` is the rebuild + compose body — the actual
+optimisation target.
+
+This **resolves Open Q #1** and also moves the optimisation focus.
+The original Easy Wins list (W1–W5) targeted save / recognition /
+observer work, none of which actually land in drain on this device.
+The real lever is making the `rebuildComposeCallback` cheaper or
+fully asynchronous:
+
+- **Skip the rebuild when no visible content changed** — same idea
+  as W5 but applied specifically to rebuild_compose. If
+  `bumpMutationGen()` is called from observer paths that don't
+  alter pixels (save, recognition trigger, indexing), the rebuild
+  is wasted work.
+- **Move rebuild_compose to the existing async executor** — the
+  code already has an `asyncRebuildExecutor` for "long" full
+  rebuilds. The Choreographer-coalesced path runs synchronously
+  on the main thread for "short" rebuilds. The ~20 ms cost
+  measured here suggests "short" is misclassified for our test
+  stroke.
+- **Region-only rebuild after stroke commit** — the only thing
+  that changed is the new stroke's bbox. A full rebuild touches
+  the entire content bitmap. Region rebuilds already exist for
+  some paths (snap, scratch-out); extending to plain stroke
+  commit could halve or quarter the run cost.
+
+These supersede most of W1–W5 in priority. Save / recognition /
+undo refresh remain potentially expensive on the *next* stroke if
+their work bleeds across the queue, but the Step 0 measurement
+here (single stroke, post-up drain) does not catch that case. A
+follow-up multi-stroke trace would close the loop on cross-stroke
+behaviour.
 
 ## Easy wins
 
@@ -379,10 +439,12 @@ match the live-ink budget the user actually feels).
 These need to be resolved before any implementation begins. They're
 listed in roughly ascending order of how disruptive the answer is.
 
-1. **What does the diagnostic show?** Step 0's histogram is the
-   dependency for almost every concrete decision below. Step 0's
-   *design* is now resolved (tagged-post telemetry, production-grade
-   — see the section above); only the data is missing.
+1. ~~**What does the diagnostic show?**~~ **Resolved.** A single
+   `Choreographer.FrameCallback` (`rebuild_compose`) dominates drain
+   at 78 % p50; the other three instrumented callbacks fire zero
+   times. The optimisation focus shifts to the rebuild + compose
+   path rather than save / recognition / observer fan-out. See the
+   "Step 0 results" section above.
 
 2. **Which existing observers must run synchronously?** An audit of
    `onStrokeCompleted`, `onPenStateChanged`, `onRawStrokeCapture`
