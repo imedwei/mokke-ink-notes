@@ -3,6 +3,10 @@ status: draft
 author: spm@edwei.com
 created: 2026-05-03
 updated: 2026-05-03
+revisions:
+  - 2026-05-03: initial draft
+  - 2026-05-03: redesign Step 0 as production tagged-post telemetry
+    (was: build a one-off Handler post recorder)
 ---
 
 # Pen-lift optimisation: reducing the next-stroke latency tax
@@ -48,29 +52,105 @@ cost composition and
 [`pen-lift-distribution.svg`](../diagrams/pen-lift-distribution.svg)
 for the per-stage spread.
 
-## Step 0 — Diagnostic harness (do this first)
+## Step 0 — Tagged-post telemetry (production, do this first)
 
-We don't currently know *who* is posting work into drain. The 33 ms
-is opaque; without the breakdown the rest of this plan is guesswork.
+We don't currently know *who* is posting work into drain. The 33 ms is
+opaque; without the breakdown the rest of this plan is guesswork.
 
-**Build a `Handler` post recorder:**
-1. Wrap `Handler.post*` and `Choreographer.postFrameCallback` for the
-   main-thread Looper between `onStrokeCompleted` start and
-   `waitForIdleSync` returning.
-2. For each post, record: `Runnable`'s class name, originating stack
-   trace (capture once, hash, keep counts), wall time the runnable
-   actually ran for.
-3. Dump as a `PostBreakdown` logcat line, same shape as
-   `PenLiftBreakdown`, parseable by an aggregation script.
+**Design constraint: this telemetry stays in the production binary.**
+Verbose-debug-log style probes get stripped after the investigation,
+which means each future perf regression has to rebuild the harness.
+A small permanent layer pays for itself the first time someone files
+a bug report saying "saving feels slow on my Note Air 5C".
 
-**Output:** a labelled histogram of "what's in the drain". Treat the
-rest of this plan as a triage list against that histogram, not a
-checklist.
+### Mechanism
 
-**Why this matters:** if save dominates drain (likely), most of the
-easy wins below pay off. If something else dominates (e.g. a
-recognition layout pass we'd misattribute to "save"), the order
-changes. Don't optimise blind.
+Reuse the existing `PerfCounters.recordByLabel` infrastructure (already
+zero-allocation hot-path, already shows up in bug reports via
+`unifiedSnapshot()`, already aggregated by the `PerfDump` logcat line).
+Add one small helper:
+
+```kotlin
+// app/src/main/java/com/writer/ui/writing/TaggedPost.kt
+object TaggedPost {
+    /**
+     * Post [runnable] on [handler], tagged with [tag] for telemetry.
+     * Records two PerfCounters per call (label-keyed):
+     *   "queue.<tag>.wait" — nanos between post and run (queue depth proxy)
+     *   "queue.<tag>.run"  — nanos the runnable's body took
+     * The tag string MUST be a compile-time constant so the label set is
+     * bounded; no per-stroke or per-document interpolation.
+     */
+    inline fun post(handler: Handler, tag: String, crossinline runnable: () -> Unit) {
+        val postedAt = System.nanoTime()
+        handler.post {
+            val ranAt = System.nanoTime()
+            PerfCounters.recordByLabel("queue.$tag.wait", ranAt - postedAt)
+            try {
+                runnable()
+            } finally {
+                PerfCounters.recordByLabel("queue.$tag.run", System.nanoTime() - ranAt)
+            }
+        }
+    }
+
+    inline fun postDelayed(handler: Handler, tag: String, delayMs: Long, crossinline runnable: () -> Unit) {
+        // …same shape, with delay subtracted from the "wait" measurement
+    }
+}
+```
+
+Each call site picks a stable, hand-chosen tag like `save.schedule`,
+`undo.refresh`, `recognition.trigger`, `sync_indicator.fade`. Tags are
+hierarchical via dot-notation so the bug-report viewer can group
+related counters at a glance.
+
+### Why this is production-grade
+
+- **Zero-allocation hot path.** The lambda is `crossinline`; the
+  closure capture is the `Runnable` itself. The `nanoTime + record`
+  pair is the same overhead that `PerfCounters.time` already pays
+  ~50 ns.
+- **No conditional compilation.** Always on. No debug-only `#ifdef`
+  to forget about.
+- **Already wired into bug reports.** Anything `recordByLabel`
+  records appears in `BugReport.kt`'s `perfCounters` JSON section
+  automatically, no code changes needed downstream.
+- **Bounded label cardinality.** Tags are compile-time constants, so
+  `externalCounters` map size is bounded by the number of call sites
+  (~10–20). No memory growth from runtime-generated label strings.
+- **Disable-able later.** If we later decide a particular tag is no
+  longer interesting, replace the call with a plain `handler.post`
+  in one line. Or add a `samplingRate` parameter that drops every
+  Nth recording — but in practice the cost is so small that always-
+  recording is fine.
+- **Optional `Trace.beginAsyncSection` markers** can be added on the
+  same code path so systrace/perfetto users see the same boundaries.
+  Keeps the telemetry in two places that don't drift.
+
+### Migration approach
+
+1. Implement `TaggedPost` (one file, ~30 lines).
+2. Find every `Handler.post*` / `view.post*` call reachable from
+   `onStrokeCompleted`, `onPenStateChanged`, `onRawStrokeCapture`, the
+   save trigger, and the recognition trigger. Replace each with
+   `TaggedPost.post(…, tag = "…")`.
+3. The first bug-report after this lands gives us the histogram. From
+   that point onward, every bug report contains it.
+
+### What we expect to see
+
+Three things, ranked by what we expect:
+
+| Tag (guess) | Expected p50 | Why |
+|---|---|---|
+| `queue.save.schedule.run` | high | Save is the largest known cost in `onStrokeCompleted` |
+| `queue.recognition.trigger.run` | medium | Recognition is async but the trigger isn't |
+| `queue.undo.refresh.run` | low-medium | Cosmetic, but fires every stroke |
+| `queue.*.wait` | varies | Wait time = queue-depth proxy. High `wait` on a low-`run` tag means it's stuck behind something heavier. |
+
+If reality differs from this guess, the optimisation order in this
+doc changes accordingly.
 
 ## Easy wins
 
@@ -312,7 +392,9 @@ These need to be resolved before any implementation begins. They're
 listed in roughly ascending order of how disruptive the answer is.
 
 1. **What does the diagnostic show?** Step 0's histogram is the
-   dependency for almost every concrete decision below.
+   dependency for almost every concrete decision below. Step 0's
+   *design* is now resolved (tagged-post telemetry, production-grade
+   — see the section above); only the data is missing.
 
 2. **Which existing observers must run synchronously?** An audit of
    `onStrokeCompleted`, `onPenStateChanged`, `onRawStrokeCapture`
