@@ -1,18 +1,18 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1500 980" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 980" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13">
   <title>Integrated stroke-lifecycle timeline — inksdk live-ink metrics + mokke pen-lift metrics</title>
-  <text x="750.0" y="32" text-anchor="middle" font-size="18" font-weight="700" font-family="system-ui, Helvetica, sans-serif">Stroke lifecycle: live-ink metrics → pen up → pen-lift metrics</text>
-  <text x="750.0" y="54" text-anchor="middle" font-size="12" fill="#666" font-family="system-ui, Helvetica, sans-serif">Time flows left → right. Stage spacing is structural, not proportional. Greyed regions are unmeasurable from the JVM.</text>
-  <rect x="40" y="78" width="600" height="50" rx="6" ry="6" fill="#eaf3fc" stroke="#1e6dc6" stroke-width="1.5"/>
-  <text x="340.0" y="98" text-anchor="middle" font-size="12" font-weight="700" fill="#1e6dc6">Live-ink phase (during stroke)</text>
-  <text x="340.0" y="116" text-anchor="middle" font-size="10" fill="#444">inksdk metrics: pen.* · event.* · paint.*</text>
-  <rect x="660" y="78" width="600" height="50" rx="6" ry="6" fill="#fef0ec" stroke="#c0392b" stroke-width="1.5"/>
-  <text x="960.0" y="98" text-anchor="middle" font-size="12" font-weight="700" fill="#c0392b">Pen-lift phase (after pen up)</text>
-  <text x="960.0" y="116" text-anchor="middle" font-size="10" fill="#444">mokke metrics: ink.pen_lift.* · drain</text>
-  <rect x="1280" y="78" width="180" height="50" rx="6" ry="6" fill="#f6f7f8" stroke="#999" stroke-width="1.5"/>
-  <text x="1370.0" y="98" text-anchor="middle" font-size="12" font-weight="700" fill="#999">Idle</text>
-  <text x="1370.0" y="116" text-anchor="middle" font-size="10" fill="#444">ready for next pen-down</text>
-  <path d="M 640 103 l 18 0 m -6 -5 l 6 5 -6 5" stroke="#666" stroke-width="1.5" fill="none"/>
-  <path d="M 1260 103 l 18 0 m -6 -5 l 6 5 -6 5" stroke="#666" stroke-width="1.5" fill="none"/>
+  <text x="800.0" y="32" text-anchor="middle" font-size="18" font-weight="700" font-family="system-ui, Helvetica, sans-serif">Stroke lifecycle: live-ink metrics → pen up → pen-lift metrics</text>
+  <text x="800.0" y="54" text-anchor="middle" font-size="12" fill="#666" font-family="system-ui, Helvetica, sans-serif">Time flows left → right. Stage spacing is structural, not proportional. Greyed regions are unmeasurable from the JVM.</text>
+  <rect x="40" y="78" width="775" height="50" rx="6" ry="6" fill="#eaf3fc" stroke="#1e6dc6" stroke-width="1.5"/>
+  <text x="427.5" y="98" text-anchor="middle" font-size="12" font-weight="700" fill="#1e6dc6">Live-ink phase (during stroke)</text>
+  <text x="427.5" y="116" text-anchor="middle" font-size="10" fill="#444">inksdk metrics: pen.* · event.* · paint.*</text>
+  <rect x="820" y="78" width="690" height="50" rx="6" ry="6" fill="#fef0ec" stroke="#c0392b" stroke-width="1.5"/>
+  <text x="1165.0" y="98" text-anchor="middle" font-size="12" font-weight="700" fill="#c0392b">Pen-lift phase</text>
+  <text x="1165.0" y="116" text-anchor="middle" font-size="10" fill="#444">starts at A (injectStroke / pen up); ends at J</text>
+  <rect x="1520" y="78" width="40" height="50" rx="6" ry="6" fill="#f6f7f8" stroke="#999" stroke-width="1.5"/>
+  <text x="1540.0" y="98" text-anchor="middle" font-size="12" font-weight="700" fill="#999">Idle</text>
+  <text x="1540.0" y="116" text-anchor="middle" font-size="10" fill="#444">next pen-down</text>
+  <path d="M 808.5 103 l 18 0 m -6 -5 l 6 5 -6 5" stroke="#666" stroke-width="1.5" fill="none"/>
+  <path d="M 1506.0 103 l 18 0 m -6 -5 l 6 5 -6 5" stroke="#666" stroke-width="1.5" fill="none"/>
   <g font-size="11" text-anchor="middle">
     <text x="80" y="175" fill="#888">L0. pen tip</text>
     <text x="80" y="189" fill="#888">touches glass</text>
@@ -65,8 +65,9 @@
     <line x1="1430" y1="215" x2="1430" y2="245"/>
     <line x1="1480" y1="215" x2="1480" y2="245"/>
   </g>
-  <line x1="20" y1="230" x2="1480" y2="230" stroke="#333" stroke-width="2"/>
+  <line x1="20" y1="230" x2="1580" y2="230" stroke="#333" stroke-width="2"/>
   <rect x="20" y="223" width="180" height="14" fill="#000" fill-opacity="0.06"/>
+  <rect x="1480" y="223" width="100" height="14" fill="#000" fill-opacity="0.06"/>
   <rect x="700" y="223" width="100" height="14" fill="#7d3c98" fill-opacity="0.10"/>
   <text x="750.0" y="218" text-anchor="middle" font-size="10" fill="#7d3c98" font-weight="700">…more MOVEs… → pen up</text>
   <g stroke="#c0392b" stroke-width="3" fill="none">
@@ -174,7 +175,7 @@
     <line x1="560" y1="638" x2="560" y2="652"/>
     <line x1="590" y1="638" x2="590" y2="652"/>
   </g>
-  <text x="575.0" y="631" text-anchor="middle" fill="#e67e22" font-size="12" font-weight="400">paint.draw_segment</text>
+  <text x="575.0" y="617" text-anchor="middle" fill="#e67e22" font-size="12" font-weight="400">paint.draw_segment</text>
   <g stroke="#e67e22" stroke-width="1.5" fill="none">
     <line x1="610" y1="645" x2="680" y2="645"/>
     <line x1="610" y1="638" x2="610" y2="652"/>
@@ -189,14 +190,14 @@
   </g>
   <text x="1455.0" y="663" text-anchor="middle" fill="#e67e22" font-size="12" font-weight="400">drain</text>
   <text x="1455.0" y="677" text-anchor="middle" fill="#666" font-size="10">(unmetered)</text>
-  <rect x="40" y="720" width="1420" height="135" fill="#fff5f1" stroke="#f4caaa"/>
+  <rect x="40" y="720" width="1520" height="135" fill="#fff5f1" stroke="#f4caaa"/>
   <text x="55" y="742" font-size="13" font-weight="700" fill="#c0392b">Reading the integrated timeline</text>
   <text x="55" y="764" font-size="12" fill="#333">The same time axis carries the <tspan fill="#1e6dc6" font-weight="700">live-ink metrics</tspan> on the left (inksdk, recorded during the stroke) and the <tspan fill="#c0392b" font-weight="700">pen-lift metrics</tspan></text>
   <text x="55" y="782" font-size="12" fill="#333">on the right (mokke, recorded after pen up). They never overlap: <tspan font-family="ui-monospace,Menlo,monospace">pen.kernel_to_paint</tspan> ends well before <tspan font-family="ui-monospace,Menlo,monospace">PEN_LIFT_BUDGET</tspan> starts.</text>
-  <text x="55" y="804" font-size="12" fill="#333">The violet "…more MOVEs… → pen up" gap stands in for a stroke's actual duration; that span is filled with repeated per-event firings.</text>
+  <text x="55" y="804" font-size="12" fill="#333">The phase banner above is now aligned with the timeline: Live-ink ends and Pen-lift begins exactly at <tspan font-family="ui-monospace,Menlo,monospace">A. injectStroke</tspan>.</text>
   <text x="55" y="826" font-size="12" fill="#333"><tspan font-weight="700">Decomposition:</tspan> pen.kernel_to_paint = pen.kernel_to_jvm + pen.jvm_to_paint;  pen.jvm_to_paint = pen.jvm_to_first_move + pen.move_to_paint.</text>
   <text x="55" y="846" font-size="11" fill="#666" font-style="italic">Stage labels alternate above/below the timeline in the dense pen-lift section so the long names don't collide.</text>
-  <rect x="40" y="880" width="1420" height="80" fill="#f6f7f8" stroke="#ddd"/>
+  <rect x="40" y="880" width="1520" height="80" fill="#f6f7f8" stroke="#ddd"/>
   <text x="55" y="902" font-size="13" font-weight="700" fill="#333">Legend</text>
   <text x="55" y="922" font-size="11" fill="#333"><tspan font-weight="700" fill="#c0392b">Red bold</tspan> = headline metric (one per phase). <tspan font-weight="700" fill="#1e6dc6">Blue</tspan> = pen.* (per stroke) and pen-lift sync metrics. <tspan font-weight="700" fill="#3498db">Light blue</tspan> = nested sub-metrics.</text>
   <text x="55" y="940" font-size="11" fill="#333"><tspan font-weight="700" fill="#27ae60">Green dashed</tspan> = event.* (per event). <tspan font-weight="700" fill="#e67e22">Orange</tspan> = paint.* and pen-lift drain. Greyed segments are unmeasurable from the JVM.</text>
