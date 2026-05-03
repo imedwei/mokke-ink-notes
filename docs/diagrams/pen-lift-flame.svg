@@ -1,178 +1,96 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 1260" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13">
-  <title>Pen-lift flame graph + live-ink timeline</title>
-  <text x="600.0" y="32" text-anchor="middle" font-size="18" font-weight="700" font-family="system-ui, Helvetica, sans-serif">Pen-lift flame graph + live-ink metric timeline</text>
-  <text x="600.0" y="54" text-anchor="middle" font-size="12" fill="#666" font-family="system-ui, Helvetica, sans-serif">Top: structural live-ink timeline (inksdk metrics, no scale). Bottom: measured pen-lift flame (20 runs on Palma 2 Pro).</text>
-  <rect x="40" y="78" width="400" height="50" rx="6" ry="6" fill="#eaf3fc" stroke="#1e6dc6" stroke-width="1.5"/>
-  <text x="240.0" y="98" text-anchor="middle" font-size="12" font-weight="700" fill="#1e6dc6">Live-ink phase (during stroke)</text>
-  <text x="240.0" y="116" text-anchor="middle" font-size="10" fill="#444">structural panel below — inksdk metrics in place</text>
-  <rect x="460" y="78" width="400" height="50" rx="6" ry="6" fill="#fef0ec" stroke="#c0392b" stroke-width="1.5"/>
-  <text x="660.0" y="98" text-anchor="middle" font-size="12" font-weight="700" fill="#c0392b">Pen-lift phase</text>
-  <text x="660.0" y="116" text-anchor="middle" font-size="10" fill="#444">measured flame below — host post-stroke pipeline</text>
-  <rect x="880" y="78" width="280" height="50" rx="6" ry="6" fill="#f6f7f8" stroke="#999" stroke-width="1.5"/>
-  <text x="1020.0" y="98" text-anchor="middle" font-size="12" font-weight="700" fill="#999">Idle</text>
-  <text x="1020.0" y="116" text-anchor="middle" font-size="10" fill="#444">ready for next pen-down</text>
-  <path d="M 440 103 l 18 0 m -6 -5 l 6 5 -6 5" stroke="#666" stroke-width="1.5" fill="none"/>
-  <path d="M 860 103 l 18 0 m -6 -5 l 6 5 -6 5" stroke="#666" stroke-width="1.5" fill="none"/>
-  <g font-size="11" text-anchor="middle">
-    <text x="80" y="166" fill="#888">A. pen tip</text>
-    <text x="80" y="180" fill="#888">touches glass</text>
-    <text x="240" y="166">B. kernel writes</text>
-    <text x="240" y="180" fill="#666">/dev/input</text>
-    <text x="400" y="166">C. JVM receives</text>
-    <text x="400" y="180" fill="#666">DOWN</text>
-    <text x="580" y="166">D. JVM receives</text>
-    <text x="580" y="180" fill="#666">first MOVE</text>
-    <text x="740" y="166">E. drawLine</text>
-    <text x="740" y="180" fill="#666">into ION</text>
-    <text x="900" y="166">F. inValidate</text>
-    <text x="900" y="180" fill="#666">returns</text>
-    <text x="1100" y="166" fill="#888">G. EPD ink</text>
-    <text x="1100" y="180" fill="#888">visible</text>
-  </g>
-  <g stroke="#333" stroke-width="1.5">
-    <line x1="80" y1="206" x2="80" y2="226"/>
-    <line x1="240" y1="206" x2="240" y2="226"/>
-    <line x1="400" y1="206" x2="400" y2="226"/>
-    <line x1="580" y1="206" x2="580" y2="226"/>
-    <line x1="740" y1="206" x2="740" y2="226"/>
-    <line x1="900" y1="206" x2="900" y2="226"/>
-    <line x1="1100" y1="206" x2="1100" y2="226"/>
-  </g>
-  <line x1="40" y1="216" x2="1160" y2="216" stroke="#333" stroke-width="2"/>
-  <rect x="40" y="209" width="200" height="14" fill="#000" fill-opacity="0.06"/>
-  <rect x="900" y="209" width="260" height="14" fill="#000" fill-opacity="0.06"/>
-  <g stroke="#c0392b" stroke-width="3" fill="none">
-    <line x1="240" y1="246" x2="900" y2="246"/>
-    <line x1="240" y1="240" x2="240" y2="252"/>
-    <line x1="900" y1="240" x2="900" y2="252"/>
-  </g>
-  <text x="570.0" y="238" text-anchor="middle" fill="#c0392b" font-size="11" font-weight="700">pen.kernel_to_paint</text>
-  <text x="570.0" y="262" text-anchor="middle" fill="#666" font-size="10">(headline first-paint metric)</text>
-  <g stroke="#1e6dc6" stroke-width="2" fill="none">
-    <line x1="240" y1="296" x2="400" y2="296"/>
-    <line x1="240" y1="290" x2="240" y2="302"/>
-    <line x1="400" y1="290" x2="400" y2="302"/>
-  </g>
-  <text x="320.0" y="288" text-anchor="middle" fill="#1e6dc6" font-size="11" font-weight="400">pen.kernel_to_jvm</text>
-  <g stroke="#1e6dc6" stroke-width="2" fill="none">
-    <line x1="400" y1="296" x2="900" y2="296"/>
-    <line x1="400" y1="290" x2="400" y2="302"/>
-    <line x1="900" y1="290" x2="900" y2="302"/>
-  </g>
-  <text x="650.0" y="288" text-anchor="middle" fill="#1e6dc6" font-size="11" font-weight="400">pen.jvm_to_paint</text>
-  <g stroke="#3498db" stroke-width="2" fill="none">
-    <line x1="400" y1="336" x2="580" y2="336"/>
-    <line x1="400" y1="330" x2="400" y2="342"/>
-    <line x1="580" y1="330" x2="580" y2="342"/>
-  </g>
-  <text x="490.0" y="328" text-anchor="middle" fill="#3498db" font-size="11" font-weight="400">pen.jvm_to_first_move</text>
-  <g stroke="#3498db" stroke-width="2" fill="none">
-    <line x1="580" y1="336" x2="900" y2="336"/>
-    <line x1="580" y1="330" x2="580" y2="342"/>
-    <line x1="900" y1="330" x2="900" y2="342"/>
-  </g>
-  <text x="740.0" y="328" text-anchor="middle" fill="#3498db" font-size="11" font-weight="400">pen.move_to_paint</text>
-  <g stroke="#27ae60" stroke-width="2" fill="none" stroke-dasharray="6 3">
-    <line x1="240" y1="376" x2="400" y2="376"/>
-    <line x1="240" y1="370" x2="240" y2="382"/>
-    <line x1="400" y1="370" x2="400" y2="382"/>
-  </g>
-  <text x="320.0" y="368" text-anchor="middle" fill="#27ae60" font-size="11" font-weight="400">event.kernel_to_jvm</text>
-  <text x="320.0" y="392" text-anchor="middle" fill="#666" font-size="10">(per event)</text>
-  <g stroke="#e67e22" stroke-width="2" fill="none">
-    <line x1="740" y1="376" x2="770" y2="376"/>
-    <line x1="740" y1="370" x2="740" y2="382"/>
-    <line x1="770" y1="370" x2="770" y2="382"/>
-  </g>
-  <text x="755.0" y="368" text-anchor="middle" fill="#e67e22" font-size="11" font-weight="400">paint.draw_segment</text>
-  <g stroke="#e67e22" stroke-width="2" fill="none">
-    <line x1="790" y1="376" x2="900" y2="376"/>
-    <line x1="790" y1="370" x2="790" y2="382"/>
-    <line x1="900" y1="370" x2="900" y2="382"/>
-  </g>
-  <text x="845.0" y="368" text-anchor="middle" fill="#e67e22" font-size="11" font-weight="400">paint.invalidate_call</text>
-  <line x1="40" y1="436" x2="1160" y2="436" stroke="#999" stroke-width="1" stroke-dasharray="4 4"/>
-  <text x="600.0" y="454" text-anchor="middle" font-size="11" font-weight="700" fill="#7d3c98">↓  pen lifts off the glass — pen-lift pipeline begins  ↓</text>
-  <text x="60" y="492" font-size="13" font-weight="700" fill="#333" font-family="system-ui, Helvetica, sans-serif">Measured pen-lift flame (Palma 2 Pro, 20 runs)</text>
-  <line x1="180.00" y1="486" x2="180.00" y2="845" stroke="#c0392b" stroke-width="1.5" stroke-dasharray="4 3"/>
-  <text x="186.00" y="500" fill="#c0392b" font-size="11" font-weight="700">budget = 50 ms</text>
-  <text x="60" y="496" font-size="13" font-weight="700" fill="#333" font-family="system-ui, Helvetica, sans-serif">p50 (typical run) — user-observable latency</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 930" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13">
+  <title>Pen-lift flame graph — p50 vs p95</title>
+  <text x="700.0" y="32" text-anchor="middle" font-size="18" font-weight="700" font-family="system-ui, Helvetica, sans-serif">Pen-lift flame graph — p50 vs p95</text>
+  <text x="700.0" y="54" text-anchor="middle" font-size="12" fill="#666" font-family="system-ui, Helvetica, sans-serif">Palma 2 Pro · 20 runs · widths proportional to ms · same horizontal scale on both flames.</text>
+  <line x1="202.22" y1="84" x2="202.22" y2="533" stroke="#c0392b" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <text x="208.22" y="78" fill="#c0392b" font-size="11" font-weight="700">budget = 50 ms</text>
+  <text x="60" y="100" font-size="13" font-weight="700" fill="#333" font-family="system-ui, Helvetica, sans-serif">p50 (typical run)</text>
   <g stroke="#7d3c98" stroke-width="1.5" fill="none">
-    <line x1="60" y1="476" x2="304.80" y2="476"/>
-    <line x1="60" y1="471" x2="60" y2="481"/>
-    <line x1="304.80" y1="471" x2="304.80" y2="481"/>
+    <line x1="60" y1="128" x2="350.13" y2="128"/>
+    <line x1="60" y1="123" x2="60" y2="133"/>
+    <line x1="350.13" y1="123" x2="350.13" y2="133"/>
   </g>
-  <rect x="60.00" y="504" width="244.80" height="30" fill="#c0392b" fill-opacity="0.85" stroke="white" stroke-width="1"/>
-  <text x="182.40" y="523.00" text-anchor="middle" font-size="11" fill="white" font-weight="700">total 102 ms</text>
-  <rect x="60.00" y="536" width="165.60" height="30" fill="#1e6dc6" fill-opacity="0.85" stroke="white" stroke-width="1"/>
-  <text x="142.80" y="555.00" text-anchor="middle" font-size="11" fill="white" font-weight="700">injectStroke 69 ms</text>
-  <rect x="60.00" y="568" width="165.60" height="30" fill="#1e6dc6" fill-opacity="0.85" stroke="white" stroke-width="1"/>
-  <text x="142.80" y="587.00" text-anchor="middle" font-size="11" fill="white" font-weight="700">end 69 ms</text>
-  <rect x="60.00" y="600" width="74.40" height="30" fill="#3498db" fill-opacity="0.85" stroke="white" stroke-width="1"/>
-  <text x="97.20" y="619.00" text-anchor="middle" font-size="11" fill="white" font-weight="700">31</text>
-  <rect x="134.40" y="600" width="76.80" height="30" fill="#3498db" fill-opacity="0.85" stroke="white" stroke-width="1"/>
-  <text x="172.80" y="619.00" text-anchor="middle" font-size="11" fill="white" font-weight="700">observers</text>
-  <rect x="211.20" y="600" width="14.40" height="30" fill="#ccc" stroke="white" stroke-width="1"/>
-  <text x="218.40" y="619.00" text-anchor="middle" font-size="11" fill="#555" font-weight="700">6</text>
-  <rect x="225.60" y="536" width="79.20" height="30" fill="#e67e22" fill-opacity="0.85" stroke="white" stroke-width="1"/>
-  <text x="265.20" y="555.00" text-anchor="middle" font-size="11" fill="white" font-weight="700">drain 33 ms</text>
-  <text x="60" y="704" font-size="13" font-weight="700" fill="#333" font-family="system-ui, Helvetica, sans-serif">p95 (worst 1 in 20) — user-observable latency</text>
+  <text x="205.07" y="120" text-anchor="middle" fill="#7d3c98" font-size="10" font-weight="700">user-observable</text>
+  <rect x="60.00" y="148" width="290.13" height="32" fill="#c0392b" fill-opacity="0.85" stroke="white" stroke-width="1"/>
+  <text x="205.07" y="168.00" text-anchor="middle" font-size="11" fill="white" font-weight="700">total 102 ms</text>
+  <rect x="60.00" y="182" width="196.27" height="32" fill="#1e6dc6" fill-opacity="0.85" stroke="white" stroke-width="1"/>
+  <text x="158.13" y="202.00" text-anchor="middle" font-size="11" fill="white" font-weight="700">injectStroke 69 ms</text>
+  <rect x="60.00" y="216" width="196.27" height="32" fill="#1e6dc6" fill-opacity="0.85" stroke="white" stroke-width="1"/>
+  <text x="158.13" y="236.00" text-anchor="middle" font-size="11" fill="white" font-weight="700">end 69 ms</text>
+  <rect x="60.00" y="250" width="88.18" height="32" fill="#3498db" fill-opacity="0.85" stroke="white" stroke-width="1"/>
+  <text x="104.09" y="270.00" text-anchor="middle" font-size="11" fill="white" font-weight="700">31 ms</text>
+  <rect x="148.18" y="250" width="91.02" height="32" fill="#3498db" fill-opacity="0.85" stroke="white" stroke-width="1"/>
+  <text x="193.69" y="270.00" text-anchor="middle" font-size="11" fill="white" font-weight="700">observers</text>
+  <rect x="239.20" y="250" width="17.07" height="32" fill="#ccc" stroke="white" stroke-width="1"/>
+  <rect x="256.27" y="182" width="93.87" height="32" fill="#e67e22" fill-opacity="0.85" stroke="white" stroke-width="1"/>
+  <text x="303.20" y="202.00" text-anchor="middle" font-size="11" fill="white" font-weight="700">drain 33 ms</text>
+  <line x1="247.73" y1="282" x2="247.73" y2="300" stroke="#888" stroke-width="1"/>
+  <text x="247.73" y="310" text-anchor="middle" font-size="10" fill="#888">overhead 6 ms</text>
+  <text x="60" y="344" font-size="13" font-weight="700" fill="#333" font-family="system-ui, Helvetica, sans-serif">p95 (worst 1 in 20)</text>
   <g stroke="#7d3c98" stroke-width="1.5" fill="none">
-    <line x1="60" y1="684" x2="1099.20" y2="684"/>
-    <line x1="60" y1="679" x2="60" y2="689"/>
-    <line x1="1099.20" y1="679" x2="1099.20" y2="689"/>
+    <line x1="60" y1="372" x2="1291.64" y2="372"/>
+    <line x1="60" y1="367" x2="60" y2="377"/>
+    <line x1="1291.64" y1="367" x2="1291.64" y2="377"/>
   </g>
-  <rect x="60.00" y="712" width="1039.20" height="30" fill="#c0392b" fill-opacity="0.85" stroke="white" stroke-width="1"/>
-  <text x="579.60" y="731.00" text-anchor="middle" font-size="11" fill="white" font-weight="700">total 433 ms</text>
-  <rect x="60.00" y="744" width="352.80" height="30" fill="#1e6dc6" fill-opacity="0.85" stroke="white" stroke-width="1"/>
-  <text x="236.40" y="763.00" text-anchor="middle" font-size="11" fill="white" font-weight="700">injectStroke 147 ms</text>
-  <rect x="60.00" y="776" width="2.40" height="30" fill="#1e6dc6" fill-opacity="0.85" stroke="white" stroke-width="1"/>
-  <rect x="62.40" y="776" width="348.00" height="30" fill="#1e6dc6" fill-opacity="0.85" stroke="white" stroke-width="1"/>
-  <text x="236.40" y="795.00" text-anchor="middle" font-size="11" fill="white" font-weight="700">end 145 ms</text>
-  <rect x="62.40" y="808" width="228.00" height="30" fill="#3498db" fill-opacity="0.85" stroke="white" stroke-width="1"/>
-  <text x="176.40" y="827.00" text-anchor="middle" font-size="11" fill="white" font-weight="700">scratch_check 95 ms</text>
-  <rect x="290.40" y="808" width="2.40" height="30" fill="#3498db" fill-opacity="0.85" stroke="white" stroke-width="1"/>
-  <rect x="292.80" y="808" width="7.20" height="30" fill="#3498db" fill-opacity="0.85" stroke="white" stroke-width="1"/>
-  <rect x="300.00" y="808" width="112.80" height="30" fill="#3498db" fill-opacity="0.85" stroke="white" stroke-width="1"/>
-  <text x="356.40" y="827.00" text-anchor="middle" font-size="11" fill="white" font-weight="700">observers 47 ms</text>
-  <rect x="410.40" y="776" width="2.40" height="30" fill="#1e6dc6" fill-opacity="0.85" stroke="white" stroke-width="1"/>
-  <rect x="412.80" y="744" width="703.20" height="30" fill="#e67e22" fill-opacity="0.85" stroke="white" stroke-width="1"/>
-  <text x="764.40" y="763.00" text-anchor="middle" font-size="11" fill="white" font-weight="700">drain 293 ms</text>
-  <line x1="60" y1="870" x2="1140.00" y2="870" stroke="#aaa" stroke-width="1"/>
-  <line x1="60.00" y1="867" x2="60.00" y2="873" stroke="#666" stroke-width="1"/>
-  <text x="60.00" y="886" text-anchor="middle" fill="#666" font-size="10">0</text>
-  <line x1="180.00" y1="867" x2="180.00" y2="873" stroke="#666" stroke-width="1"/>
-  <text x="180.00" y="886" text-anchor="middle" fill="#666" font-size="10">50</text>
-  <line x1="300.00" y1="867" x2="300.00" y2="873" stroke="#666" stroke-width="1"/>
-  <text x="300.00" y="886" text-anchor="middle" fill="#666" font-size="10">100</text>
-  <line x1="420.00" y1="867" x2="420.00" y2="873" stroke="#666" stroke-width="1"/>
-  <text x="420.00" y="886" text-anchor="middle" fill="#666" font-size="10">150</text>
-  <line x1="540.00" y1="867" x2="540.00" y2="873" stroke="#666" stroke-width="1"/>
-  <text x="540.00" y="886" text-anchor="middle" fill="#666" font-size="10">200</text>
-  <line x1="660.00" y1="867" x2="660.00" y2="873" stroke="#666" stroke-width="1"/>
-  <text x="660.00" y="886" text-anchor="middle" fill="#666" font-size="10">250</text>
-  <line x1="780.00" y1="867" x2="780.00" y2="873" stroke="#666" stroke-width="1"/>
-  <text x="780.00" y="886" text-anchor="middle" fill="#666" font-size="10">300</text>
-  <line x1="900.00" y1="867" x2="900.00" y2="873" stroke="#666" stroke-width="1"/>
-  <text x="900.00" y="886" text-anchor="middle" fill="#666" font-size="10">350</text>
-  <line x1="1020.00" y1="867" x2="1020.00" y2="873" stroke="#666" stroke-width="1"/>
-  <text x="1020.00" y="886" text-anchor="middle" fill="#666" font-size="10">400</text>
-  <line x1="1140.00" y1="867" x2="1140.00" y2="873" stroke="#666" stroke-width="1"/>
-  <text x="1140.00" y="886" text-anchor="middle" fill="#666" font-size="10">450</text>
-  <text x="1148.00" y="874.00" fill="#666" font-size="10">ms</text>
-  <rect x="40" y="905" width="1120" height="220" fill="#fff5f1" stroke="#f4caaa"/>
-  <text x="55" y="927" font-size="13" font-weight="700" fill="#c0392b">What the flame shows</text>
-  <text x="55" y="953" font-size="12" fill="#333"><tspan font-weight="700" fill="#7d3c98">User-observable bracket</tspan> spans the entire root: every ms on the main thread between pen-up</text>
-  <text x="55" y="971" font-size="12" fill="#333">and queue-empty is felt by the user. Blue (sync) blocks because of in-flight CPU; orange (drain)</text>
-  <text x="55" y="989" font-size="12" fill="#333">blocks because observers have queued work that delays the next input event.</text>
-  <text x="55" y="1013" font-size="12" fill="#333"><tspan font-weight="700">p50 → p95 amplification</tspan> at the root: 102 → 433 ms (4.2× wider in the worst 1-in-20 run).</text>
-  <text x="55" y="1031" font-size="12" fill="#333"><tspan font-weight="700">scratch_check</tspan> (31 → 95 ms) and <tspan font-weight="700">drain</tspan> (33 → 293 ms) are where the box doubles or triples;</text>
-  <text x="55" y="1049" font-size="12" fill="#333">other stages stay in the single digits.</text>
-  <text x="55" y="1073" font-size="12" fill="#333"><tspan font-weight="700">inksdk metrics</tspan> are in the structural panel above — they fire during the live-ink phase</text>
-  <text x="55" y="1091" font-size="12" fill="#333">(<tspan font-family="ui-monospace,Menlo,monospace">pen.kernel_to_paint</tspan>, <tspan font-family="ui-monospace,Menlo,monospace">paint.draw_segment</tspan>, etc.). They are independent of pen-lift.</text>
-  <rect x="40" y="1140" width="1120" height="100" fill="#f6f7f8" stroke="#ddd"/>
-  <text x="55" y="1162" font-size="13" font-weight="700" fill="#333">Legend</text>
-  <text x="55" y="1182" font-size="11" fill="#333"><tspan font-weight="700" fill="#c0392b">Red</tspan> = primary metric. <tspan font-weight="700" fill="#1e6dc6">Blue</tspan> = pen.* (per stroke). <tspan font-weight="700" fill="#3498db">Light blue</tspan> = nested pen.* / pen-lift sub-metrics.</text>
-  <text x="55" y="1200" font-size="11" fill="#333"><tspan font-weight="700" fill="#27ae60">Green dashed</tspan> = event.* (per event). <tspan font-weight="700" fill="#e67e22">Orange</tspan> = paint.* and pen-lift drain. <tspan font-weight="700" fill="#7d3c98">Violet</tspan> = user-observable bracket.</text>
-  <text x="55" y="1218" font-size="11" fill="#666">Greyed segments in the live-ink panel are unmeasurable from the JVM (kernel land, EPD refresh).</text>
+  <text x="675.82" y="364" text-anchor="middle" fill="#7d3c98" font-size="10" font-weight="700">user-observable</text>
+  <rect x="60.00" y="392" width="1231.64" height="32" fill="#c0392b" fill-opacity="0.85" stroke="white" stroke-width="1"/>
+  <text x="675.82" y="412.00" text-anchor="middle" font-size="11" fill="white" font-weight="700">total 433 ms</text>
+  <rect x="60.00" y="426" width="418.13" height="32" fill="#1e6dc6" fill-opacity="0.85" stroke="white" stroke-width="1"/>
+  <text x="269.07" y="446.00" text-anchor="middle" font-size="11" fill="white" font-weight="700">injectStroke 147 ms</text>
+  <rect x="60.00" y="460" width="2.84" height="32" fill="#1e6dc6" fill-opacity="0.85" stroke="white" stroke-width="1"/>
+  <rect x="62.84" y="460" width="412.44" height="32" fill="#1e6dc6" fill-opacity="0.85" stroke="white" stroke-width="1"/>
+  <text x="269.07" y="480.00" text-anchor="middle" font-size="11" fill="white" font-weight="700">end 145 ms</text>
+  <rect x="62.84" y="494" width="270.22" height="32" fill="#3498db" fill-opacity="0.85" stroke="white" stroke-width="1"/>
+  <text x="197.96" y="514.00" text-anchor="middle" font-size="11" fill="white" font-weight="700">scratch_check 95 ms</text>
+  <rect x="333.07" y="494" width="2.84" height="32" fill="#3498db" fill-opacity="0.85" stroke="white" stroke-width="1"/>
+  <rect x="335.91" y="494" width="8.53" height="32" fill="#3498db" fill-opacity="0.85" stroke="white" stroke-width="1"/>
+  <rect x="344.44" y="494" width="133.69" height="32" fill="#3498db" fill-opacity="0.85" stroke="white" stroke-width="1"/>
+  <text x="411.29" y="514.00" text-anchor="middle" font-size="11" fill="white" font-weight="700">observers 47 ms</text>
+  <rect x="475.29" y="460" width="2.84" height="32" fill="#1e6dc6" fill-opacity="0.85" stroke="white" stroke-width="1"/>
+  <rect x="478.13" y="426" width="833.42" height="32" fill="#e67e22" fill-opacity="0.85" stroke="white" stroke-width="1"/>
+  <text x="894.84" y="446.00" text-anchor="middle" font-size="11" fill="white" font-weight="700">drain 293 ms</text>
+  <line x1="61.42" y1="492" x2="61.42" y2="544" stroke="#1e6dc6" stroke-width="1"/>
+  <text x="61.42" y="554" text-anchor="middle" font-size="10" fill="#1e6dc6">add_points 1 ms</text>
+  <line x1="334.49" y1="526" x2="334.49" y2="544" stroke="#3498db" stroke-width="1"/>
+  <text x="334.49" y="554" text-anchor="middle" font-size="10" fill="#3498db">shape_snap 1 ms</text>
+  <line x1="340.18" y1="526" x2="340.18" y2="544" stroke="#3498db" stroke-width="1"/>
+  <text x="340.18" y="554" text-anchor="middle" font-size="10" fill="#3498db">classify 3 ms</text>
+  <line x1="476.71" y1="492" x2="476.71" y2="544" stroke="#1e6dc6" stroke-width="1"/>
+  <text x="476.71" y="554" text-anchor="middle" font-size="10" fill="#1e6dc6">append_bitmap 1 ms</text>
+  <line x1="60" y1="560" x2="1340.00" y2="560" stroke="#aaa" stroke-width="1"/>
+  <line x1="60.00" y1="557" x2="60.00" y2="563" stroke="#666" stroke-width="1"/>
+  <text x="60.00" y="576" text-anchor="middle" fill="#666" font-size="10">0</text>
+  <line x1="202.22" y1="557" x2="202.22" y2="563" stroke="#666" stroke-width="1"/>
+  <text x="202.22" y="576" text-anchor="middle" fill="#666" font-size="10">50</text>
+  <line x1="344.44" y1="557" x2="344.44" y2="563" stroke="#666" stroke-width="1"/>
+  <text x="344.44" y="576" text-anchor="middle" fill="#666" font-size="10">100</text>
+  <line x1="486.67" y1="557" x2="486.67" y2="563" stroke="#666" stroke-width="1"/>
+  <text x="486.67" y="576" text-anchor="middle" fill="#666" font-size="10">150</text>
+  <line x1="628.89" y1="557" x2="628.89" y2="563" stroke="#666" stroke-width="1"/>
+  <text x="628.89" y="576" text-anchor="middle" fill="#666" font-size="10">200</text>
+  <line x1="771.11" y1="557" x2="771.11" y2="563" stroke="#666" stroke-width="1"/>
+  <text x="771.11" y="576" text-anchor="middle" fill="#666" font-size="10">250</text>
+  <line x1="913.33" y1="557" x2="913.33" y2="563" stroke="#666" stroke-width="1"/>
+  <text x="913.33" y="576" text-anchor="middle" fill="#666" font-size="10">300</text>
+  <line x1="1055.56" y1="557" x2="1055.56" y2="563" stroke="#666" stroke-width="1"/>
+  <text x="1055.56" y="576" text-anchor="middle" fill="#666" font-size="10">350</text>
+  <line x1="1197.78" y1="557" x2="1197.78" y2="563" stroke="#666" stroke-width="1"/>
+  <text x="1197.78" y="576" text-anchor="middle" fill="#666" font-size="10">400</text>
+  <line x1="1340.00" y1="557" x2="1340.00" y2="563" stroke="#666" stroke-width="1"/>
+  <text x="1340.00" y="576" text-anchor="middle" fill="#666" font-size="10">450</text>
+  <text x="1348.00" y="564.00" fill="#666" font-size="10">ms</text>
+  <rect x="40" y="596" width="1320" height="220" fill="#fff5f1" stroke="#f4caaa"/>
+  <text x="55" y="618" font-size="13" font-weight="700" fill="#c0392b">What the flame shows</text>
+  <text x="55" y="644" font-size="12" fill="#333"><tspan font-weight="700" fill="#7d3c98">User-observable bracket</tspan> spans the entire root: every ms on the main thread between pen-up</text>
+  <text x="55" y="662" font-size="12" fill="#333">and queue-empty is felt by the user. Blue (sync) blocks because of in-flight CPU; orange (drain)</text>
+  <text x="55" y="680" font-size="12" fill="#333">blocks because observers have queued work that delays the next input event.</text>
+  <text x="55" y="704" font-size="12" fill="#333"><tspan font-weight="700">p50 → p95 amplification</tspan> at the root: 102 → 433 ms (4.2× wider in the worst 1-in-20 run).</text>
+  <text x="55" y="722" font-size="12" fill="#333"><tspan font-weight="700">scratch_check</tspan> (31 → 95 ms) and <tspan font-weight="700">drain</tspan> (33 → 293 ms) are where the box doubles or triples;</text>
+  <text x="55" y="740" font-size="12" fill="#333">other stages stay in the single digits.</text>
+  <text x="55" y="764" font-size="11" fill="#666" font-style="italic">Frames too narrow for an inline label use a leader line to a callout below the flame. Live-ink metrics</text>
+  <text x="55" y="782" font-size="11" fill="#666" font-style="italic">are not in this flame — see live-ink-timeline.svg for their structural coverage.</text>
+  <rect x="40" y="830" width="1320" height="80" fill="#f6f7f8" stroke="#ddd"/>
+  <text x="55" y="852" font-size="13" font-weight="700" fill="#333">Legend</text>
+  <text x="55" y="872" font-size="11" fill="#333"><tspan font-weight="700" fill="#c0392b">Red</tspan> = root (total). <tspan font-weight="700" fill="#1e6dc6">Blue</tspan> = pen-lift sync metrics. <tspan font-weight="700" fill="#3498db">Light blue</tspan> = nested sub-metrics inside <tspan font-family="ui-monospace,Menlo,monospace">end</tspan>.</text>
+  <text x="55" y="890" font-size="11" fill="#333"><tspan font-weight="700" fill="#e67e22">Orange</tspan> = drain. <tspan font-weight="700" fill="#7d3c98">Violet</tspan> = user-observable bracket. <tspan font-weight="700" fill="#888">Grey</tspan> = unmetered overhead inside <tspan font-family="ui-monospace,Menlo,monospace">end</tspan>.</text>
 </svg>
