@@ -177,9 +177,8 @@ class WritingActivity : AppCompatActivity() {
             Log.i(TAG, if (file != null) "Bug report generated: ${file.absolutePath}" else "No strokes to report")
             // Also dump perf counters to logcat — they're easier to grep via adb
             // than pulling the full bug-report file (which is permission-gated).
-            for ((metric, snap) in PerfCounters.snapshot()) {
-                if (snap.count == 0L) continue
-                Log.i("PerfDump", "${metric.label} count=${snap.count} p50=${snap.p50Ms}ms p95=${snap.p95Ms}ms max=${snap.maxMs}ms last=${snap.lastMs}ms")
+            for (row in PerfCounters.unifiedSnapshot()) {
+                Log.i("PerfDump", "${row.label} count=${row.count} p50=${row.p50Ms}ms p95=${row.p95Ms}ms max=${row.maxMs}ms last=${row.lastMs}ms")
             }
         }
     }

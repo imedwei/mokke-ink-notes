@@ -108,4 +108,33 @@ class PerfCountersTest {
         val snap = PerfCounters.get(PerfMetric.PREVIEW_FORK)
         assertEquals(0, snap.count)
     }
+
+    @Test
+    fun `reset also clears inksdk counters`() {
+        com.inksdk.ink.PerfCounters.recordDirect(com.inksdk.ink.PerfMetric.PEN_KERNEL_TO_PAINT, 5_000_000L)
+        PerfCounters.reset()
+
+        assertEquals(0, com.inksdk.ink.PerfCounters.get(com.inksdk.ink.PerfMetric.PEN_KERNEL_TO_PAINT).count)
+    }
+
+    @Test
+    fun `unifiedSnapshot includes both mokke and inksdk active metrics`() {
+        PerfCounters.time(PerfMetric.PREVIEW_FORK) {}
+        com.inksdk.ink.PerfCounters.recordDirect(com.inksdk.ink.PerfMetric.PEN_KERNEL_TO_PAINT, 5_000_000L)
+
+        val labels = PerfCounters.unifiedSnapshot().map { it.label }.toSet()
+        assertTrue("mokke label missing: $labels", labels.contains(PerfMetric.PREVIEW_FORK.label))
+        assertTrue("inksdk label missing: $labels", labels.contains(com.inksdk.ink.PerfMetric.PEN_KERNEL_TO_PAINT.label))
+    }
+
+    @Test
+    fun `unifiedSnapshot omits zero-count metrics`() {
+        // Touch only one metric on each side; everything else stays at zero.
+        PerfCounters.time(PerfMetric.PREVIEW_FORK) {}
+        com.inksdk.ink.PerfCounters.recordDirect(com.inksdk.ink.PerfMetric.PEN_KERNEL_TO_PAINT, 1_000L)
+
+        val rows = PerfCounters.unifiedSnapshot()
+        assertEquals(2, rows.size)
+        assertTrue(rows.all { it.count > 0L })
+    }
 }

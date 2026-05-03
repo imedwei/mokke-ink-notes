@@ -95,18 +95,17 @@ object BugReport {
                 })
             })
 
-            // Performance counters (rolling window stats)
+            // Performance counters (rolling window stats) — unified across
+            // mokke's app-level counters and inksdk's ink-pipeline counters.
             put("perfCounters", JSONObject().apply {
-                for ((metric, snap) in PerfCounters.snapshot()) {
-                    if (snap.count > 0) {
-                        put(metric.label, JSONObject().apply {
-                            put("count", snap.count)
-                            put("lastMs", snap.lastMs)
-                            put("p50Ms", snap.p50Ms)
-                            put("p95Ms", snap.p95Ms)
-                            put("maxMs", snap.maxMs)
-                        })
-                    }
+                for (row in PerfCounters.unifiedSnapshot()) {
+                    put(row.label, JSONObject().apply {
+                        put("count", row.count)
+                        put("lastMs", row.lastMs)
+                        put("p50Ms", row.p50Ms)
+                        put("p95Ms", row.p95Ms)
+                        put("maxMs", row.maxMs)
+                    })
                 }
             })
         }

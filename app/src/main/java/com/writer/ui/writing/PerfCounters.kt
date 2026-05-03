@@ -67,6 +67,46 @@ object PerfCounters {
 
     fun reset() {
         for (counter in counters) counter.reset()
+        com.inksdk.ink.PerfCounters.reset()
+    }
+
+    /**
+     * Unified label+stats view across mokke's app-level counters and
+     * inksdk's ink-pipeline counters. Used by [BugReport] and the
+     * `PerfDump` logcat dump so consumers iterate one list and see all
+     * metrics labelled consistently (both systems prefix `ink.*`).
+     *
+     * Counters with `count == 0` are omitted.
+     */
+    fun unifiedSnapshot(): List<LabeledSnapshot> = buildList {
+        for ((metric, snap) in snapshot()) {
+            if (snap.count > 0L) add(LabeledSnapshot.from(metric.label, snap))
+        }
+        for ((metric, snap) in com.inksdk.ink.PerfCounters.snapshot()) {
+            if (snap.count > 0L) add(LabeledSnapshot.from(metric.label, snap))
+        }
+    }
+}
+
+/**
+ * Cross-system labeled snapshot row. Bridges [CounterSnapshot] (mokke) and
+ * [com.inksdk.ink.CounterSnapshot] (inksdk), which are structurally
+ * identical but live in different packages.
+ */
+data class LabeledSnapshot(
+    val label: String,
+    val count: Long,
+    val lastMs: Long,
+    val p50Ms: Long,
+    val p95Ms: Long,
+    val maxMs: Long,
+) {
+    companion object {
+        fun from(label: String, s: CounterSnapshot): LabeledSnapshot =
+            LabeledSnapshot(label, s.count, s.lastMs, s.p50Ms, s.p95Ms, s.maxMs)
+
+        fun from(label: String, s: com.inksdk.ink.CounterSnapshot): LabeledSnapshot =
+            LabeledSnapshot(label, s.count, s.lastMs, s.p50Ms, s.p95Ms, s.maxMs)
     }
 }
 
