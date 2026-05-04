@@ -12,6 +12,10 @@ revisions:
   - 2026-05-03: ship Step 0 telemetry (TaggedPost helper) and run
     on Palma 2 Pro; rebuild_compose found to dominate drain at 78 %.
     Resolves Open Q #1; reorders the implementation priorities.
+  - 2026-05-03: trace the rebuild_compose source to
+    WritingActivity.updateUndoRedoButtons; ship nudgeEpdRefresh()
+    as the cheap re-compose path. Drain drops from ~25 ms to 5 ms
+    median; rebuild_compose fires 0× per stroke.
 ---
 
 # Pen-lift optimisation: reducing the next-stroke latency tax
@@ -201,6 +205,41 @@ their work bleeds across the queue, but the Step 0 measurement
 here (single stroke, post-up drain) does not catch that case. A
 follow-up multi-stroke trace would close the loop on cross-stroke
 behaviour.
+
+### Step 0 follow-up — root cause + first fix
+
+A `Log.i` with stack trace at the top of `drawToSurface` traced the
+post-stroke `rebuild_compose` schedule to a single offender:
+
+```
+WritingActivity.updateUndoRedoButtons  →  inkCanvas.drawToSurface()
+  ← saveSnapshot
+  ← onStrokeCompleted
+  ← finishTextStroke
+```
+
+`updateUndoRedoButtons` was using the heavy `drawToSurface()`
+(rebuild + compose, ~20 ms) purely as an "EPD nudge" hammer to make
+the undo/redo button alpha change visible — Onyx's `TouchHelper`
+suppresses `View.invalidate()` during raw drawing. The canvas
+bitmap itself was unchanged.
+
+**Fix shipped** (commit pending push): added
+`HandwritingCanvasView.nudgeEpdRefresh()` (calls the existing
+private `composeSurface()`); `updateUndoRedoButtons` calls it
+instead of `drawToSurface()`. Same pause/resume pattern, just the
+compose half.
+
+| | Before | After |
+|---|---|---|
+| `total` (Palma 2 Pro) | 88–96 ms | 64 ms |
+| `drain` | 22–36 ms | 5 ms |
+| `queue.rebuild_compose` fires per stroke | 1 | 0 |
+| InkBufferSyncTest (8 cases, pixel-equality) | green | green |
+
+Resolves the dominant cost in Step 0's histogram. Drain is now
+~5 ms; further pen-lift wins from this doc's W/M/B list need a
+re-measurement to see what's still meaningful.
 
 ## Easy wins
 
