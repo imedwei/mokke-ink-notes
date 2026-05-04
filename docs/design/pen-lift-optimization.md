@@ -20,6 +20,11 @@ revisions:
     collapsed 293 → 7 ms (-98%); total p95 433 → 89 ms (-79%); end
     p95 also dropped 145 → 82 ms (bonus). Remaining cost is
     scratch_check + observers inside end.
+  - 2026-05-03: ship single-pass scratch_check; no measurable
+    impact (theory was wrong). Add warmed-test variant. Discover
+    JIT warming makes scratch_check 0 ms in steady state, AND that
+    state accumulation triggers a second drain regime (~74 ms p50)
+    via three Choreographer callbacks the cold test never hit.
 ---
 
 # Pen-lift optimisation: reducing the next-stroke latency tax
@@ -266,6 +271,73 @@ Either **B1 (scratch_check off main)** or **M1 (two-phase observer
 commit)** alone would land `total` p50 under the 50 ms budget. Pick
 based on what the next round of W/M/B work targets — for now the
 drain fight is won.
+
+### Step 0 follow-up — JIT warming + state-dependent drain
+
+Adding a `singleStrokePenLiftUnderBudgetWarmed` test variant
+(injects 10 throwaway strokes, then measures stroke 11) flipped
+two assumptions.
+
+**1. JIT warming dominates the sync side.** Warm vs cold (Palma 2
+Pro, n=8 each):
+
+| Metric | Cold p50 | Warm p50 |
+|---|---|---|
+| `scratch_check` | 27 ms | **0 ms** |
+| `end` | 69 ms | 23 ms |
+| `observers` | 34 ms | 20 ms |
+
+The cold test was over-counting sync work by ~3×. ART interprets
+the bytecode for the first stroke per process and only JIT-compiles
+after several invocations. Production users hit the warm path after
+a few strokes. **`scratch_check` is essentially free in production.**
+
+This invalidates the earlier "scratch_check + observers is the
+remaining cost" framing — those numbers were JIT artifacts. A
+single-pass micro-optimisation of `scratch_check` (shipped earlier
+under "code cleanup") had no measurable effect for the same
+reason: the ~27 ms cost was interpretation, not algorithmic.
+
+**2. State accumulation triggers a drain regime the cold test
+missed.** After warmup, the document has diagrams / sticky zones /
+text blocks. Stroke 11 fires three Choreographer callbacks ~60 % of
+the time:
+
+| Callback | run p50 | wait p50 | Trigger |
+|---|---|---|---|
+| `forced_refresh` | ~28 ms | ~32 ms | snap / scratch / diagram resize EPD nudge |
+| `rebuild_compose` | ~20 ms | ~50 ms | full bitmap rebuild from a **second call site** (not the `updateUndoRedoButtons` we already fixed) |
+| `commit_mutation` | ~13 ms | ~40 ms | rebuild + compose + forced refresh combo for snap/delete |
+
+Sum: ~60 ms run + significant wait overhead. The remaining ~40 % of
+warm strokes stay quiet at ~2 ms drain. Bimodal.
+
+Warmed measurement summary:
+
+| Metric | Warm p50 | Warm p95 | Warm range |
+|---|---|---|---|
+| `total` | 97 | 187 | 20–187 |
+| `drain` | **74** | **169** | 1–169 |
+| `end` | 23 | 67 | 17–67 |
+
+The earlier "drain fight is won" claim only held for stroke 1. The
+real production drain — once a document has any state — is ~10× what
+we measured cold. Next targets:
+
+- **Investigate the second `rebuild_compose` call site.** Same
+  trace-and-replace technique as for `updateUndoRedoButtons`: add
+  a temporary `Throwable` log to `drawToSurface` and run the
+  warmed test. The trace will name the offending observer or
+  setter.
+- **Audit `forced_refresh` / `commit_mutation` overlap.** Both
+  fire on the same state-mutating strokes. `commit_mutation`
+  already does its own coalesced rebuild + compose + forced
+  refresh; the extra `forced_refresh` callback may be redundant.
+- **Quiet strokes are essentially free** (~2 ms drain). The
+  optimisation only matters for state-mutating strokes (~60 % in
+  this test). On the user side, a "writing run" of plain strokes
+  with no diagram / snap / scratch interaction would already be
+  under budget.
 
 ## Easy wins
 
