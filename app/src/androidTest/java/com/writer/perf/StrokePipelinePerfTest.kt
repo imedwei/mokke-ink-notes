@@ -113,9 +113,13 @@ class StrokePipelinePerfTest {
         // full beginStroke / addStrokePoint / endStroke / finishTextStroke /
         // observer-fan-out / appendLastStrokeToBitmap path. After ~10 strokes
         // ART has profile data and JIT-compiles the hot methods.
+        // Warmup strokes use short diagonal segments — long horizontal lines
+        // would be detected as strikethrough gestures by the host pipeline,
+        // triggering removeStrokes → commit_mutation → forced_refresh
+        // cascades that pollute the measured stroke's drain window.
         for (i in 0 until 10) {
             val y = 150f + i * 50f
-            injectAndMeasure(makeStrokePoints(50f, y, 300f, y))
+            injectAndMeasure(makeStrokePoints(50f, y, 80f, y + 30f, pointCount = 12))
         }
         PenLiftBreakdown.reset()
         val points = makeStrokePoints(50f, 50f, 300f, 50f)
