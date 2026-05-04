@@ -282,7 +282,7 @@ drain fight is won.
 
 ### Step 0 follow-up — JIT warming + state-dependent drain
 
-Adding a `singleStrokePenLiftUnderBudgetWarmed` test variant
+Adding a `warmedSingleStrokePenLiftUnderBudget` test variant
 (injects 10 throwaway strokes, then measures stroke 11) flipped
 two assumptions.
 

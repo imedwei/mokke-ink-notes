@@ -88,8 +88,18 @@ class StrokePipelinePerfTest {
         return SystemClock.elapsedRealtime() - t0
     }
 
+    /**
+     * Cold-start single-stroke pen-lift latency. Measures the **first stroke
+     * after process launch** with no JIT warmup. Captures the worst-case
+     * "user just opened the app and made one mark" latency, which includes
+     * ART bytecode interpretation cost (~3× the steady-state algorithmic
+     * cost on this device).
+     *
+     * Use [warmedPenLiftDistributionUnderBudgets] as the steady-state gate;
+     * this test catches regressions in launch-time responsiveness.
+     */
     @Test
-    fun singleStrokePenLiftUnderBudget() {
+    fun coldStartSingleStrokePenLiftUnderBudget() {
         // Reset so the breakdown reflects only this stroke. The test runs
         // once per gradle invocation; fresh counters give us count=1 per
         // stage, which the driver script aggregates across runs.
@@ -99,22 +109,23 @@ class StrokePipelinePerfTest {
         PenLiftBreakdown.dump(elapsed)
 
         assertTrue(
-            "Pen-lift latency was ${elapsed}ms, budget is ${PEN_LIFT_BUDGET_MS}ms",
+            "Cold-start pen-lift latency was ${elapsed}ms, budget is ${PEN_LIFT_BUDGET_MS}ms",
             elapsed < PEN_LIFT_BUDGET_MS
         )
     }
 
     /**
-     * Same as [singleStrokePenLiftUnderBudget] but injects 10 throwaway
-     * strokes first to let ART JIT-compile the hot path before measurement.
+     * Single-stroke pen-lift latency after JIT warmup. Pre-injects 10
+     * throwaway strokes to give ART time to compile the hot path, then
+     * measures one stroke.
      *
-     * The cold-path test reflects launch-time latency for the user's first
-     * stroke; this warmed-path test reflects the steady-state latency for
-     * every subsequent stroke. Compare the two to separate algorithm cost
-     * from interpretation cost.
+     * Useful for one-shot debugging (single PenLiftBreakdown line per
+     * invocation, easy to read in logcat). For a regression gate use
+     * [warmedPenLiftDistributionUnderBudgets] instead — single-shot
+     * measurement is too noisy for a stable assertion.
      */
     @Test
-    fun singleStrokePenLiftUnderBudgetWarmed() {
+    fun warmedSingleStrokePenLiftUnderBudget() {
         // Pre-warm the host pipeline. Each injected stroke flows through the
         // full beginStroke / addStrokePoint / endStroke / finishTextStroke /
         // observer-fan-out / appendLastStrokeToBitmap path. After ~10 strokes
@@ -139,26 +150,27 @@ class StrokePipelinePerfTest {
     }
 
     /**
-     * Multi-sample percentile test — the most production-relevant signal.
+     * Steady-state pen-lift latency distribution — the **production-
+     * relevant gate**. Pre-warms with 10 strokes to let ART JIT-compile
+     * the hot path, then measures 30 plain-text cursive-letter-length
+     * strokes and asserts BOTH:
+     *   - p50 < PEN_LIFT_BUDGET_MS       (50 ms — typical user case)
+     *   - p95 < PEN_LIFT_P95_BUDGET_MS  (100 ms — tail tolerance)
      *
-     * The single-stroke tests above are noisy: one outlier (ART JIT,
-     * GC pause, EPD refresh contention) flips the result. This test
-     * pre-warms the JIT, then measures 30 plain-text strokes and asserts
-     * BOTH:
-     *   - p50 < PEN_LIFT_BUDGET_MS         (50 ms — typical user case)
-     *   - p95 < PEN_LIFT_P95_BUDGET_MS    (100 ms — tail tolerance)
+     * Two distinct assertions so a regression points at WHICH
+     * characteristic broke (typical vs occasional-spike).
      *
-     * Stroke pattern: short cursive-like diagonal segments that don't
-     * trip strikethrough / scratch-out detection (those would inflate
-     * drain via the commit_mutation → forced_refresh cascade and
-     * pollute the measurement — see pen-lift-optimization.md Step 0
-     * follow-up #2).
+     * Stroke pattern: short diagonal segments — long horizontals would
+     * be detected as strikethrough gestures, triggering removeStrokes →
+     * commit_mutation → forced_refresh cascades that inflate drain (see
+     * pen-lift-optimization.md, Step 0 follow-up #2).
      *
-     * Logs the full distribution for diagnostics so a regression can be
-     * read directly from the bug report.
+     * Logs the full 30-sample distribution so a CI failure shows the
+     * exact data — no mystery about whether one outlier or a systemic
+     * shift caused it.
      */
     @Test
-    fun warmedPenLiftDistributionUnderBudget() {
+    fun warmedPenLiftDistributionUnderBudgets() {
         // Warmup — let ART JIT-compile the hot path.
         for (i in 0 until 10) {
             val y = 150f + i * 50f
@@ -204,8 +216,19 @@ class StrokePipelinePerfTest {
         )
     }
 
+    /**
+     * Cold-start worst-case pen-lift latency over 50 short strokes,
+     * starting from a fresh process. No JIT pre-warmup — all strokes
+     * run against partially-interpreted bytecode. Each stroke must
+     * individually be under [PEN_LIFT_BUDGET_MS]; one outlier fails
+     * the test.
+     *
+     * This is a stricter, noisier sibling of
+     * [coldStartSingleStrokePenLiftUnderBudget]: it catches regressions
+     * that show up as a single bad stroke among many.
+     */
     @Test
-    fun fiftyStrokesAllUnderBudget() {
+    fun coldStart50StrokesWorstCaseUnderBudget() {
         var maxMs = 0L
 
         for (i in 0 until 50) {
@@ -218,13 +241,18 @@ class StrokePipelinePerfTest {
         }
 
         assertTrue(
-            "Worst-case pen-lift latency was ${maxMs}ms over 50 strokes, budget is ${PEN_LIFT_BUDGET_MS}ms",
+            "Cold-start worst-case pen-lift latency was ${maxMs}ms over 50 strokes, budget is ${PEN_LIFT_BUDGET_MS}ms",
             maxMs < PEN_LIFT_BUDGET_MS
         )
     }
 
+    /**
+     * Event-log latency: time between a stroke being recorded and the
+     * `ADDED` event arriving in the [StrokeEventLog]. Different metric
+     * from pen-lift — measures host-side post-stroke event propagation.
+     */
     @Test
-    fun eventLogTimingConsistent() {
+    fun eventLogLatencyUnderBudget() {
         for (i in 0 until 10) {
             val points = makeStrokePoints(50f, 200f + i * 80f, 300f, 200f + i * 80f)
             injectAndMeasure(points)
@@ -251,7 +279,7 @@ class StrokePipelinePerfTest {
 }
 
 /**
- * Helper for [singleStrokePenLiftUnderBudget] that captures the per-stage
+ * Helper for [coldStartSingleStrokePenLiftUnderBudget] that captures the per-stage
  * breakdown of `injectStrokeForTest` into a single logcat line. The driver
  * script in `scripts/aggregate-pen-lift.sh` greps for `PenLiftBreakdown`
  * lines across N test runs, then aggregates and produces the SVG.
