@@ -98,6 +98,36 @@ class StrokePipelinePerfTest {
         )
     }
 
+    /**
+     * Same as [singleStrokePenLiftUnderBudget] but injects 10 throwaway
+     * strokes first to let ART JIT-compile the hot path before measurement.
+     *
+     * The cold-path test reflects launch-time latency for the user's first
+     * stroke; this warmed-path test reflects the steady-state latency for
+     * every subsequent stroke. Compare the two to separate algorithm cost
+     * from interpretation cost.
+     */
+    @Test
+    fun singleStrokePenLiftUnderBudgetWarmed() {
+        // Pre-warm the host pipeline. Each injected stroke flows through the
+        // full beginStroke / addStrokePoint / endStroke / finishTextStroke /
+        // observer-fan-out / appendLastStrokeToBitmap path. After ~10 strokes
+        // ART has profile data and JIT-compiles the hot methods.
+        for (i in 0 until 10) {
+            val y = 150f + i * 50f
+            injectAndMeasure(makeStrokePoints(50f, y, 300f, y))
+        }
+        PenLiftBreakdown.reset()
+        val points = makeStrokePoints(50f, 50f, 300f, 50f)
+        val elapsed = injectAndMeasure(points)
+        PenLiftBreakdown.dump(elapsed)
+
+        assertTrue(
+            "Warmed pen-lift latency was ${elapsed}ms, budget is ${PEN_LIFT_BUDGET_MS}ms",
+            elapsed < PEN_LIFT_BUDGET_MS
+        )
+    }
+
     @Test
     fun fiftyStrokesAllUnderBudget() {
         var maxMs = 0L
