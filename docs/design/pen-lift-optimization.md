@@ -16,6 +16,10 @@ revisions:
     WritingActivity.updateUndoRedoButtons; ship nudgeEpdRefresh()
     as the cheap re-compose path. Drain drops from ~25 ms to 5 ms
     median; rebuild_compose fires 0× per stroke.
+  - 2026-05-03: re-measure post-fix with n=8 samples. Drain p95
+    collapsed 293 → 7 ms (-98%); total p95 433 → 89 ms (-79%); end
+    p95 also dropped 145 → 82 ms (bonus). Remaining cost is
+    scratch_check + observers inside end.
 ---
 
 # Pen-lift optimisation: reducing the next-stroke latency tax
@@ -230,16 +234,38 @@ private `composeSurface()`); `updateUndoRedoButtons` calls it
 instead of `drawToSurface()`. Same pause/resume pattern, just the
 compose half.
 
-| | Before | After |
-|---|---|---|
-| `total` (Palma 2 Pro) | 88–96 ms | 64 ms |
-| `drain` | 22–36 ms | 5 ms |
-| `queue.rebuild_compose` fires per stroke | 1 | 0 |
-| InkBufferSyncTest (8 cases, pixel-equality) | green | green |
+Re-measured with 8 clean samples on Palma 2 Pro:
 
-Resolves the dominant cost in Step 0's histogram. Drain is now
-~5 ms; further pen-lift wins from this doc's W/M/B list need a
-re-measurement to see what's still meaningful.
+| Metric | Pre p50 | Pre p95 | **Post p50** | **Post p95** | Δ p95 |
+|---|---|---|---|---|---|
+| `total` | 102 | 433 | **76** | **89** | **−79 %** |
+| `drain` | 33 | 293 | **7** | **7** | **−98 %** |
+| `end` | 69 | 145 | 69 | 82 | −43 % |
+| `scratch_check` | 31 | 95 | 27 | 43 | −55 % |
+| `observers` | 32 | 47 | 34 | 48 | ≈ 0 |
+| `queue.rebuild_compose` fires/stroke | 1 | 1 | **0** | **0** | gone |
+| `InkBufferSyncTest` | green | — | green | — | unchanged |
+
+The big bonuses beyond the predicted drain reduction:
+
+- **`end` p95 dropped 43 %** even though we didn't change anything
+  inside `end`. Plausible mechanism: the rebuild work was
+  contending for main-thread CPU/cache during scratch_check's run,
+  and eliminating it let scratch_check complete more reliably.
+- **`scratch_check` p95 dropped 55 %** for the same reason —
+  reduced cache-pressure tail.
+- **`drain` distribution collapsed from 22–293 ms to 5–7 ms** —
+  effectively constant instead of bursty.
+
+Resolves the dominant cost in Step 0's histogram. `total` p50 is
+down to 76 ms (1.5× the 50 ms budget; was 2× before). The remaining
+synchronous cost is `scratch_check` (27 ms p50) + `observers`
+(34 ms p50), which is essentially all of `end`.
+
+Either **B1 (scratch_check off main)** or **M1 (two-phase observer
+commit)** alone would land `total` p50 under the 50 ms budget. Pick
+based on what the next round of W/M/B work targets — for now the
+drain fight is won.
 
 ## Easy wins
 
