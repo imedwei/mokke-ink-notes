@@ -40,6 +40,12 @@ class StrokePipelinePerfTest {
      *  Includes finishStroke() + all posted callbacks (onPenStateChanged, updateUndoRedoButtons). */
     private val PEN_LIFT_BUDGET_MS = 50L
 
+    /** Tail budget for the warmed-distribution test. The 50 ms median budget
+     *  is the user-acceptability threshold; p95 may exceed it occasionally
+     *  due to GC / scheduler / EPD-refresh contention. We tolerate up to
+     *  this much in the worst 1-in-20 stroke. */
+    private val PEN_LIFT_P95_BUDGET_MS = 100L
+
     /** Budget: maximum allowed event-log latency (stroke record → ADDED event) in ms. */
     private val EVENT_LOG_BUDGET_MS = 150L
 
@@ -129,6 +135,72 @@ class StrokePipelinePerfTest {
         assertTrue(
             "Warmed pen-lift latency was ${elapsed}ms, budget is ${PEN_LIFT_BUDGET_MS}ms",
             elapsed < PEN_LIFT_BUDGET_MS
+        )
+    }
+
+    /**
+     * Multi-sample percentile test — the most production-relevant signal.
+     *
+     * The single-stroke tests above are noisy: one outlier (ART JIT,
+     * GC pause, EPD refresh contention) flips the result. This test
+     * pre-warms the JIT, then measures 30 plain-text strokes and asserts
+     * BOTH:
+     *   - p50 < PEN_LIFT_BUDGET_MS         (50 ms — typical user case)
+     *   - p95 < PEN_LIFT_P95_BUDGET_MS    (100 ms — tail tolerance)
+     *
+     * Stroke pattern: short cursive-like diagonal segments that don't
+     * trip strikethrough / scratch-out detection (those would inflate
+     * drain via the commit_mutation → forced_refresh cascade and
+     * pollute the measurement — see pen-lift-optimization.md Step 0
+     * follow-up #2).
+     *
+     * Logs the full distribution for diagnostics so a regression can be
+     * read directly from the bug report.
+     */
+    @Test
+    fun warmedPenLiftDistributionUnderBudget() {
+        // Warmup — let ART JIT-compile the hot path.
+        for (i in 0 until 10) {
+            val y = 150f + i * 50f
+            injectAndMeasure(makeStrokePoints(50f, y, 80f, y + 30f, pointCount = 12))
+        }
+
+        // Measure 30 strokes spread across the canvas. Each stroke is a short
+        // diagonal of 30 points — representative of a single cursive letter.
+        // Avoids long horizontals that the strikethrough detector treats as
+        // erase gestures.
+        val n = 30
+        val totals = LongArray(n)
+        for (i in 0 until n) {
+            val row = i / 6                // 5 rows
+            val col = i % 6                // 6 columns
+            val x = 50f + col * 60f
+            val y = 200f + row * 80f
+            totals[i] = injectAndMeasure(
+                makeStrokePoints(x, y, x + 40f, y + 30f, pointCount = 30)
+            )
+        }
+
+        val sorted = totals.copyOf().also { it.sort() }
+        val p50 = sorted[n / 2]
+        val p95 = sorted[((n - 1) * 95) / 100]
+        val maxMs = sorted[n - 1]
+        val minMs = sorted[0]
+
+        Log.i(
+            "PenLiftDistribution",
+            "n=$n min=$minMs p50=$p50 p95=$p95 max=$maxMs samples=${totals.joinToString(",")}",
+        )
+
+        // Two assertions — each gives a distinct failure message so a regression
+        // points at WHICH characteristic broke.
+        assertTrue(
+            "Warmed p50 pen-lift was ${p50}ms over $n strokes, budget is ${PEN_LIFT_BUDGET_MS}ms (samples: ${totals.toList()})",
+            p50 < PEN_LIFT_BUDGET_MS
+        )
+        assertTrue(
+            "Warmed p95 pen-lift was ${p95}ms over $n strokes, tail budget is ${PEN_LIFT_P95_BUDGET_MS}ms (samples: ${totals.toList()})",
+            p95 < PEN_LIFT_P95_BUDGET_MS
         )
     }
 
