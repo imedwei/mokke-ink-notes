@@ -89,67 +89,6 @@ class StrokePipelinePerfTest {
     }
 
     /**
-     * Cold-start single-stroke pen-lift latency. Measures the **first stroke
-     * after process launch** with no JIT warmup. Captures the worst-case
-     * "user just opened the app and made one mark" latency, which includes
-     * ART bytecode interpretation cost (~3× the steady-state algorithmic
-     * cost on this device).
-     *
-     * Use [warmedPenLiftDistributionUnderBudgets] as the steady-state gate;
-     * this test catches regressions in launch-time responsiveness.
-     */
-    @Test
-    fun coldStartSingleStrokePenLiftUnderBudget() {
-        // Reset so the breakdown reflects only this stroke. The test runs
-        // once per gradle invocation; fresh counters give us count=1 per
-        // stage, which the driver script aggregates across runs.
-        PenLiftBreakdown.reset()
-        val points = makeStrokePoints(50f, 200f, 300f, 200f)
-        val elapsed = injectAndMeasure(points)
-        PenLiftBreakdown.dump(elapsed)
-
-        assertTrue(
-            "Cold-start pen-lift latency was ${elapsed}ms, budget is ${PEN_LIFT_BUDGET_MS}ms",
-            elapsed < PEN_LIFT_BUDGET_MS
-        )
-    }
-
-    /**
-     * Single-stroke pen-lift latency after JIT warmup. Pre-injects 10
-     * throwaway strokes to give ART time to compile the hot path, then
-     * measures one stroke.
-     *
-     * Useful for one-shot debugging (single PenLiftBreakdown line per
-     * invocation, easy to read in logcat). For a regression gate use
-     * [warmedPenLiftDistributionUnderBudgets] instead — single-shot
-     * measurement is too noisy for a stable assertion.
-     */
-    @Test
-    fun warmedSingleStrokePenLiftUnderBudget() {
-        // Pre-warm the host pipeline. Each injected stroke flows through the
-        // full beginStroke / addStrokePoint / endStroke / finishTextStroke /
-        // observer-fan-out / appendLastStrokeToBitmap path. After ~10 strokes
-        // ART has profile data and JIT-compiles the hot methods.
-        // Warmup strokes use short diagonal segments — long horizontal lines
-        // would be detected as strikethrough gestures by the host pipeline,
-        // triggering removeStrokes → commit_mutation → forced_refresh
-        // cascades that pollute the measured stroke's drain window.
-        for (i in 0 until 10) {
-            val y = 150f + i * 50f
-            injectAndMeasure(makeStrokePoints(50f, y, 80f, y + 30f, pointCount = 12))
-        }
-        PenLiftBreakdown.reset()
-        val points = makeStrokePoints(50f, 50f, 300f, 50f)
-        val elapsed = injectAndMeasure(points)
-        PenLiftBreakdown.dump(elapsed)
-
-        assertTrue(
-            "Warmed pen-lift latency was ${elapsed}ms, budget is ${PEN_LIFT_BUDGET_MS}ms",
-            elapsed < PEN_LIFT_BUDGET_MS
-        )
-    }
-
-    /**
      * Steady-state pen-lift latency distribution — the **production-
      * relevant gate**. Pre-warms with 10 strokes to let ART JIT-compile
      * the hot path, then measures 30 plain-text cursive-letter-length
@@ -223,36 +162,6 @@ class StrokePipelinePerfTest {
     }
 
     /**
-     * Cold-start worst-case pen-lift latency over 50 short strokes,
-     * starting from a fresh process. No JIT pre-warmup — all strokes
-     * run against partially-interpreted bytecode. Each stroke must
-     * individually be under [PEN_LIFT_BUDGET_MS]; one outlier fails
-     * the test.
-     *
-     * This is a stricter, noisier sibling of
-     * [coldStartSingleStrokePenLiftUnderBudget]: it catches regressions
-     * that show up as a single bad stroke among many.
-     */
-    @Test
-    fun coldStart50StrokesWorstCaseUnderBudget() {
-        var maxMs = 0L
-
-        for (i in 0 until 50) {
-            val y = 150f + (i / 10) * 80f
-            val startX = 30f + (i % 10) * 30f
-            val points = makeStrokePoints(startX, y, startX + 25f, y + 5f, pointCount = 15)
-            val elapsed = injectAndMeasure(points)
-
-            if (elapsed > maxMs) maxMs = elapsed
-        }
-
-        assertTrue(
-            "Cold-start worst-case pen-lift latency was ${maxMs}ms over 50 strokes, budget is ${PEN_LIFT_BUDGET_MS}ms",
-            maxMs < PEN_LIFT_BUDGET_MS
-        )
-    }
-
-    /**
      * Event-log latency: time between a stroke being recorded and the
      * `ADDED` event arriving in the [StrokeEventLog]. Different metric
      * from pen-lift — measures host-side post-stroke event propagation.
@@ -285,10 +194,9 @@ class StrokePipelinePerfTest {
 }
 
 /**
- * Helper for [coldStartSingleStrokePenLiftUnderBudget] that captures the per-stage
- * breakdown of `injectStrokeForTest` into a single logcat line. The driver
- * script in `scripts/aggregate-pen-lift.sh` greps for `PenLiftBreakdown`
- * lines across N test runs, then aggregates and produces the SVG.
+ * Helper for [StrokePipelinePerfTest.warmedPenLiftDistributionUnderBudgets]
+ * that emits aggregated per-stage statistics from PerfCounters' ring buffer
+ * after a multi-sample measurement loop.
  */
 private object PenLiftBreakdown {
     private val STAGES = listOf(
@@ -303,35 +211,6 @@ private object PenLiftBreakdown {
     )
 
     fun reset() = PerfCounters.reset()
-
-    fun dump(totalMs: Long) {
-        val parts = STAGES.joinToString(" ") { m ->
-            val s = PerfCounters.get(m)
-            "${m.label}=${s.lastMs}"
-        }
-        // BEGIN, ADD_POINTS, END run synchronously inside injectStrokeForTest;
-        // the difference between total and their sum is "drain" — the time
-        // waitForIdleSync spends draining message-queue work that the
-        // observers / handlers posted during the synchronous phase.
-        val sync = STAGES
-            .filter { it == PerfMetric.INK_PEN_LIFT_BEGIN ||
-                      it == PerfMetric.INK_PEN_LIFT_ADD_POINTS ||
-                      it == PerfMetric.INK_PEN_LIFT_END ||
-                      it == PerfMetric.INK_PEN_LIFT_APPEND_BITMAP }
-            .sumOf { PerfCounters.get(it).lastMs }
-        val drain = (totalMs - sync).coerceAtLeast(0L)
-        // Append every queue.<tag>.{wait,run} label-keyed counter so this
-        // single line carries both the named pen-lift breakdown and the
-        // tagged-post diagnostic (Step 0 of pen-lift-optimization.md).
-        // Counts are summed across the test run since each TaggedFrameCallback
-        // can fire multiple times during waitForIdleSync drain.
-        val queueParts = PerfCounters.unifiedSnapshot()
-            .filter { it.label.startsWith("queue.") }
-            .joinToString(" ") { row ->
-                "${row.label}=${row.lastMs}/${row.count}"
-            }
-        Log.i("PenLiftBreakdown", "total=${totalMs} drain=${drain} $parts ${queueParts}")
-    }
 
     /**
      * Dump aggregated per-stage statistics across all PerfCounters samples

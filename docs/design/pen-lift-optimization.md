@@ -282,9 +282,11 @@ drain fight is won.
 
 ### Step 0 follow-up — JIT warming + state-dependent drain
 
-Adding a `warmedSingleStrokePenLiftUnderBudget` test variant
-(injects 10 throwaway strokes, then measures stroke 11) flipped
-two assumptions.
+An early warmed single-stroke variant (since deleted, superseded by
+`warmedPenLiftDistributionUnderBudgets`) flipped two assumptions
+when first added: pre-injecting 10 throwaway strokes and then
+measuring stroke 11 produced very different numbers from the cold
+single-stroke test.
 
 **1. JIT warming dominates the sync side.** Warm vs cold (Palma 2
 Pro, n=8 each):

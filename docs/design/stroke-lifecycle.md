@@ -220,8 +220,10 @@ the same amount of wall-clock time the queue takes to drain.
 ## Measured pen-lift values (Palma 2 Pro, 20 runs)
 
 The pen-lift phase was instrumented and run end-to-end 20 times on a
-Palma 2 Pro via the `coldStartSingleStrokePenLiftUnderBudget` test in
-[`StrokePipelinePerfTest.kt`](../../app/src/androidTest/java/com/writer/perf/StrokePipelinePerfTest.kt).
+Palma 2 Pro using an earlier single-stroke perf test (since superseded
+by `warmedPenLiftDistributionUnderBudgets` in
+[`StrokePipelinePerfTest.kt`](../../app/src/androidTest/java/com/writer/perf/StrokePipelinePerfTest.kt),
+which is now the standing pen-lift gate).
 Live-ink is not in this corpus because the test uses
 `injectStrokeForTest`, which bypasses the vendor SDK.
 
