@@ -177,6 +177,10 @@ class StrokePipelinePerfTest {
             injectAndMeasure(makeStrokePoints(50f, y, 80f, y + 30f, pointCount = 12))
         }
 
+        // Reset PerfCounters so the per-stage distribution dump below
+        // reflects only the measured strokes, not the warmup ones.
+        PenLiftBreakdown.reset()
+
         // Measure 30 strokes spread across the canvas. Each stroke is a short
         // diagonal of 30 points — representative of a single cursive letter.
         // Avoids long horizontals that the strikethrough detector treats as
@@ -203,6 +207,8 @@ class StrokePipelinePerfTest {
             "PenLiftDistribution",
             "n=$n min=$minMs p50=$p50 p95=$p95 max=$maxMs samples=${totals.joinToString(",")}",
         )
+        // Per-stage breakdown across all 30 measured strokes.
+        PenLiftBreakdown.dumpDistribution()
 
         // Two assertions — each gives a distinct failure message so a regression
         // points at WHICH characteristic broke.
@@ -325,5 +331,34 @@ private object PenLiftBreakdown {
                 "${row.label}=${row.lastMs}/${row.count}"
             }
         Log.i("PenLiftBreakdown", "total=${totalMs} drain=${drain} $parts ${queueParts}")
+    }
+
+    /**
+     * Dump aggregated per-stage statistics across all PerfCounters samples
+     * collected since the last [reset]. Use after a multi-sample test loop —
+     * each PerfMetric ring buffer holds the full sample window so we get
+     * proper p50 / p95 / max per stage, not just the last value.
+     *
+     * Emits two logcat lines:
+     *   PenLiftStages — per-stage counts and percentiles for the
+     *     ink.pen_lift.* family.
+     *   PenLiftQueue  — accumulated queue.<tag>.* tagged-post counters
+     *     (suppressed if no tagged callbacks fired).
+     */
+    fun dumpDistribution() {
+        val stages = STAGES.joinToString(" ") { m ->
+            val s = PerfCounters.get(m)
+            "${m.label}=count=${s.count}/p50=${s.p50Ms}/p95=${s.p95Ms}/max=${s.maxMs}"
+        }
+        Log.i("PenLiftStages", stages)
+
+        val queueParts = PerfCounters.unifiedSnapshot()
+            .filter { it.label.startsWith("queue.") }
+            .joinToString(" ") { row ->
+                "${row.label}=count=${row.count}/p50=${row.p50Ms}/p95=${row.p95Ms}/max=${row.maxMs}"
+            }
+        if (queueParts.isNotEmpty()) {
+            Log.i("PenLiftQueue", queueParts)
+        }
     }
 }
