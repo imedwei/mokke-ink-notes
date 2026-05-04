@@ -1711,6 +1711,21 @@ class HandwritingCanvasView @JvmOverloads constructor(
         com.writer.ui.writing.TaggedPost.postFrameCallback(choreographer, rebuildComposeCallback)
     }
 
+    /**
+     * Re-compose the existing content bitmap to the surface without doing a
+     * full bitmap rebuild. Use when external UI state has changed (e.g.
+     * undo/redo button alpha) and the EPD needs a nudge to display it but
+     * the canvas content itself hasn't changed.
+     *
+     * Cheaper than [drawToSurface] (≈ 4 ms vs ≈ 20 ms) because it skips the
+     * `rebuildContentBitmap` step. Caller should pair with `pauseRawDrawing` /
+     * `resumeRawDrawing` so the Onyx SDK doesn't suppress the refresh.
+     */
+    fun nudgeEpdRefresh() {
+        if (!surfaceReady) return
+        composeSurface()
+    }
+
     /** Fast path for ACTION_MOVE: reuse the cached static scene and only paint
      *  the in-progress stroke + dwell-dot overlay. Any mutation of completed
      *  strokes, scroll offset, text blocks, or other static content must go
