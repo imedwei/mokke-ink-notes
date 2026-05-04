@@ -25,6 +25,14 @@ revisions:
     JIT warming makes scratch_check 0 ms in steady state, AND that
     state accumulation triggers a second drain regime (~74 ms p50)
     via three Choreographer callbacks the cold test never hit.
+  - 2026-05-03: trace the second drain regime — it was a TEST
+    ARTIFACT. Warmup strokes were horizontal lines being detected
+    as strikethrough gestures, triggering removeStrokes →
+    commit_mutation → forced_refresh cascades that polluted the
+    measured stroke. Switch warmup to short diagonals; warmed test
+    now passes the 50 ms budget consistently (20–41 ms total).
+    Open question #1 fully resolved; gesture-stroke cascade
+    optimisation noted as future follow-up.
 ---
 
 # Pen-lift optimisation: reducing the next-stroke latency tax
@@ -338,6 +346,68 @@ we measured cold. Next targets:
   this test). On the user side, a "writing run" of plain strokes
   with no diagram / snap / scratch interaction would already be
   under budget.
+
+### Step 0 follow-up #2 — warmed-test was confounded by gestures
+
+Tracing the post-sites for `commit_mutation` and `forced_refresh`
+showed both were caused by **the warmup strokes themselves being
+detected as strikethrough gestures**:
+
+```
+commitMutationImmediate
+  ← removeStrokes
+  ← GestureHandler.handleStrikethrough
+  ← refreshCanvas
+  ← handleStrikethrough
+  ← tryHandle
+  ← WritingCoordinator.onStrokeCompleted
+  ← finishTextStroke ← endStroke ← injectStrokeForTest  (warmup stroke)
+```
+
+The original warmup pattern was 10 long horizontal lines (50 → 300 px
+wide, 50 px y-spacing). The host's strikethrough detector reads those
+as "user crossed out a line of text" → `removeStrokes` →
+`commitMutationImmediate` → `commit_mutation` → `forced_refresh`.
+Choreographer callbacks queued during warmup landed in the
+measured-stroke's drain window. Test artifact, not production.
+
+Switching warmup to short diagonal segments (50,y → 80,y+30, 12
+points) avoids the detection. After the fix, warmed-test results
+(4 samples on Palma 2 Pro):
+
+| total | drain |
+|---|---|
+| 20 ms | 2 ms |
+| 21 ms | 3 ms |
+| 32 ms | 3 ms |
+| 41 ms | 6 ms |
+
+**All four runs under the 50 ms budget**, no `queue.*` callbacks
+fired. This is the true warmed steady-state for plain-text strokes.
+
+The original `commit_mutation → forced_refresh` cascade is **real
+in production** for actual gesture strokes (strikethrough,
+scratch-out, snap, diagram resize). But it does not fire on every
+stroke — only on state-mutating strokes. For a user writing text,
+those are a minority of strokes; for a user heavily editing, they
+matter more. Optimising that cascade remains an open opportunity
+but is not on the dominant writing path.
+
+### Where the optimisation work landed
+
+| Phase | Cold p50 | Warm p50 |
+|---|---|---|
+| Pre-fix | 102 ms (drain 33) | not measured |
+| Post-EPD-fix | 76 ms (drain 7) | 21–41 ms (drain 2–6) |
+
+The dominant cold-stroke drain (`updateUndoRedoButtons → drawToSurface`)
+was real and the fix saved ~25 ms p50 / ~280 ms p95. After warmup
+the JIT compiles the sync path and `total` drops further to ~25 ms
+p50, comfortably under budget for plain strokes.
+
+The remaining open work — gesture-stroke cascade optimisation — is
+a smaller win on a less common path. Recommend leaving as a future
+follow-up unless gesture-heavy users complain.
 
 ## Easy wins
 
