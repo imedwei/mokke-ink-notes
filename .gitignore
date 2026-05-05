@@ -31,8 +31,25 @@ local.properties
 .claude/plans/
 .claude/bug-reports/
 
+# Claude sandbox mounts (read-only stubs surfaced by the sandbox runtime)
+.claude/agents
+.claude/commands
+.claude/settings.json
+.claude/skills
+
 # Codanna local config
 .codannaignore
 
 # Temporary debugging artifacts (screenshots, bug reports)
 /tmp/
+
+# Home dotfiles surfaced into the working tree by the Claude sandbox
+# (read-only mounts of $HOME config — never project files)
+/.bash_profile
+/.bashrc
+/.gitconfig
+/.profile
+/.ripgreprc
+/.vscode
+/.zprofile
+/.zshrc
