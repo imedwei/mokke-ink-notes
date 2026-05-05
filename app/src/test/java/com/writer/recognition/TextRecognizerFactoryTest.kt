@@ -17,7 +17,7 @@ import org.robolectric.annotation.Config
 class TextRecognizerFactoryTest {
 
     @Test
-    fun create_withOnyxService_returnsOnyxRecognizer() {
+    fun create_withOnyxService_returnsFallbackingRecognizer() {
         val app = RuntimeEnvironment.getApplication()
         val pm = shadowOf(app.packageManager)
         val intent = Intent().apply {
@@ -29,9 +29,11 @@ class TextRecognizerFactoryTest {
         pm.addResolveInfoForIntent(intent, ResolveInfo())
 
         val recognizer = TextRecognizerFactory.create(app)
+        // Onyx is wrapped in FallbackingTextRecognizer so calls auto-swap to ML Kit
+        // if the Onyx KHwrService wedges.
         assertTrue(
-            "Expected OnyxHwrTextRecognizer when Onyx service is available",
-            recognizer is OnyxHwrTextRecognizer
+            "Expected FallbackingTextRecognizer when Onyx service is available",
+            recognizer is FallbackingTextRecognizer
         )
         recognizer.close()
     }

@@ -7,9 +7,18 @@ import android.content.pm.PackageManager
 import android.os.Build
 
 object TextRecognizerFactory {
-    fun create(context: Context): TextRecognizer {
-        if (isOnyxHwrAvailable(context)) return OnyxHwrTextRecognizer(context.applicationContext)
-        return GoogleMLKitTextRecognizer()
+    /** @param onWedge fires when the Onyx HWR service stops responding and we
+     *                 swap to ML Kit. Host UI uses this to surface a banner. */
+    fun create(context: Context, onWedge: (() -> Unit)? = null): TextRecognizer {
+        if (!isOnyxHwrAvailable(context)) return GoogleMLKitTextRecognizer()
+        val onyx = OnyxHwrTextRecognizer(context.applicationContext)
+        val wrapper = FallbackingTextRecognizer(
+            primary = onyx,
+            fallbackFactory = { GoogleMLKitTextRecognizer() },
+            onWedge = onWedge,
+        )
+        onyx.onServiceUnresponsive = { wrapper.reportPrimaryUnresponsive() }
+        return wrapper
     }
 
     @Suppress("DEPRECATION")

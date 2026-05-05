@@ -43,7 +43,7 @@ class OnyxHwrTextRecognizer(private val context: Context) : TextRecognizer {
         private const val SERVICE_PACKAGE = "com.onyx.android.ksync"
         private const val SERVICE_CLASS = "com.onyx.android.ksync.service.KHwrService"
         private const val BIND_TIMEOUT_MS = 3000L
-        private const val RECOGNIZE_TIMEOUT_MS = 10_000L
+        private const val RECOGNIZE_TIMEOUT_MS = 3_000L
     }
 
     @Volatile private var service: IHWRService? = null
@@ -53,6 +53,14 @@ class OnyxHwrTextRecognizer(private val context: Context) : TextRecognizer {
     private val initMutex = Mutex()
     private var currentLang = "en_US"
     private val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /** Fired once when the Onyx HWR service stops responding (recognize timeouts).
+     *  The service can wedge in a state where bind+init succeed but batchRecognize
+     *  never invokes its callback; the only known recovery is a tablet reboot or
+     *  clearing data on com.onyx.android.ksync, neither of which a regular app
+     *  can trigger. Host UI should surface this to the user. */
+    @Volatile var onServiceUnresponsive: (() -> Unit)? = null
+    @Volatile private var unresponsiveReported = false
 
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
@@ -168,7 +176,7 @@ class OnyxHwrTextRecognizer(private val context: Context) : TextRecognizer {
 
         return try {
             val result = withTimeoutOrNull(RECOGNIZE_TIMEOUT_MS) {
-                suspendCancellableCoroutine { cont ->
+                suspendCancellableCoroutine<String> { cont ->
                     svc.batchRecognize(readPfd, object : HWROutputCallback.Stub() {
                         override fun read(args: HWROutputArgs?) {
                             if (!cont.isActive) return
@@ -196,6 +204,13 @@ class OnyxHwrTextRecognizer(private val context: Context) : TextRecognizer {
                             }
                         }
                     })
+                }
+            }
+            if (result == null) {
+                Log.w(TAG, "batchRecognize timed out after ${RECOGNIZE_TIMEOUT_MS}ms")
+                if (!unresponsiveReported) {
+                    unresponsiveReported = true
+                    onServiceUnresponsive?.invoke()
                 }
             }
             result ?: ""

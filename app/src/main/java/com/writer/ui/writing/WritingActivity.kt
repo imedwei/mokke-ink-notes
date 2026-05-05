@@ -539,7 +539,17 @@ class WritingActivity : AppCompatActivity() {
         // OnyxHwrTextRecognizer binds to a system service using applicationContext, so holding
         // it in the activity is safe (no activity leak). GoogleMLKitTextRecognizer is stateless
         // and does not retain a context reference.
-        recognizer = TextRecognizerFactory.create(this)
+        recognizer = TextRecognizerFactory.create(this) {
+            runOnUiThread {
+                recognizedTextView.statusMessage =
+                    "Onyx Handwriting Recognition has stopped. Try restarting."
+                Toast.makeText(
+                    this,
+                    "Onyx Handwriting Recognition has stopped. Falling back to ML Kit — try restarting your tablet for full quality.",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
 
         // Create coordinator early so cached text can be displayed before model loads
         startCoordinator()
