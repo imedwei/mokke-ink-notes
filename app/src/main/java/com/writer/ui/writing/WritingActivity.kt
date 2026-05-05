@@ -756,9 +756,9 @@ class WritingActivity : AppCompatActivity() {
         lastRedoAlpha = redoAlpha
         undoButton.imageAlpha = undoAlpha
         redoButton.imageAlpha = redoAlpha
-        // Force e-ink refresh: Onyx SDK suppresses View invalidation while raw drawing is active.
-        // Use the cheap re-compose (no bitmap rebuild) — the canvas content is unchanged,
-        // we just need to nudge the EPD so the new button alpha appears.
+        // Force e-ink refresh: Onyx suppresses View.invalidate during raw
+        // drawing. Use the cheap compose-only nudge (no bitmap rebuild) —
+        // commit e822306 measured the rebuild path as ~78 % of pen-lift drain.
         inkCanvas.pauseRawDrawing()
         inkCanvas.nudgeEpdRefresh()
         inkCanvas.resumeRawDrawing()

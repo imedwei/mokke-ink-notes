@@ -577,6 +577,13 @@ class WritingCoordinator(
         inkCanvas.pauseRawDrawing()
         applySnapshot(snapshot)
         inkCanvas.resumeRawDrawing()
+        // After undo the next stroke is a fresh user intent — invalidate the
+        // coalescer's window so it doesn't merge into the just-popped snapshot.
+        // Without this, drawing again within 2 s on a same/adjacent line gets
+        // coalesced; saveSnapshot returns without recording, canUndo() stays
+        // false, and updateUndoRedoButtons early-returns because the alpha
+        // hasn't changed (so the EPD never gets refreshed).
+        undoCoalescer.reset()
         onUndoRedoStateChanged?.invoke()
         Log.i(TAG, "Undo: restored ${snapshot.strokes.size} strokes")
     }
@@ -586,6 +593,8 @@ class WritingCoordinator(
         inkCanvas.pauseRawDrawing()
         applySnapshot(snapshot)
         inkCanvas.resumeRawDrawing()
+        // Same reason as undo() — fresh window for the next user action.
+        undoCoalescer.reset()
         onUndoRedoStateChanged?.invoke()
         Log.i(TAG, "Redo: restored ${snapshot.strokes.size} strokes")
     }

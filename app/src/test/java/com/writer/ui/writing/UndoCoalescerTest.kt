@@ -219,4 +219,23 @@ class UndoCoalescerTest {
         coalescer.maybeSave(UndoCoalescer.ActionType.STROKE_ADDED, lineIndex = 0, makeSnapshot(1))
         assertTrue(undoManager.canUndo())
     }
+
+    @Test
+    fun `stroke after undoing back to empty records its own snapshot`() {
+        // Regression contract: WritingCoordinator.undo()/redo() must call
+        // coalescer.reset() so a follow-up stroke is treated as a fresh user
+        // intent. Without the reset, the next STROKE_ADDED within the coalesce
+        // window on the same/adjacent line gets merged into the just-popped
+        // snapshot, leaving the undo stack empty and the undo button stuck
+        // inactive. Reproduced via: draw → undo → draw within 2 s.
+        coalescer.maybeSave(UndoCoalescer.ActionType.STROKE_ADDED, lineIndex = 0, makeSnapshot(0))
+        undoManager.undo(makeSnapshot(1))
+        assertFalse("Sanity: undo should empty the stack", undoManager.canUndo())
+
+        // The fix: coordinator must reset the coalescer after popping.
+        coalescer.reset()
+
+        coalescer.maybeSave(UndoCoalescer.ActionType.STROKE_ADDED, lineIndex = 0, makeSnapshot(2))
+        assertTrue("Stroke after undo must record a snapshot", undoManager.canUndo())
+    }
 }

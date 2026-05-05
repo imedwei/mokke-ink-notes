@@ -186,6 +186,18 @@ class HandwritingCanvasView @JvmOverloads constructor(
         composeSurface()
     }
 
+    // Compose-only path: re-blit the existing bitmap without rebuilding it.
+    // Used by [nudgeEpdRefresh] when external UI state changed (e.g. undo
+    // button alpha) but the canvas content didn't. Choreographer-deferred so
+    // the host View's pending invalidations get flushed alongside our
+    // SurfaceView frame post on the same vsync.
+    private var composeOnlyScheduled = false
+    private val composeOnlyCallback = com.writer.ui.writing.TaggedPost.frameCallback("compose_only") {
+        composeOnlyScheduled = false
+        if (!surfaceReady) return@frameCallback
+        composeSurface()
+    }
+
     private val strokePaint = CanvasTheme.newStrokePaint()
     private val linePaint = CanvasTheme.newLinePaint()
     private val diagramBorderPaint = CanvasTheme.newDiagramBorderPaint()
@@ -632,6 +644,10 @@ class HandwritingCanvasView @JvmOverloads constructor(
         if (rebuildComposeScheduled) {
             com.writer.ui.writing.TaggedPost.removeFrameCallback(choreographer, rebuildComposeCallback)
             rebuildComposeScheduled = false
+        }
+        if (composeOnlyScheduled) {
+            com.writer.ui.writing.TaggedPost.removeFrameCallback(choreographer, composeOnlyCallback)
+            composeOnlyScheduled = false
         }
         inkController.detach()
         contentBitmap?.recycle()
@@ -1717,13 +1733,19 @@ class HandwritingCanvasView @JvmOverloads constructor(
      * undo/redo button alpha) and the EPD needs a nudge to display it but
      * the canvas content itself hasn't changed.
      *
-     * Cheaper than [drawToSurface] (≈ 4 ms vs ≈ 20 ms) because it skips the
-     * `rebuildContentBitmap` step. Caller should pair with `pauseRawDrawing` /
+     * Cheaper than [drawToSurface] (≈ 4 ms vs ≈ 20 ms) — skips
+     * `rebuildContentBitmap`. Caller should pair with `pauseRawDrawing` /
      * `resumeRawDrawing` so the Onyx SDK doesn't suppress the refresh.
+     *
+     * Choreographer-deferred so the View framework's TRAVERSAL flushes
+     * pending invalidations alongside our SurfaceView frame post.
      */
     fun nudgeEpdRefresh() {
         if (!surfaceReady) return
-        composeSurface()
+        // A pending rebuild's compose half already covers us.
+        if (rebuildComposeScheduled || composeOnlyScheduled) return
+        composeOnlyScheduled = true
+        com.writer.ui.writing.TaggedPost.postFrameCallback(choreographer, composeOnlyCallback)
     }
 
     /** Fast path for ACTION_MOVE: reuse the cached static scene and only paint
@@ -2410,6 +2432,10 @@ class HandwritingCanvasView @JvmOverloads constructor(
         if (rebuildComposeScheduled) {
             com.writer.ui.writing.TaggedPost.removeFrameCallback(choreographer, rebuildComposeCallback)
             rebuildComposeCallback.doFrame(0L)
+        }
+        if (composeOnlyScheduled) {
+            com.writer.ui.writing.TaggedPost.removeFrameCallback(choreographer, composeOnlyCallback)
+            composeOnlyCallback.doFrame(0L)
         }
         if (forcedRefreshScheduled) {
             com.writer.ui.writing.TaggedPost.removeFrameCallback(choreographer, forcedRefreshCallback)
