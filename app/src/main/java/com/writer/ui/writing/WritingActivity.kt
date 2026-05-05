@@ -272,13 +272,20 @@ class WritingActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         onBackPressedDispatcher.addCallback(this, recordingBackCallback)
 
-        val filter = android.content.IntentFilter("${packageName}.GENERATE_BUG_REPORT")
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-            // RECEIVER_EXPORTED so `adb shell am broadcast` can trigger debug
-            // dumps from outside the app's UID.
-            registerReceiver(bugReportReceiver, filter, RECEIVER_EXPORTED)
-        } else {
-            registerReceiver(bugReportReceiver, filter)
+        // Bug-report receiver is debug-only — its sole purpose is to let
+        // `adb shell am broadcast` trigger a stroke-history dump during
+        // development. Registering it RECEIVER_EXPORTED in release would let
+        // any installed app trigger and read the report (combined with the
+        // DebugBugReportProvider). Skip registration in release builds.
+        val isDebuggable = (applicationInfo.flags and
+            android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
+        if (isDebuggable) {
+            val filter = android.content.IntentFilter("${packageName}.GENERATE_BUG_REPORT")
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(bugReportReceiver, filter, RECEIVER_EXPORTED)
+            } else {
+                registerReceiver(bugReportReceiver, filter)
+            }
         }
 
         val docsDir = java.io.File(filesDir, "documents")
@@ -2436,7 +2443,11 @@ class WritingActivity : AppCompatActivity() {
         offlineModelManager.release()
         if (lectureMode) stopLectureCapture()
         recordingBackCallback.isEnabled = false
-        unregisterReceiver(bugReportReceiver)
+        // Receiver is only registered on debuggable builds (see onCreate);
+        // unregister mirrors the gate so release doesn't throw.
+        val isDebuggable = (applicationInfo.flags and
+            android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
+        if (isDebuggable) unregisterReceiver(bugReportReceiver)
         closeDualCanvasOnyx()
         coordinator?.stop()  // releases audioPlayer, audioTranscriber, lectureMode
         cueCoordinator?.stop()
